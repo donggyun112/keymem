@@ -23,5 +23,5 @@ export interface Memory {
 export interface GraphData {
   keys: Record<string, Key>;
   memories: Record<string, Memory>;
-  links: Array<{ key_id: string; memory_id: string }>;
+  links: Array<{ key_id: string; memory_id: string; weight?: number }>;
 }

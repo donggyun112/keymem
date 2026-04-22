@@ -25,6 +25,12 @@ const RRF_K = 60;
 const BM25_RESULT_DEPTH = 50;
 const DENSE_RESULT_DEPTH = 50;
 
+const LINK_WEIGHT_DEFAULT = 1.0;
+const LINK_WEIGHT_MIN = 0.1;
+const LINK_WEIGHT_MAX = 3.0;
+const LINK_REINFORCE_AMOUNT = 0.1;
+const LINK_DECAY_RATE = 0.005;
+
 // ── Vector math ──
 
 function cosineSim(a: number[], b: number[]): number {
@@ -75,8 +81,8 @@ export class MemoryGraph {
   keys: Record<string, Key> = {};
   memories: Record<string, Memory> = {};
 
-  private _keyToMems: Record<string, Set<string>> = {};
-  private _memToKeys: Record<string, Set<string>> = {};
+  private _keyToMems: Record<string, Map<string, number>> = {};
+  private _memToKeys: Record<string, Map<string, number>> = {};
   private _supersededBy: Record<string, string> = {};
   private _storedDim: number | null = null;
   private _lock = new Mutex();
@@ -107,21 +113,35 @@ export class MemoryGraph {
     );
   }
 
-  private _link(keyId: string, memId: string): void {
-    if (!this._keyToMems[keyId]) this._keyToMems[keyId] = new Set();
-    this._keyToMems[keyId].add(memId);
-    if (!this._memToKeys[memId]) this._memToKeys[memId] = new Set();
-    this._memToKeys[memId].add(keyId);
+  private _link(keyId: string, memId: string, weight = LINK_WEIGHT_DEFAULT): void {
+    if (!this._keyToMems[keyId]) this._keyToMems[keyId] = new Map();
+    if (!this._keyToMems[keyId].has(memId)) {
+      this._keyToMems[keyId].set(memId, weight);
+    }
+    if (!this._memToKeys[memId]) this._memToKeys[memId] = new Map();
+    if (!this._memToKeys[memId].has(keyId)) {
+      this._memToKeys[memId].set(keyId, weight);
+    }
   }
 
   private _hasLink(keyId: string, memId: string): boolean {
     return this._keyToMems[keyId]?.has(memId) ?? false;
   }
 
+  private _getLinkWeight(keyId: string, memId: string): number {
+    return this._keyToMems[keyId]?.get(memId) ?? LINK_WEIGHT_DEFAULT;
+  }
+
+  private _setLinkWeight(keyId: string, memId: string, weight: number): void {
+    const clamped = Math.max(LINK_WEIGHT_MIN, Math.min(LINK_WEIGHT_MAX, weight));
+    this._keyToMems[keyId]?.set(memId, clamped);
+    this._memToKeys[memId]?.set(keyId, clamped);
+  }
+
   private _unlinkMemory(memId: string): void {
     const kids = this._memToKeys[memId];
     if (kids) {
-      for (const kid of kids) {
+      for (const kid of kids.keys()) {
         const mems = this._keyToMems[kid];
         if (mems) {
           mems.delete(memId);
@@ -199,7 +219,7 @@ export class MemoryGraph {
     const sims = batchCosineSim(embedding, matrix);
     for (let i = 0; i < keyIds.length; i++) {
       if (sims[i] >= KEY_AUTO_LINK_THRESHOLD && !this._hasLink(keyIds[i], memId)) {
-        this._link(keyIds[i], memId);
+        this._link(keyIds[i], memId, sims[i]);
       }
     }
   }
@@ -216,7 +236,7 @@ export class MemoryGraph {
   getKeysForMemory(memId: string): string[] {
     const kids = this._memToKeys[memId];
     if (!kids) return [];
-    return [...kids]
+    return [...kids.keys()]
       .filter((kid) => kid in this.keys)
       .map((kid) => this.keys[kid].concept);
   }
@@ -260,7 +280,7 @@ export class MemoryGraph {
     }
 
     for (const lnk of raw.links ?? []) {
-      this._link(lnk.key_id, lnk.memory_id);
+      this._link(lnk.key_id, lnk.memory_id, lnk.weight ?? LINK_WEIGHT_DEFAULT);
     }
 
     for (const [mid, mem] of Object.entries(this.memories)) {
@@ -279,10 +299,10 @@ export class MemoryGraph {
 
   async save(): Promise<void> {
     await mkdir(DATA_DIR, { recursive: true });
-    const links: Array<{ key_id: string; memory_id: string }> = [];
+    const links: Array<{ key_id: string; memory_id: string; weight: number }> = [];
     for (const [kid, mids] of Object.entries(this._keyToMems)) {
-      for (const mid of mids) {
-        links.push({ key_id: kid, memory_id: mid });
+      for (const [mid, weight] of mids) {
+        links.push({ key_id: kid, memory_id: mid, weight });
       }
     }
     const data: GraphData = {
@@ -501,9 +521,9 @@ export class MemoryGraph {
           this._link(kid, mid);
         }
       } else {
-        // Copy old links (snapshot to avoid mutation during iteration)
-        for (const kid of [...(this._memToKeys[oldId] ?? new Set())]) {
-          this._link(kid, mid);
+        // Copy old links with weights (snapshot to avoid mutation during iteration)
+        for (const [kid, w] of [...(this._memToKeys[oldId] ?? new Map())]) {
+          this._link(kid, mid, w);
         }
       }
 
@@ -578,9 +598,10 @@ export class MemoryGraph {
 
       for (const [keySim, kid] of keyScores.slice(0, 10)) {
         const idf = this._keyIdf(kid);
-        for (const memId of this._keyToMems[kid] ?? new Set()) {
+        for (const memId of this._keyToMems[kid]?.keys() ?? []) {
           if (skip(memId)) continue;
-          const score = keySim * idf;
+          const lw = this._getLinkWeight(kid, memId);
+          const score = keySim * idf * lw;
           denseScores[memId] = (denseScores[memId] ?? 0) + score;
           if (!memMatchedKeys[memId]) memMatchedKeys[memId] = [];
           memMatchedKeys[memId].push(this.keys[kid].concept);
@@ -647,13 +668,14 @@ export class MemoryGraph {
       // ── 2-hop: via shared keys ──
       for (const mid of Object.keys(memScores)) {
         const hop1Score = memScores[mid];
-        for (const kid of this._memToKeys[mid] ?? new Set()) {
+        for (const kid of this._memToKeys[mid]?.keys() ?? []) {
           if (!(kid in this.keys)) continue;
           const concept = this.keys[kid].concept;
           const idf = this._keyIdf(kid);
-          for (const otherMid of this._keyToMems[kid] ?? new Set()) {
+          for (const otherMid of this._keyToMems[kid]?.keys() ?? []) {
             if (otherMid === mid || skip(otherMid)) continue;
-            const hop2Score = hop1Score * MemoryGraph.HOP_DECAY * idf;
+            const lw = this._getLinkWeight(kid, otherMid);
+            const hop2Score = hop1Score * MemoryGraph.HOP_DECAY * idf * lw;
             memScores[otherMid] = (memScores[otherMid] ?? 0) + hop2Score;
             if (!memMatchedKeys[otherMid]) memMatchedKeys[otherMid] = [];
             memMatchedKeys[otherMid].push(`${concept}(via)`);
@@ -711,6 +733,26 @@ export class MemoryGraph {
         });
       }
 
+      // ── Hebbian link reinforcement / decay ──
+      const returnedSet = new Set(ranked.map(([mid]) => mid));
+
+      // Strengthen: links of returned memories
+      for (const [mid] of ranked) {
+        for (const [kid, cw] of this._memToKeys[mid] ?? new Map()) {
+          this._setLinkWeight(kid, mid, cw + LINK_REINFORCE_AMOUNT);
+        }
+      }
+
+      // Weaken: explored but not returned
+      for (const [, kid] of keyScores.slice(0, 10)) {
+        for (const [memId, cw] of this._keyToMems[kid] ?? new Map()) {
+          if (skip(memId)) continue;
+          if (!returnedSet.has(memId)) {
+            this._setLinkWeight(kid, memId, cw - LINK_DECAY_RATE);
+          }
+        }
+      }
+
       this.markDirty();
     });
 
@@ -735,9 +777,9 @@ export class MemoryGraph {
     > = {};
 
     // Key-sharing
-    for (const kid of this._memToKeys[memoryId] ?? new Set()) {
+    for (const kid of this._memToKeys[memoryId]?.keys() ?? []) {
       const concept = this.keys[kid]?.concept ?? "?";
-      for (const mid of this._keyToMems[kid] ?? new Set()) {
+      for (const mid of this._keyToMems[kid]?.keys() ?? []) {
         if (mid === memoryId || !(mid in this.memories)) continue;
         const mem = this.memories[mid];
         if (this._isExpired(mem) || mid in this._supersededBy) continue;
