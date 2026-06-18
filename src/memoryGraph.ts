@@ -21,6 +21,8 @@ const KEY_AUTO_LINK_THRESHOLD = _THRESHOLDS.keyAutoLink;
 const KEY_RECALL_THRESHOLD = _THRESHOLDS.keyRecall;
 const CONTENT_RECALL_THRESHOLD = _THRESHOLDS.contentRecall;
 const MIN_SCORE_THRESHOLD = _THRESHOLDS.minScore;
+const GATE_Z_THRESHOLD = _THRESHOLDS.gateZ;
+const GATE_MIN_POPULATION = 8;
 const CONTRADICTION_THRESHOLD = _THRESHOLDS.contradiction;
 const DEPTH_INCREMENT = 0.05;
 const DEPTH_MAX = 1.0;
@@ -62,6 +64,44 @@ function batchCosineSim(query: number[], matrix: number[][]): number[] {
 // — unlike fused scores. minScore = 0 disables the gate.
 export function passesAbsoluteGate(rawSim: number, minScore: number): boolean {
   return minScore <= 0 || rawSim >= minScore;
+}
+
+// Median of a numeric array (sorted copy; average of middle two for even length).
+function median(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+// Robust z-score of `top` against the distribution of `values`, using median and
+// MAD (median absolute deviation) scaled by 1.4826 so the result reads in
+// sigma-like units. Robust to the skewed, packed cosine bands that e5 produces,
+// where a true match is a right-tail outlier even though every value is "high".
+// Returns Infinity when the distribution is degenerate (empty, or MAD == 0) —
+// no meaningful z can be computed, so callers treat it as "do not block".
+export function robustZScore(top: number, values: number[]): number {
+  if (values.length === 0) return Infinity;
+  const med = median(values);
+  const mad = median(values.map((v) => Math.abs(v - med)));
+  if (mad === 0) return Infinity;
+  return (top - med) / (1.4826 * mad);
+}
+
+// Distribution "not-found" gate. Passes (true) when disabled (gateZ <= 0), when
+// the population is too small to be reliable (< minCount), or when the z is
+// non-finite (degenerate distribution). Otherwise the top hit must be at least a
+// gateZ-sigma outlier of the similarity distribution to count as "found".
+export function passesDistributionGate(
+  top: number,
+  values: number[],
+  gateZ: number,
+  minCount: number
+): boolean {
+  if (gateZ <= 0) return true;
+  if (values.length < minCount) return true;
+  const z = robustZScore(top, values);
+  return Number.isFinite(z) ? z >= gateZ : true;
 }
 
 // ── Utils ──
@@ -743,7 +783,8 @@ export class MemoryGraph {
     expand = false,
     maxHops = 2,
     minRelScore = 0,
-    minScore = MIN_SCORE_THRESHOLD
+    minScore = MIN_SCORE_THRESHOLD,
+    minZ = GATE_Z_THRESHOLD
   ): Promise<object[]> {
     if (Object.keys(this.memories).length === 0) return [];
 
@@ -753,6 +794,7 @@ export class MemoryGraph {
     minRelScore = Math.max(0, Math.min(0.9, minRelScore));
     // Absolute cosine floor in [0,1]. 0 disables the gate.
     minScore = Math.max(0, Math.min(1, minScore));
+    minZ = Math.max(0, minZ);
     const qEmb = await embedTextAsync(query, "query"); // outside lock
     this._checkDim(qEmb);
 
@@ -763,6 +805,7 @@ export class MemoryGraph {
       const memMatchedKeys: Record<string, string[]> = {};
       const memHop: Record<string, number> = {};
       const memRawSim: Record<string, number> = {};
+      const allContentSims: number[] = [];
       const bumpRaw = (mid: string, sim: number) => {
         if (sim > (memRawSim[mid] ?? -Infinity)) memRawSim[mid] = sim;
       };
@@ -834,6 +877,7 @@ export class MemoryGraph {
           const mid = memIds[i];
           if (skip(mid)) continue;
           const cSim = contentSims[i];
+          allContentSims.push(cSim);
           if (cSim >= CONTENT_RECALL_THRESHOLD) {
             bumpRaw(mid, cSim);
             const contentScore = cSim * 0.8;
@@ -958,9 +1002,27 @@ export class MemoryGraph {
       // exists, keep the full fused/traversed set (anchors + their associative and
       // lexical neighbors); the relative floor below still trims within-result noise.
       // This preserves N-hop/expand results, which by design have low direct similarity.
-      const hasAnchor = Object.keys(memScores).some(
+      // Anchor: the query is "found" iff a definite literal-key hit exists, OR a
+      // candidate clears the absolute gate AND the top content similarity is a
+      // robust-z outlier of the similarity distribution. The distribution gate
+      // catches the e5 failure mode where every cosine is uniformly high so the
+      // absolute gate false-positives. minZ (gateZ) = 0 disables it, leaving the
+      // 0.7.0 absolute-only behavior unchanged for bge-m3 and other profiles.
+      const candidateIds = Object.keys(memScores);
+      const definiteAnchor = candidateIds.some((mid) => (memRawSim[mid] ?? 0) >= 0.999);
+      const absoluteAnchor = candidateIds.some(
         (mid) => passesAbsoluteGate(memRawSim[mid] ?? 0, minScore)
       );
+      let maxContentSim = 0;
+      for (const s of allContentSims) if (s > maxContentSim) maxContentSim = s;
+      const distOK = passesDistributionGate(maxContentSim, allContentSims, minZ, GATE_MIN_POPULATION);
+      // Invariant (gateZ=0 byte-identity): when gateZ=0, distOK is always true, so hasAnchor
+      // collapses to absoluteAnchor — identical to the pre-gate 0.7.0 behavior. definiteAnchor
+      // (memRawSim >= 0.999, i.e. a literal name/proper-noun exact match) only does real work
+      // as a gate-BYPASS when gateZ>0 (e5): since 1.0 >= minScore for any minScore in [0,1],
+      // every definiteAnchor is also an absoluteAnchor, but distOK can be false on e5 for
+      // flat distributions — definiteAnchor short-circuits that check, preserving literal hits.
+      const hasAnchor = definiteAnchor || (absoluteAnchor && distOK);
       // Relative score floor: drop results scoring below minRelScore × the top
       // hit. Deep traversal through hub keys pulls in many associations that
       // HOP_DECAY+IDF already score near the noise floor (~2% of top); a floor
