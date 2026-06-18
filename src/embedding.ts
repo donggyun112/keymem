@@ -270,6 +270,18 @@ async function embedLocal(
   throw new Error("fastembed returned no embeddings");
 }
 
+// Short concept keys (e.g. "Agent A" / "Agent B") embed almost identically and
+// would over-merge under semantic matching, conflating distinct entities. Treat
+// them like proper nouns: merge only on exact string match. Tunable.
+export const SHORT_CONCEPT_MAX_TOKENS = 2;
+export const SHORT_CONCEPT_MAX_CHARS = 15;
+
+export function isShortConcept(concept: string): boolean {
+  const trimmed = concept.trim();
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  return tokens.length <= SHORT_CONCEPT_MAX_TOKENS || trimmed.length <= SHORT_CONCEPT_MAX_CHARS;
+}
+
 export async function embedTextAsync(
   text: string,
   inputType: EmbeddingInputType = "passage"

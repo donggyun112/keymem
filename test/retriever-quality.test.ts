@@ -92,3 +92,39 @@ test("recall returns [] when nothing clears the absolute gate", async (t) => {
   const miss = (await g.recall("노이즈쿼리", 5, null, false, 2, 0, 0.5)) as any[];
   assert.equal(miss.length, 0, "noise query should return nothing");
 });
+
+test("isShortConcept flags short or few-token concepts", async () => {
+  const { isShortConcept } = await import("../src/embedding.ts");
+  assert.equal(isShortConcept("Agent A"), true);   // 2 tokens
+  assert.equal(isShortConcept("auth"), true);       // short
+  assert.equal(isShortConcept("Agent B"), true);
+  assert.equal(isShortConcept("distributed consensus protocol design"), false); // long + many tokens
+});
+
+test("short concept keys merge only on exact match", async (t) => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dataDir = await mkdtemp(join(tmpdir(), "sm-key-"));
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  process.env.SUPER_MEMORY_DATA_DIR = dataDir;
+
+  const emb = await import("../src/embedding.ts");
+  // "Agent A" and "Agent B" embed nearly identically (cos ~0.9998) — high enough
+  // that semantic merge WOULD merge them. The short-key guard must keep them apart.
+  emb.__setTestEmbedder((text) =>
+    text === "Agent A" ? [1, 0.02] : text === "Agent B" ? [1, 0.0] : [0.3, 0.95]
+  );
+  t.after(() => emb.__clearTestEmbedder());
+
+  const { MemoryGraph } = await import(`../src/memoryGraph.ts?key=1`);
+  const g = new MemoryGraph();
+  await g.load();
+
+  const a1 = await g.findOrCreateKey("Agent A");
+  const a2 = await g.findOrCreateKey("Agent A"); // exact repeat -> same key
+  const b = await g.findOrCreateKey("Agent B");  // distinct short key -> new key
+
+  assert.equal(a1, a2, "exact short repeat reuses the key");
+  assert.notEqual(a1, b, "Agent A and Agent B must NOT merge");
+});

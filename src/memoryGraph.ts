@@ -4,7 +4,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { Mutex } from "async-mutex";
 import MiniSearch from "minisearch";
-import { embedTextAsync, EMBEDDING_BACKEND, getThresholdProfile } from "./embedding.js";
+import { embedTextAsync, EMBEDDING_BACKEND, getThresholdProfile, isShortConcept } from "./embedding.js";
 import type { Key, Memory, GraphData } from "./types.js";
 
 const DATA_DIR =
@@ -460,6 +460,23 @@ export class MemoryGraph {
         concept,
         embedding: await embedTextAsync(concept),
         key_type: keyType,
+      };
+      return kid;
+    }
+
+    // Short concept keys merge only on exact (case-insensitive) string match, so
+    // near-identical-but-distinct short keys ("Agent A" vs "Agent B") stay separate.
+    if (isShortConcept(concept)) {
+      const lc = concept.toLowerCase();
+      for (const [kid, k] of Object.entries(this.keys)) {
+        if (k.key_type === "concept" && k.concept.toLowerCase() === lc) return kid;
+      }
+      const kid = uid();
+      this.keys[kid] = {
+        id: kid,
+        concept,
+        embedding: await embedTextAsync(concept),
+        key_type: "concept",
       };
       return kid;
     }
