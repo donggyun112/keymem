@@ -132,7 +132,6 @@ export function familyForModel(
   if (alias === "MLE5Large") return "e5";
   if (alias === "AllMiniLML6V2") return "minilm";
   if (alias === "BGEBaseENV15" || alias === "BGESmallENV15") return "bge";
-  if (alias === "CUSTOM") return "bgem3";
   return "unknown";
 }
 
@@ -164,7 +163,7 @@ function localModelFamily(): "e5" | "bge" | "minilm" | "bgem3" {
       `[super-memory] WARNING: no calibrated threshold profile for ` +
         `LOCAL_EMBEDDING_MODEL="${LOCAL_EMBEDDING_MODEL}". Falling back to BGE ` +
         `thresholds — the graph may mis-cluster. Override per-threshold with ` +
-        `SUPER_MEMORY_KEY_MERGE / _MEMORY_DEDUP / _KEY_AUTOLINK / _KEY_RECALL / _CONTENT_RECALL.`
+        `SUPER_MEMORY_KEY_MERGE / _MEMORY_DEDUP / _KEY_AUTOLINK / _KEY_RECALL / _CONTENT_RECALL / _MIN_SCORE / _CONTRADICTION.`
     );
   }
   return "bge";
