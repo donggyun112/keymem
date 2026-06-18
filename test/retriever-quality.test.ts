@@ -44,6 +44,11 @@ test("bgem3 threshold profile exists with expected fields", async () => {
     assert.equal(typeof THRESHOLD_PROFILES[fam].minScore, "number", fam);
     assert.equal(typeof THRESHOLD_PROFILES[fam].contradiction, "number", fam);
   }
+  // distribution gate: bge-m3 is disabled (gateZ=0); every profile must define numeric gateZ
+  assert.equal(THRESHOLD_PROFILES.bgem3.gateZ, 0);
+  for (const fam of ["openai", "e5", "bge", "minilm", "bgem3"]) {
+    assert.equal(typeof THRESHOLD_PROFILES[fam].gateZ, "number", fam);
+  }
 });
 
 test("customModelConfig throws a clear error when path is unset", async () => {

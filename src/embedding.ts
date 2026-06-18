@@ -118,7 +118,12 @@ export const THRESHOLD_PROFILES: Record<string, ThresholdProfile> = {
   // memoryDedup 0.985: e5 packs distinct-but-similar facts ("A uses Postgres" vs
   // "B uses Mongo" ≈0.96) dangerously close to true paraphrases (≈0.99). Dedup
   // wrongly below 0.985 would silently supersede distinct memories → data loss.
-  e5: { keyMerge: 0.97, memoryDedup: 0.985, keyAutoLink: 0.93, keyRecall: 0.85, contentRecall: 0.8, minScore: 0.8, contradiction: 0.95, gateZ: 3.0 },
+  // gateZ 2.5: calibrated on fast-multilingual-e5-large (8-memory realistic set).
+  // Measured FOUND z: [2.80, 3.33, 4.33, 4.81] (min 2.80).
+  // Measured NOT-FOUND z: [0.87, 0.98, 1.51, 2.28] (max 2.28).
+  // Gap [2.28, 2.80] — chose 2.5 (biased toward lower edge to avoid blocking real matches).
+  // Env-overridable via SUPER_MEMORY_GATE_Z.
+  e5: { keyMerge: 0.97, memoryDedup: 0.985, keyAutoLink: 0.93, keyRecall: 0.85, contentRecall: 0.8, minScore: 0.8, contradiction: 0.95, gateZ: 2.5 },
   minilm: { keyMerge: 0.85, memoryDedup: 0.9, keyAutoLink: 0.6, keyRecall: 0.5, contentRecall: 0.45, minScore: 0.45, contradiction: 0.85, gateZ: 0 },
   // bge-m3: multilingual, 1024-dim, well-separated (closer to bge than e5).
   // dedup lowered to 0.94 so real duplicates are caught without fragmenting.
