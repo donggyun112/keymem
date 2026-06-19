@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sharedKey, classifyPair, prf, range, priorWeightedFP, splitPairs } from "../bench/calibrate-lib.ts";
+import { sharedKey, classifyPair, prf, range, priorWeightedFP, splitPairs, sweep, bestByMacroF1, bestJointSeparability, calibrate } from "../bench/calibrate-lib.ts";
 
 test("sharedKey is case-insensitive overlap", () => {
   assert.equal(sharedKey(["회의", "일정"], ["일정"]), true);
@@ -66,4 +66,34 @@ test("splitPairs partitions by split field", () => {
   assert.equal(train.length, 1);
   assert.equal(heldOut.length, 1);
   assert.equal(heldOut[0].pair.relation, "contradiction");
+});
+
+test("sweep skips floor>=cut and bestByMacroF1 picks the max", () => {
+  const scored = [sp("duplicate", 0.96, true), sp("contradiction", 0.88, true), sp("independent", 0.5, false)];
+  const rows = sweep(scored, [0.80, 0.95], [0.90, 0.94]);
+  assert.ok(rows.every((r) => r.floor < r.dedupCut), "no floor>=cut rows");
+  const best = bestByMacroF1(rows);
+  assert.ok(best.macroF1 >= Math.max(...rows.map((r) => r.macroF1)) - 1e-9);
+});
+
+test("bestJointSeparability reports the best simultaneous dup/contra F1", () => {
+  // dup pair at 0.96, contra pair at 0.95 (above cut 0.94 -> misclassified as duplicate)
+  // No cut cleanly separates: raising cut to catch the 0.95 contra would drop the 0.96 dup.
+  const scored = [
+    sp("duplicate", 0.96, true),
+    sp("contradiction", 0.95, true),
+  ];
+  const rows = sweep(scored, [0.80], [0.94, 0.97]);
+  const sep = bestJointSeparability(rows);
+  assert.ok(sep.minF1 < 1, "classes overlap -> cannot get both F1=1 (1순위 evidence)");
+});
+
+test("calibrate ties it together with overfit delta", () => {
+  const tr = sp("duplicate", 0.96, true); tr.pair.split = "train";
+  const ho = sp("contradiction", 0.88, true); ho.pair.split = "held-out";
+  const res = calibrate([tr, ho], { floors: [0.80], cuts: [0.94], indepPrior: 0.95 });
+  assert.equal(res.trainN, 1);
+  assert.equal(res.heldOutN, 1);
+  assert.equal(typeof res.overfitDelta, "number");
+  assert.ok(res.separability);
 });

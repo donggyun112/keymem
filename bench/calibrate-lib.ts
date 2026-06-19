@@ -86,3 +86,67 @@ export function splitPairs(scored: ScoredPair[]): { train: ScoredPair[]; heldOut
     heldOut: scored.filter((s) => s.pair.split === "held-out"),
   };
 }
+
+export interface SweepRow { floor: number; dedupCut: number; macroF1: number; scorecard: Scorecard; }
+
+export function sweep(scored: ScoredPair[], floors: number[], cuts: number[]): SweepRow[] {
+  const rows: SweepRow[] = [];
+  for (const floor of floors) {
+    for (const dedupCut of cuts) {
+      if (floor >= dedupCut) continue;
+      const scorecard = prf(scored, floor, dedupCut);
+      rows.push({ floor, dedupCut, macroF1: scorecard.macroF1, scorecard });
+    }
+  }
+  return rows;
+}
+
+export function bestByMacroF1(rows: SweepRow[]): SweepRow {
+  return rows.reduce((best, r) => (r.macroF1 > best.macroF1 ? r : best));
+}
+
+export interface Separability {
+  floor: number; dedupCut: number; dupF1: number; contraF1: number; minF1: number;
+}
+
+export function bestJointSeparability(rows: SweepRow[]): Separability {
+  let best: Separability | null = null;
+  for (const r of rows) {
+    const dupF1 = r.scorecard.perClass.duplicate.f1;
+    const contraF1 = r.scorecard.perClass.contradiction.f1;
+    const minF1 = Math.min(dupF1, contraF1);
+    if (!best || minF1 > best.minF1) {
+      best = { floor: r.floor, dedupCut: r.dedupCut, dupF1, contraF1, minF1 };
+    }
+  }
+  return best!;
+}
+
+export interface CalibrationResult {
+  trainN: number;
+  heldOutN: number;
+  best: SweepRow;
+  heldOut: Scorecard;
+  overfitDelta: number;
+  separability: Separability;
+  priorFP: number;
+}
+
+export function calibrate(
+  scored: ScoredPair[],
+  opts: { floors: number[]; cuts: number[]; indepPrior: number }
+): CalibrationResult {
+  const { train, heldOut } = splitPairs(scored);
+  const rows = sweep(train, opts.floors, opts.cuts);
+  const best = bestByMacroF1(rows);
+  const heldOutScore = prf(heldOut, best.floor, best.dedupCut);
+  return {
+    trainN: train.length,
+    heldOutN: heldOut.length,
+    best,
+    heldOut: heldOutScore,
+    overfitDelta: Math.abs(best.macroF1 - heldOutScore.macroF1),
+    separability: bestJointSeparability(rows),
+    priorFP: priorWeightedFP(train, best.floor, best.dedupCut, opts.indepPrior),
+  };
+}
