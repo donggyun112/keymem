@@ -56,3 +56,35 @@ test("capacity evicts oldest entries", () => {
   assert.ok(buf.consumeWeakMatch("k2")); // second-oldest survived
   assert.ok(buf.consumeWeakMatch("k3"));
 });
+
+import { decidePromotion } from "../src/autokey.ts";
+
+const base = {
+  query: "사는곳", learnedAliasCount: 0,
+  aliasThreshold: 0.86, newKeyThreshold: 0.62, promoteN: 3, maxAliases: 8,
+};
+
+test("decidePromotion: below promoteN does nothing", () => {
+  assert.equal(decidePromotion({ ...base, count: 2, cosine: 0.99 }), "none");
+});
+
+test("decidePromotion: high cosine at threshold -> alias", () => {
+  assert.equal(decidePromotion({ ...base, count: 3, cosine: 0.9 }), "alias");
+});
+
+test("decidePromotion: mid cosine -> newKey", () => {
+  assert.equal(decidePromotion({ ...base, count: 3, cosine: 0.7 }), "newKey");
+});
+
+test("decidePromotion: cosine below newKey floor -> none", () => {
+  assert.equal(decidePromotion({ ...base, count: 3, cosine: 0.5 }), "none");
+});
+
+test("decidePromotion: long query is never promoted", () => {
+  const longQ = "동균이 요즘 즐겨 마시는 음료가 무엇인지";
+  assert.equal(decidePromotion({ ...base, query: longQ, count: 5, cosine: 0.99 }), "none");
+});
+
+test("decidePromotion: alias cap forces none even at high cosine", () => {
+  assert.equal(decidePromotion({ ...base, count: 3, cosine: 0.99, learnedAliasCount: 8 }), "none");
+});
