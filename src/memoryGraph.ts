@@ -10,7 +10,7 @@ import type { Key, Memory, GraphData } from "./types.js";
 import {
   RecallBuffer, decidePromotion,
   AUTOKEY_ENABLED, AUTOKEY_BUFFER_CAPACITY, AUTOKEY_BUFFER_TTL_SECONDS,
-  AUTOKEY_PROMOTE_N, AUTOKEY_MAX_ALIASES,
+  AUTOKEY_PROMOTE_N, AUTOKEY_MAX_ALIASES, AUTOKEY_PRUNE_AGE_SECONDS,
 } from "./autokey.js";
 
 const DATA_DIR =
@@ -1022,6 +1022,10 @@ export class MemoryGraph {
         const aliases = key.aliases ?? [];
         const conceptLiteral = literalKeyMatch(queryLower, key.concept);
         const matchedAlias = aliases.find((alias) => literalKeyMatch(queryLower, alias));
+        if (matchedAlias && key.learnedAliases) {
+          const la = key.learnedAliases.find((l) => l.alias.toLowerCase() === matchedAlias.toLowerCase());
+          if (la) la.hits += 1;
+        }
         const literal = conceptLiteral || matchedAlias !== undefined;
         let contentSim = 0;
         for (const mid of activeIds) {
@@ -1777,6 +1781,32 @@ export class MemoryGraph {
       }
       this._removeMemoryReferences(expired);
       this._pruneOrphanKeys();
+
+      const now = Date.now() / 1000;
+      for (const key of Object.values(this.keys)) {
+        if (!key.learnedAliases?.length) continue;
+        const keep = key.learnedAliases.filter(
+          (l) => l.hits > 0 || now - l.addedAt < AUTOKEY_PRUNE_AGE_SECONDS
+        );
+        if (keep.length === key.learnedAliases.length) continue;
+        const dropped = new Set(
+          key.learnedAliases.filter((l) => !keep.includes(l)).map((l) => l.alias.toLowerCase())
+        );
+        key.learnedAliases = keep;
+        key.aliases = (key.aliases ?? []).filter((a) => !dropped.has(a.toLowerCase()));
+      }
+
+      // Drop stale alias candidates — heat that never reached promotion (e.g. long
+      // non-promotable queries that fail isShortConcept) — so the persisted ledger
+      // cannot grow without bound on a long-lived key.
+      for (const key of Object.values(this.keys)) {
+        if (!key.aliasCandidates) continue;
+        for (const [norm, cand] of Object.entries(key.aliasCandidates)) {
+          if (now - cand.lastSeen >= AUTOKEY_PRUNE_AGE_SECONDS) delete key.aliasCandidates[norm];
+        }
+        if (Object.keys(key.aliasCandidates).length === 0) delete key.aliasCandidates;
+      }
+
       if (expired.length > 0) await this.save();
       return expired.length;
     });

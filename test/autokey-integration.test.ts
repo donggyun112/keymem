@@ -117,3 +117,63 @@ test("read_key surfaces learned aliases as provenance", async () => {
     emb.__clearTestEmbedder();
   }
 });
+
+test("a literal hit on a learned alias bumps its hit count", async () => {
+  const emb = await import("../src/embedding.ts");
+  emb.__setTestEmbedder(() => [1, 0]);
+  try {
+    const { MemoryGraph } = await import("../src/memoryGraph.ts");
+    const g = new MemoryGraph();
+    const [mid] = await g.add("동균은 성수동에 산다", ["거주지"]);
+    const kid = Object.keys(g.keys).find((k) => g.keys[k].concept === "거주지")!;
+    g.keys[kid].aliases.push("사는곳");
+    g.keys[kid].learnedAliases = [{ alias: "사는곳", addedAt: 1, hits: 0 }];
+
+    await g.searchKeys("사는곳"); // literal alias match
+    assert.equal(g.keys[kid].learnedAliases?.[0].hits, 1);
+  } finally {
+    emb.__clearTestEmbedder();
+  }
+});
+
+test("cleanupExpired prunes stale, never-hit learned aliases", async () => {
+  const emb = await import("../src/embedding.ts");
+  emb.__setTestEmbedder(() => [1, 0]);
+  try {
+    const { MemoryGraph } = await import("../src/memoryGraph.ts");
+    const g = new MemoryGraph();
+    const [mid] = await g.add("동균은 성수동에 산다", ["거주지"]);
+    const kid = Object.keys(g.keys).find((k) => g.keys[k].concept === "거주지")!;
+    g.keys[kid].aliases.push("쓸모없는별칭");
+    g.keys[kid].learnedAliases = [{ alias: "쓸모없는별칭", addedAt: 0, hits: 0 }]; // addedAt epoch 0 = very old
+
+    await g.cleanupExpired();
+    assert.equal(g.keys[kid].learnedAliases?.length ?? 0, 0);
+    assert.ok(!g.keys[kid].aliases.includes("쓸모없는별칭"));
+  } finally {
+    emb.__clearTestEmbedder();
+  }
+});
+
+test("cleanupExpired drops stale alias candidates (bounds the heat ledger)", async () => {
+  const emb = await import("../src/embedding.ts");
+  emb.__setTestEmbedder(() => [1, 0]);
+  try {
+    const { MemoryGraph } = await import("../src/memoryGraph.ts");
+    const g = new MemoryGraph();
+    const [mid] = await g.add("동균은 성수동에 산다", ["거주지"]);
+    const kid = Object.keys(g.keys).find((k) => g.keys[k].concept === "거주지")!;
+    // A stale candidate (lastSeen epoch 0) and a fresh one (lastSeen now).
+    const now = Date.now() / 1000;
+    g.keys[kid].aliasCandidates = {
+      "오래된쿼리": { count: 1, lastSeen: 0, queryText: "오래된쿼리" },
+      "최근쿼리": { count: 1, lastSeen: now, queryText: "최근쿼리" },
+    };
+
+    await g.cleanupExpired();
+    assert.ok(!g.keys[kid].aliasCandidates?.["오래된쿼리"], "stale candidate should be dropped");
+    assert.ok(g.keys[kid].aliasCandidates?.["최근쿼리"], "fresh candidate should survive");
+  } finally {
+    emb.__clearTestEmbedder();
+  }
+});
