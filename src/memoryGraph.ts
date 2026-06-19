@@ -956,13 +956,21 @@ export class MemoryGraph {
       const queryLower = cleanQuery.toLowerCase();
       const keyIds = Object.keys(this.keys);
       const sims = batchCosineSim(qEmb, keyIds.map((kid) => this.keys[kid].embedding));
+      // Content signal: max cosine of a key's member memories to the query. Lets a key whose
+      // CONTENT matches the query surface even when its coined concept does not lexically or
+      // semantically hit the query — the cure for key-coining dependence (pure key-space
+      // search is blind to content). Computed once over all memories, then maxed per key.
+      const memIds = Object.keys(this.memories);
+      const memSimArr = batchCosineSim(qEmb, memIds.map((mid) => this.memories[mid].embedding));
+      const memSim = new Map<string, number>();
+      for (let j = 0; j < memIds.length; j++) memSim.set(memIds[j], memSimArr[j]);
       const candidates: Array<{
         key_id: string;
         concept: string;
         aliases: string[];
         key_type: Key["key_type"];
         score: number;
-        match_type: "concept" | "alias" | "semantic";
+        match_type: "concept" | "alias" | "semantic" | "content";
         memory_count: number;
         is_hub: boolean;
         specificity: number;
@@ -982,13 +990,20 @@ export class MemoryGraph {
         const conceptLiteral = literalKeyMatch(queryLower, key.concept);
         const matchedAlias = aliases.find((alias) => literalKeyMatch(queryLower, alias));
         const literal = conceptLiteral || matchedAlias !== undefined;
+        let contentSim = 0;
+        for (const mid of activeIds) {
+          const s = memSim.get(mid) ?? 0;
+          if (s > contentSim) contentSim = s;
+        }
+        const keySim = sims[i];
         if (
           (key.key_type === "name" || key.key_type === "proper_noun")
             ? !literal
-            : !literal && sims[i] < KEY_RECALL_THRESHOLD
+            : !literal && keySim < KEY_RECALL_THRESHOLD && contentSim < CONTENT_RECALL_THRESHOLD
         ) {
           continue;
         }
+        const relevance = literal ? 1 : Math.max(keySim, contentSim);
 
         const memoryCount = activeIds.length;
         candidates.push({
@@ -996,8 +1011,8 @@ export class MemoryGraph {
           concept: key.concept,
           aliases,
           key_type: key.key_type,
-          score: Math.round((literal ? 1 : sims[i]) * 1000) / 1000,
-          match_type: matchedAlias ? "alias" : conceptLiteral ? "concept" : "semantic",
+          score: Math.round(relevance * 1000) / 1000,
+          match_type: matchedAlias ? "alias" : conceptLiteral ? "concept" : contentSim > keySim ? "content" : "semantic",
           memory_count: memoryCount,
           is_hub: memoryCount >= KEY_HUB_MIN_LINKS,
           specificity: Math.round((1 / memoryCount) * 1000) / 1000,
@@ -1015,20 +1030,28 @@ export class MemoryGraph {
     });
   }
 
-  readKey(
+  async readKey(
     keyId: string,
-    options: { namespace?: string | null; limit?: number; offset?: number } = {}
-  ): object {
+    options: { namespace?: string | null; limit?: number; offset?: number; query?: string | null } = {}
+  ): Promise<object> {
     if (!(keyId in this.keys)) throw new Error(`Key ${keyId} not found`);
     const namespace = options.namespace ?? null;
     const limit = Math.max(1, Math.min(50, Math.floor(options.limit ?? 10)));
     const offset = Math.max(0, Math.floor(options.offset ?? 0));
+    // Query-aware ranking: when a query is supplied, order this key's memories by content
+    // relevance to it (not only by link weight). This is what makes a generic hub key usable —
+    // the target rises to the top instead of being buried among the hub's other members.
+    // Omitted query reproduces the prior link-weight ordering exactly (rel = 1).
+    const cleanQuery = options.query?.trim();
+    const qEmb = cleanQuery ? await embedTextAsync(cleanQuery, "query") : null;
+    if (qEmb) this._checkDim(qEmb);
 
     const ranked = this._activeMemoryIdsForKey(keyId, namespace)
       .map((mid) => {
         const mem = this.memories[mid];
         const linkWeight = this._getLinkWeight(keyId, mid);
-        const score = linkWeight * (0.9 + mem.depth * 0.1) * this._timeFactor(mem);
+        const rel = qEmb ? cosineSim(qEmb, mem.embedding) : 1;
+        const score = rel * linkWeight * (0.9 + mem.depth * 0.1) * this._timeFactor(mem);
         return { mid, mem, linkWeight, score };
       })
       .sort((a, b) => b.score - a.score || b.mem.created_at - a.mem.created_at);

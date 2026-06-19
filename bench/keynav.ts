@@ -57,7 +57,7 @@ async function keynavRank(g: any, query: string, tg: string): Promise<number> {
   const keys = (await g.searchKeys(query, 5)) as Array<{ key_id: string }>;
   const seen: string[] = [];
   for (const k of keys) {
-    const res = g.readKey(k.key_id, { limit: 10 }) as { memories: Array<{ memory_id: string }> };
+    const res = (await g.readKey(k.key_id, { limit: 10, query })) as { memories: Array<{ memory_id: string }> };
     for (const m of res.memories) if (!seen.includes(m.memory_id)) seen.push(m.memory_id);
   }
   return seen.indexOf(tg) + 1; // 0 = not found
