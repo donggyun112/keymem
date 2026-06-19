@@ -21,7 +21,12 @@ export class RecallBuffer {
   }
 
   push(entry: { queryText: string; queryEmbedding: number[]; weakKeyScores: Map<string, number> }): void {
-    this._entries.push({ ...entry, ts: this._now() });
+    this._entries.push({
+      queryText: entry.queryText,
+      queryEmbedding: entry.queryEmbedding,
+      weakKeyScores: new Map(entry.weakKeyScores),
+      ts: this._now(),
+    });
     if (this._entries.length > this._capacity) {
       this._entries.splice(0, this._entries.length - this._capacity);
     }

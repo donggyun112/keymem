@@ -29,6 +29,23 @@ test("entries past TTL are ignored", () => {
   assert.equal(buf.consumeWeakMatch("k1"), null);
 });
 
+test("TTL boundary: entry at cutoff edge is still fresh, expires one second later", () => {
+  let clock = 0;
+  const buf = new RecallBuffer({ ttlSeconds: 300, now: () => clock });
+  buf.push({ queryText: "q", queryEmbedding: [1], weakKeyScores: new Map([["k1", 0.9]]) });
+
+  // At now=300: cutoff = 300 - 300 = 0; ts=0; 0 < 0 is false → still fresh
+  clock = 300;
+  assert.ok(buf.consumeWeakMatch("k1"), "entry at exact cutoff boundary should still be fresh");
+
+  // Push again for the expiry check (previous was consumed)
+  clock = 0;
+  const buf2 = new RecallBuffer({ ttlSeconds: 300, now: () => clock });
+  buf2.push({ queryText: "q", queryEmbedding: [1], weakKeyScores: new Map([["k1", 0.9]]) });
+  clock = 301;
+  assert.equal(buf2.consumeWeakMatch("k1"), null, "entry should expire at now=301");
+});
+
 test("capacity evicts oldest entries", () => {
   const buf = new RecallBuffer({ capacity: 2, now: () => 0 });
   buf.push({ queryText: "a", queryEmbedding: [1], weakKeyScores: new Map([["k1", 0.9]]) });
@@ -36,5 +53,6 @@ test("capacity evicts oldest entries", () => {
   buf.push({ queryText: "c", queryEmbedding: [1], weakKeyScores: new Map([["k3", 0.9]]) });
   assert.equal(buf.size(), 2);
   assert.equal(buf.consumeWeakMatch("k1"), null); // evicted
+  assert.ok(buf.consumeWeakMatch("k2")); // second-oldest survived
   assert.ok(buf.consumeWeakMatch("k3"));
 });
