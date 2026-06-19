@@ -129,3 +129,10 @@ Use `__setTestEmbedder` for deterministic vectors.
 
 `read_key` already returns `aliases`; learned aliases are tagged `learned: true` so authored
 vs learned vocabulary is distinguishable for debugging and rollback.
+
+## Known limitations
+
+- **`newKey` provenance gap**: when promotion takes the `newKey` branch, the newly coined key is linked to the confirmed memory via `_autoLinkKeys`, but no `learnedAliases` entry is written on the original key — there is no record that the new key was born from a self-healing event. Likewise, if `findOrCreateKey` merges the query into an existing key it adds a plain alias (not tracked in `learnedAliases`), so that alias is invisible to hit-based pruning. Impact is low: orphan-prune still reaps unused keys when their associated memories expire.
+- **Profile sensitivity of promotion windows**: on the e5 profile (`keyMerge` 0.97 / `keyAutoLink` 0.93 / `keyRecall` 0.85) cosine bands are very narrow, so the heal fires rarely — the semantic band eligible for buffering is only `[0.85, 0.93)`. On bge-m3 (`keyAutoLink` 0.62) the window is much wider and the feature is most active. Operators tuning recall on e5 should not expect aggressive self-healing without profile recalibration.
+- **Buffer is not persisted**: the `RecallBuffer` is a runtime-only ring buffer. A process restart drops all in-flight weak matches; confirmation heat accumulated before restart is not lost (it is persisted in `aliasCandidates`), but any unconfirmed weak match from the pre-restart session cannot be attributed post-restart.
+- **Single-instance only**: the recall buffer lives on the `MemoryGraph` instance. Multi-process or multi-replica deployments sharing the same on-disk graph will accumulate `aliasCandidates` correctly (disk-serialised), but the in-flight buffer is not shared, so cross-process confirmation attribution is not possible.

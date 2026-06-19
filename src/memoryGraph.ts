@@ -1070,7 +1070,6 @@ export class MemoryGraph {
         if (weak.length > 0) {
           this._recallBuffer.push({
             queryText: cleanQuery,
-            queryEmbedding: qEmb,
             weakKeyScores: new Map(weak.map((c) => [c.key_id, c.score])),
           });
         }

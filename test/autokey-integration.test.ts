@@ -38,14 +38,17 @@ test("searchKeys records weak (semantic) matches in the recall buffer", async ()
   try {
     const { MemoryGraph } = await import("../src/memoryGraph.ts");
     const g = new MemoryGraph();
-    const [mid] = await g.add("동균은 성수동에 산다", ["거주지"]);
+    await g.add("동균은 성수동에 산다", ["거주지"]);
     // getKeysForMemory returns concept strings; resolve the concept to its key ID.
     const kid = Object.keys(g.keys).find((k) => g.keys[k].concept === "거주지")!;
 
     await g.searchKeys("어디 살아"); // semantic match on 거주지, not literal
-    const hit = (g as unknown as { _recallBuffer: { consumeWeakMatch(k: string): unknown } })._recallBuffer
+    const hit = (g as unknown as { _recallBuffer: { consumeWeakMatch(k: string): { queryText: string; weakKeyScores: Map<string, number>; ts: number } | null } })._recallBuffer
       .consumeWeakMatch(kid);
     assert.ok(hit, "expected 거주지 to be recorded as a weak match");
+    const score = hit.weakKeyScores.get(kid);
+    assert.equal(typeof score, "number", "stored score must be a number");
+    assert.ok(score! > 0, "stored score must be positive");
   } finally {
     emb.__clearTestEmbedder();
   }
@@ -107,7 +110,7 @@ test("read_key surfaces learned aliases as provenance", async () => {
   try {
     const { MemoryGraph } = await import("../src/memoryGraph.ts");
     const g = new MemoryGraph();
-    const [mid] = await g.add("동균은 성수동에 산다", ["거주지"]);
+    await g.add("동균은 성수동에 산다", ["거주지"]);
     const kid = Object.keys(g.keys).find((k) => g.keys[k].concept === "거주지")!;
     g.keys[kid].learnedAliases = [{ alias: "사는곳", addedAt: 1, hits: 0 }];
 
@@ -124,7 +127,7 @@ test("a literal hit on a learned alias bumps its hit count", async () => {
   try {
     const { MemoryGraph } = await import("../src/memoryGraph.ts");
     const g = new MemoryGraph();
-    const [mid] = await g.add("동균은 성수동에 산다", ["거주지"]);
+    await g.add("동균은 성수동에 산다", ["거주지"]);
     const kid = Object.keys(g.keys).find((k) => g.keys[k].concept === "거주지")!;
     g.keys[kid].aliases.push("사는곳");
     g.keys[kid].learnedAliases = [{ alias: "사는곳", addedAt: 1, hits: 0 }];
@@ -142,7 +145,7 @@ test("cleanupExpired prunes stale, never-hit learned aliases", async () => {
   try {
     const { MemoryGraph } = await import("../src/memoryGraph.ts");
     const g = new MemoryGraph();
-    const [mid] = await g.add("동균은 성수동에 산다", ["거주지"]);
+    await g.add("동균은 성수동에 산다", ["거주지"]);
     const kid = Object.keys(g.keys).find((k) => g.keys[k].concept === "거주지")!;
     g.keys[kid].aliases.push("쓸모없는별칭");
     g.keys[kid].learnedAliases = [{ alias: "쓸모없는별칭", addedAt: 0, hits: 0 }]; // addedAt epoch 0 = very old
@@ -161,7 +164,7 @@ test("cleanupExpired drops stale alias candidates (bounds the heat ledger)", asy
   try {
     const { MemoryGraph } = await import("../src/memoryGraph.ts");
     const g = new MemoryGraph();
-    const [mid] = await g.add("동균은 성수동에 산다", ["거주지"]);
+    await g.add("동균은 성수동에 산다", ["거주지"]);
     const kid = Object.keys(g.keys).find((k) => g.keys[k].concept === "거주지")!;
     // A stale candidate (lastSeen epoch 0) and a fresh one (lastSeen now).
     const now = Date.now() / 1000;
@@ -184,7 +187,7 @@ test("cleanupExpired persists pruning even with no expired memories", async () =
   try {
     const { MemoryGraph } = await import("../src/memoryGraph.ts");
     const g1 = new MemoryGraph();
-    const [mid] = await g1.add("동균은 성수동에 산다", ["거주지"]);
+    await g1.add("동균은 성수동에 산다", ["거주지"]);
     const kid = Object.keys(g1.keys).find((k) => g1.keys[k].concept === "거주지")!;
     g1.keys[kid].aliasCandidates = { "오래된쿼리": { count: 1, lastSeen: 0, queryText: "오래된쿼리" } };
 

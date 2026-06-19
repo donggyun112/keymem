@@ -2,7 +2,6 @@ import { isShortConcept } from "./embedding.js";
 
 export interface RecallBufferEntry {
   queryText: string;
-  queryEmbedding: number[];
   weakKeyScores: Map<string, number>;
   ts: number;
 }
@@ -22,10 +21,9 @@ export class RecallBuffer {
     this._now = opts.now ?? (() => Date.now() / 1000);
   }
 
-  push(entry: { queryText: string; queryEmbedding: number[]; weakKeyScores: Map<string, number> }): void {
+  push(entry: { queryText: string; weakKeyScores: Map<string, number> }): void {
     this._entries.push({
       queryText: entry.queryText,
-      queryEmbedding: entry.queryEmbedding,
       weakKeyScores: new Map(entry.weakKeyScores),
       ts: this._now(),
     });
@@ -44,7 +42,6 @@ export class RecallBuffer {
       if (e.weakKeyScores.has(keyId)) {
         const result: RecallBufferEntry = {
           queryText: e.queryText,
-          queryEmbedding: e.queryEmbedding,
           weakKeyScores: new Map(e.weakKeyScores),
           ts: e.ts,
         };
