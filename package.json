@@ -1,12 +1,28 @@
 {
   "name": "mcp-super-memory",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "type": "module",
   "description": "N:M Associative Memory System for LLM Agents",
-  "keywords": ["mcp", "memory", "llm", "agent", "embeddings", "knowledge-graph", "associative-memory", "rag", "reranker", "bge-m3"],
+  "keywords": [
+    "mcp",
+    "memory",
+    "llm",
+    "agent",
+    "embeddings",
+    "knowledge-graph",
+    "associative-memory",
+    "rag",
+    "reranker",
+    "bge-m3"
+  ],
   "homepage": "https://github.com/donggyun112/super-memory#readme",
-  "repository": { "type": "git", "url": "git+https://github.com/donggyun112/super-memory.git" },
-  "bugs": { "url": "https://github.com/donggyun112/super-memory/issues" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/donggyun112/super-memory.git"
+  },
+  "bugs": {
+    "url": "https://github.com/donggyun112/super-memory/issues"
+  },
   "author": "donggyun112 (https://github.com/donggyun112)",
   "license": "MIT",
   "main": "dist/index.js",
