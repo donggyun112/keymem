@@ -768,7 +768,7 @@ export class MemoryGraph {
       ttlSeconds?: number | null;
       relatedTo?: string[] | null;
     } = {}
-  ): Promise<[string, boolean]> {
+  ): Promise<[string, boolean, string | null, boolean]> {
     const embedding = await embedTextAsync(content); // outside lock
 
     // Duplicate detection and insertion run under a SINGLE lock acquisition so they are
@@ -832,6 +832,21 @@ export class MemoryGraph {
     });
 
     if (dupId !== null) {
+      // Threshold-free conflict signal: does the soon-to-be-superseded memory share a
+      // key with the incoming one? A shared key + high similarity is the same shape the
+      // contradiction detector keys off, so surface it rather than silently overwriting.
+      // The supersede DECISION is unchanged — telling a paraphrase from a high-similarity
+      // conflict needs the calibration corpus; this only makes the overwrite observable.
+      const sanitized = sanitizeKeys(keyConcepts);
+      const dupConcepts = new Set<string>();
+      for (const kid of this._memToKeys[dupId]?.keys() ?? []) {
+        const k = this.keys[kid];
+        if (!k) continue;
+        dupConcepts.add(k.concept.toLowerCase());
+        for (const alias of k.aliases ?? []) dupConcepts.add(alias.toLowerCase());
+      }
+      const conflict = sanitized.some((c) => dupConcepts.has(c.toLowerCase()));
+
       const newId = await this.supersede(dupId, content, {
         keyConcepts,
         keyTypes: options.keyTypes ?? undefined,
@@ -839,10 +854,10 @@ export class MemoryGraph {
         namespace: options.namespace,
         relatedTo: options.relatedTo,
       });
-      return [newId, true];
+      return [newId, true, dupId, conflict];
     }
 
-    return [resultMid, false];
+    return [resultMid, false, null, false];
   }
 
   // ── Supersede ──

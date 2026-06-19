@@ -383,7 +383,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "remember": {
         const keys = sanitizeKeys(a.keys);
-        const [mid, wasDedup] = await graph.add(
+        const [mid, wasDedup, superseded, conflict] = await graph.add(
           a.content as string,
           keys,
           {
@@ -393,9 +393,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             relatedTo: parseArray(a.related_to) as string[] | null,
           }
         );
-        const result = wasDedup
-          ? { saved: mid, deduplicated: true, note: "Similar memory existed — updated instead of creating duplicate" }
-          : { saved: mid };
+        let result: Record<string, unknown>;
+        if (!wasDedup) {
+          result = { saved: mid };
+        } else if (conflict) {
+          // High similarity but a SHARED KEY — looks like a conflicting fact, not a
+          // restatement. Surface the superseded id so the overwrite is recoverable.
+          result = {
+            saved: mid,
+            superseded,
+            conflict: true,
+            note: `Replaced a memory that shared a key (id: ${superseded}). If these are distinct or conflicting facts (not a restatement), the previous one is now hidden from recall — verify it via recall/read, or re-add with a more specific key.`,
+          };
+        } else {
+          result = {
+            saved: mid,
+            superseded,
+            deduplicated: true,
+            note: `Similar memory existed (id: ${superseded}) — updated instead of creating a duplicate.`,
+          };
+        }
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       }
 
