@@ -45,6 +45,15 @@ const RELATED_EXPLICIT_BONUS = 1.0; // an explicit link is the strongest connect
 // A wider pool than top_k lets the reranker rescue a right answer the fused score buried.
 const RERANK_POOL = Number(process.env.SUPER_MEMORY_RERANK_POOL ?? 30);
 
+// Rerank-based not-found gate (opt-in). The cross-encoder's absolute relevance logit is a
+// stronger "does this memory actually answer the query" signal than bi-encoder cosine, so a
+// low top logit means the query is unanswerable → return []. Unset = disabled. A definite
+// key anchor (literal name/proper-noun match) bypasses it. NOTE: reliable for SAME-LANGUAGE
+// queries only — cross-lingual relevance logits run low even when relevant, so cross-lingual
+// not-found must lean on key anchors, not this floor.
+const RERANK_MIN_SCORE =
+  process.env.SUPER_MEMORY_RERANK_MIN_SCORE !== undefined ? Number(process.env.SUPER_MEMORY_RERANK_MIN_SCORE) : null;
+
 const LINK_WEIGHT_DEFAULT = 1.0;
 const LINK_WEIGHT_MIN = 0.1;
 const LINK_WEIGHT_MAX = 3.0;
@@ -1117,11 +1126,18 @@ export class MemoryGraph {
         const pool = gated.slice(0, Math.max(actualTopK, RERANK_POOL));
         const scores = await rerankScores(query, pool.map(([mid]) => this.memories[mid]?.content ?? ""));
         if (scores) {
-          ranked = pool
-            .map((entry, i) => ({ entry, s: scores[i] }))
-            .sort((a, b) => b.s - a.s)
-            .map((x) => x.entry)
-            .slice(0, actualTopK);
+          // Not-found gate: a low top relevance logit means nothing in the pool actually
+          // answers the query → return []. A definite key anchor vouches for it (bypass),
+          // which also protects cross-lingual hits whose logit is low but whose key matched.
+          if (RERANK_MIN_SCORE !== null && !definiteAnchor && Math.max(...scores) < RERANK_MIN_SCORE) {
+            ranked = [];
+          } else {
+            ranked = pool
+              .map((entry, i) => ({ entry, s: scores[i] }))
+              .sort((a, b) => b.s - a.s)
+              .map((x) => x.entry)
+              .slice(0, actualTopK);
+          }
         }
       }
 

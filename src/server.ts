@@ -139,7 +139,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "remember",
       description:
-        "Save important information to memory. Keys are search terms — think 'what would I search to find this later?' Use 3-6 diverse keys. Before coining new keys, recall() the topic first and REUSE existing matching keys (e.g. reuse 'coffee' rather than adding 'beverage') — consistent keys link related memories into one navigable graph, while ad-hoc synonyms fragment it. namespace groups memories by project/context (e.g. 'work', 'personal'). ttl_seconds sets expiry for temporary memories (e.g. 3600 = 1 hour; None = permanent). related_to links this memory to existing memory IDs for explicit graph traversal.",
+        "Save important information to memory. Keys are search terms — think 'what would I search to find this later?' Use 3-6 diverse keys. Before coining new keys, recall() the topic first and REUSE existing matching keys (e.g. reuse 'coffee' rather than adding 'beverage') — consistent keys link related memories into one navigable graph, while ad-hoc synonyms fragment it. CROSS-LINGUAL: if the content (or any proper noun in it) may be queried in another language, add keys in BOTH languages (e.g. keys: ['Jiwoo', '지우', 'job', '직업']). Content-embedding alone bridges languages unreliably for short queries and transliterated names, so dual-language keys are the dependable cross-lingual retrieval path. namespace groups memories by project/context (e.g. 'work', 'personal'). ttl_seconds sets expiry for temporary memories (e.g. 3600 = 1 hour; None = permanent). related_to links this memory to existing memory IDs for explicit graph traversal.",
       inputSchema: {
         type: "object",
         properties: {
