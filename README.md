@@ -284,7 +284,7 @@ claude mcp add mcp-super-memory -e EMBEDDING_BACKEND=local -- npx -y mcp-super-m
 ### Manual / Development
 
 ```bash
-git clone https://github.com/donggyun112/mcp-super-memory
+git clone https://github.com/donggyun112/super-memory
 cd super-memory
 pnpm install
 ```
@@ -411,6 +411,12 @@ The versioning approach also differs: A-MEM overwrites on evolution (current sta
 
 ---
 
+## Author
+
+**donggyun112** — [github.com/donggyun112](https://github.com/donggyun112)
+
+Repository: [donggyun112/super-memory](https://github.com/donggyun112/super-memory) · Issues & PRs welcome.
+
 ## License
 
-MIT
+MIT © [donggyun112](https://github.com/donggyun112)
