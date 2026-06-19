@@ -54,6 +54,11 @@ const RERANK_POOL = Number(process.env.SUPER_MEMORY_RERANK_POOL ?? 30);
 const RERANK_MIN_SCORE =
   process.env.SUPER_MEMORY_RERANK_MIN_SCORE !== undefined ? Number(process.env.SUPER_MEMORY_RERANK_MIN_SCORE) : null;
 
+// KR↔Latin script check. The rerank not-found gate only trusts its logit when the query and
+// the top candidate share script — cross-lingual (e.g. Korean query ↔ English memory) logits
+// run low even when relevant, so a script mismatch means "don't trust the low logit, keep it".
+const hasHangul = (s: string): boolean => /[㄰-㆏가-힣]/.test(s);
+
 const LINK_WEIGHT_DEFAULT = 1.0;
 const LINK_WEIGHT_MIN = 0.1;
 const LINK_WEIGHT_MAX = 3.0;
@@ -181,6 +186,12 @@ export class MemoryGraph {
   // provenance). Drives re-embed on a same-dimension model swap; see embeddingFingerprint.
   private _storedFingerprint: string | null = null;
   private _lock = new Mutex();
+  // Serializes disk writes independently of _lock so a flush() done OUTSIDE _lock
+  // (recall's tail) can never race another save on the temp file or interleave
+  // renames. Lock order is always _lock → _saveLock (writes) or _saveLock alone
+  // (recall flush); nothing acquires _saveLock then _lock, so no deadlock.
+  private _saveLock = new Mutex();
+  private _saveSeq = 0;
   private _dirty = false;
   private _bm25: MiniSearch;
 
@@ -534,7 +545,6 @@ export class MemoryGraph {
   }
 
   async save(): Promise<void> {
-    await mkdir(DATA_DIR, { recursive: true });
     const links: Array<{ key_id: string; memory_id: string; weight: number }> = [];
     for (const [kid, mids] of Object.entries(this._keyToMems)) {
       for (const [mid, weight] of mids) {
@@ -551,9 +561,17 @@ export class MemoryGraph {
       links,
       meta: { embeddingFingerprint: fingerprint },
     };
-    const tmp = GRAPH_FILE + ".tmp";
-    await writeFile(tmp, JSON.stringify(data, null, 2), "utf-8");
-    await rename(tmp, GRAPH_FILE);
+    // Snapshot is built synchronously above (callers mutate under _lock without
+    // awaiting mid-mutation, so this read is consistent). Serialize the actual I/O
+    // so concurrent saves can't collide: a per-write unique temp name + single-flight
+    // _saveLock together guarantee one clean writeFile→rename at a time.
+    const json = JSON.stringify(data, null, 2);
+    await this._saveLock.runExclusive(async () => {
+      await mkdir(DATA_DIR, { recursive: true });
+      const tmp = `${GRAPH_FILE}.${process.pid}.${++this._saveSeq}.tmp`;
+      await writeFile(tmp, json, "utf-8");
+      await rename(tmp, GRAPH_FILE);
+    });
     this._dirty = false;
   }
 
@@ -866,24 +884,34 @@ export class MemoryGraph {
     this._checkDim(qEmb);
 
     const results: object[] = [];
+    const queryLower = query.toLowerCase().trim();
+    const memMatchedKeys: Record<string, string[]> = {};
+    const memHop: Record<string, number> = {};
+    let keyScores: [number, string][] = [];
 
+    // Hoisted to method scope so Phase 3 (a separate locked section) can reuse it.
+    const skip = (mid: string): boolean => {
+      if (!(mid in this.memories)) return true;
+      const mem = this.memories[mid];
+      if (this._isExpired(mem)) return true;
+      if (namespace && mem.namespace !== namespace) return true;
+      if (mid in this._supersededBy) return true;
+      return false;
+    };
+
+    // Phase-1 outputs, consumed by the unlocked rerank (Phase 2) + commit (Phase 3).
+    let gated: [string, number][] = [];
+    let definiteAnchor = false;
+    const actualTopK = expand ? topK * 2 : topK;
+
+    // ── Phase 1 (locked, fully synchronous) ── retrieve + fuse + gate. No await runs
+    // inside this section, so the lock is held only for fast in-memory work, never
+    // across model inference or disk I/O.
     await this._lock.runExclusive(async () => {
-      const queryLower = query.toLowerCase().trim();
-      const memMatchedKeys: Record<string, string[]> = {};
-      const memHop: Record<string, number> = {};
       const memRawSim: Record<string, number> = {};
       const allContentSims: number[] = [];
       const bumpRaw = (mid: string, sim: number) => {
         if (sim > (memRawSim[mid] ?? -Infinity)) memRawSim[mid] = sim;
-      };
-
-      const skip = (mid: string): boolean => {
-        if (!(mid in this.memories)) return true;
-        const mem = this.memories[mid];
-        if (this._isExpired(mem)) return true;
-        if (namespace && mem.namespace !== namespace) return true;
-        if (mid in this._supersededBy) return true;
-        return false;
       };
 
       // ── BM25 sparse search ──
@@ -915,7 +943,7 @@ export class MemoryGraph {
         }
       }
 
-      const keyScores: [number, string][] = [];
+      keyScores = [];
       for (let i = 0; i < keyIds.length; i++) {
         const kid = keyIds[i];
         const key = this.keys[kid];
@@ -1074,7 +1102,6 @@ export class MemoryGraph {
         }
       }
 
-      const actualTopK = expand ? topK * 2 : topK;
       const sorted = Object.entries(memScores).sort(([, a], [, b]) => b - a);
       // Absolute score gate (anchor-based): the query counts as "found" only if at
       // least one candidate has a direct dense similarity >= minScore. With no such
@@ -1089,7 +1116,7 @@ export class MemoryGraph {
       // absolute gate false-positives. minZ (gateZ) = 0 disables it, leaving the
       // 0.7.0 absolute-only behavior unchanged for bge-m3 and other profiles.
       const candidateIds = Object.keys(memScores);
-      const definiteAnchor = candidateIds.some((mid) => (memRawSim[mid] ?? 0) >= 0.999);
+      definiteAnchor = candidateIds.some((mid) => (memRawSim[mid] ?? 0) >= 0.999);
       const absoluteAnchor = candidateIds.some(
         (mid) => passesAbsoluteGate(memRawSim[mid] ?? 0, minScore)
       );
@@ -1113,35 +1140,47 @@ export class MemoryGraph {
       // (e.g. 0.05) trims that flood while keeping genuine associations (~15%+).
       // Default 0 = keep everything (no behavior change).
       const floor = sorted.length ? sorted[0][1] * minRelScore : 0;
-      const gated = (hasAnchor ? sorted : [])
+      gated = (hasAnchor ? sorted : [])
         .filter(([, score]) => score >= floor)
         .filter(([mid]) => minDepth <= 0 || (this.memories[mid]?.depth ?? 0) >= minDepth);
-      let ranked = gated.slice(0, actualTopK);
+    });
 
-      // ── Cross-encoder rerank (opt-in) ── Re-score a wider pool of gated candidates by
-      // joint (query, memory) relevance and reorder, then keep top_k. Pure precision pass:
-      // it only reorders memories that already passed the gate, so it never turns a
-      // not-found into a found. Falls back to the fused order if the model is unavailable.
-      if (rerankEnabled() && gated.length > 1) {
-        const pool = gated.slice(0, Math.max(actualTopK, RERANK_POOL));
-        const scores = await rerankScores(query, pool.map(([mid]) => this.memories[mid]?.content ?? ""));
-        if (scores) {
-          // Not-found gate: a low top relevance logit means nothing in the pool actually
-          // answers the query → return []. A definite key anchor vouches for it (bypass),
-          // which also protects cross-lingual hits whose logit is low but whose key matched.
-          if (RERANK_MIN_SCORE !== null && !definiteAnchor && Math.max(...scores) < RERANK_MIN_SCORE) {
-            ranked = [];
-          } else {
-            ranked = pool
-              .map((entry, i) => ({ entry, s: scores[i] }))
-              .sort((a, b) => b.s - a.s)
-              .map((x) => x.entry)
-              .slice(0, actualTopK);
-          }
+    // ── Phase 2 (UNLOCKED) ── cross-encoder rerank (opt-in). Model inference is the
+    // only slow, I/O-like await in recall; running it outside the lock lets other
+    // recalls and writes proceed meanwhile. It only READS immutable memory content
+    // (all reads happen synchronously before the await) and mutates nothing shared.
+    let ranked: [string, number][] = gated.slice(0, actualTopK);
+    if (rerankEnabled() && gated.length > 0) {
+      const pool = gated.slice(0, Math.max(actualTopK, RERANK_POOL));
+      const scores = await rerankScores(
+        query,
+        pool.map(([mid]) => this.memories[mid]?.content ?? "")
+      );
+      if (scores) {
+        const reordered = pool
+          .map((entry, i) => ({ entry, s: scores[i] }))
+          .sort((a, b) => b.s - a.s);
+        // Not-found gate (opt-in): a low top relevance logit means nothing answers the
+        // query → []. Trusted only when the query and the top candidate share script —
+        // cross-lingual logits run low even when relevant, so on a script mismatch we keep
+        // the result (the cosine/key gate already vouched). This catches same-language
+        // distractors; cross-lingual not-found stays a known limitation (use bilingual keys).
+        const topContent = this.memories[reordered[0]?.entry[0]]?.content ?? "";
+        const sameScript = hasHangul(query) === hasHangul(topContent);
+        if (RERANK_MIN_SCORE !== null && sameScript && reordered[0].s < RERANK_MIN_SCORE) {
+          ranked = [];
+        } else {
+          ranked = reordered.map((x) => x.entry).slice(0, actualTopK);
         }
       }
+    }
 
+    // ── Phase 3 (locked, fully synchronous) ── commit reinforcement + assemble the
+    // result payload. Re-validate every id with skip(): a concurrent forget/supersede/
+    // expiry may have landed during the unlocked rerank above.
+    await this._lock.runExclusive(async () => {
       for (const [mid, score] of ranked) {
+        if (skip(mid)) continue;
         const mem = this.memories[mid];
         mem.depth = Math.min(mem.depth + DEPTH_INCREMENT, DEPTH_MAX);
         mem.access_count += 1;
@@ -1175,6 +1214,7 @@ export class MemoryGraph {
       // for a different key, slowly polluting the graph. This mirrors the decay
       // side, which is already scoped to matched keys.
       for (const [mid] of ranked) {
+        if (skip(mid)) continue;
         for (const kid of this._memToKeys[mid]?.keys() ?? []) {
           if (!matchedKeyIds.has(kid)) continue;
           this._setLinkWeight(kid, mid, this._getLinkWeight(kid, mid) + LINK_REINFORCE_AMOUNT);
@@ -1194,7 +1234,7 @@ export class MemoryGraph {
       this.markDirty();
     });
 
-    await this.flush(); // outside lock
+    await this.flush(); // outside lock; save() is serialized + atomic (see _saveLock)
     return results;
   }
 
