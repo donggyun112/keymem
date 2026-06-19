@@ -121,7 +121,7 @@ Recall is not a single similarity scan. Three signals run in parallel and are fu
 - **Dense Path A (key matching):** query embedding → match keys → follow links → memories. Score = `keySim × IDF × linkWeight`, summed across all matching keys.
 - **Dense Path B (content matching):** query embedding → directly compare against memory content embeddings. Finds memories even when they weren't tagged with the right keys.
 
-Sparse and dense rank lists are merged by RRF, then modulated by depth and time before 2-hop expansion. Combining lexical and semantic signals is more robust than either alone.
+Sparse and dense rank lists are merged by RRF, then modulated by depth and time before configurable multi-hop expansion (`hops=1–5`, default `2`). Combining lexical and semantic signals is more robust than either alone.
 
 ### Hebbian Link Learning
 
@@ -155,7 +155,7 @@ Link weights feed directly back into scoring (`keySim × IDF × linkWeight`), so
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Recall algorithm (hybrid, 2-hop):**
+**Recall algorithm (hybrid, configurable 1–5 hops; default 2):**
 
 Three retrieval signals run in parallel, then get fused and expanded:
 
@@ -166,7 +166,7 @@ Three retrieval signals run in parallel, then get fused and expanded:
 5. **Depth & time modulation:** `score × (0.9 + depth × 0.1) × timeFactor`, where `timeFactor` is a depth-weighted 30-day half-life decay (deep memories decay slower).
 6. **Associative expansion (`hops`, default 2):** breadth-first from the directly-matched set — each round follows shared keys (`× HOP_DECAY(0.3) × IDF × linkWeight`) and explicit `related_to` links (bidirectional, `× HOP_DECAY`) to the next frontier. `hops=N` walks up to N steps, so a memory's `hop` is its shortest chain distance. Score decays by `HOP_DECAY` per hop.
 7. **Hebbian update:** reinforce matched-key links of returned memories (`+0.1`), decay explored-but-unreturned links (`−0.005`).
-8. Return ranked results with `hop` field (`1` = direct, `2` = associative).
+8. Return ranked results with `hop` field (`1` = direct, `2+` = associative distance).
 
 ### Similarity thresholds (calibrated per embedding model)
 
@@ -325,6 +325,15 @@ SUPER_MEMORY_RERANK=true
 
 > Off by default. If the model can't load, recall transparently falls back to its fused ranking (never breaks). Most useful for multi-fact / competing-candidate queries; single-fact recall is already strong without it. (Note: query *decomposition* — splitting a complex question into sub-queries — is the **caller's** job, since that needs LLM reasoning; the reranker is the server-side precision pass.)
 
+**Reranker not-found gate (`SUPER_MEMORY_RERANK_MIN_SCORE`):** the cross-encoder's absolute relevance logit is a far stronger "does this memory actually answer the query?" signal than bi-encoder cosine — so a distractor that slips past the cosine gate (e.g. *"what car does Jiwoo drive?"* against a *Jiwoo-job* memory) can be rejected. Set this to a logit floor (requires `SUPER_MEMORY_RERANK=true`); when the top candidate's logit is below it, recall returns `[]`.
+
+```
+SUPER_MEMORY_RERANK=true
+SUPER_MEMORY_RERANK_MIN_SCORE=0   # reject when top rerank logit < 0 (bge-reranker-v2-m3 scale)
+```
+
+> ⚠️ **Caveats.** (1) Unset by default — no gate. (2) The logit scale is **model-dependent**; `0` (≈ sigmoid 0.5) suits `bge-reranker-v2-m3` (measured: same-language found ≈ +3.9, not-found ≈ −5 to −6) — recalibrate for other rerankers. (3) **Trusted for SAME-LANGUAGE only.** Cross-lingual relevance logits run low even when relevant (KR query ↔ EN memory ≈ −5.4), so the gate auto-**bypasses on a script mismatch** (KR↔Latin) to avoid false-rejecting cross-lingual hits — which means **cross-lingual content must be reachable via bilingual keys** (`["Jiwoo","지우"]`), and cross-lingual *not-found* precision is a known limitation. Leave this off if you can't tag bilingual keys.
+
 > **Prefix behavior:** BGE-M3 does **not** use `passage:`/`query:` prefixes — embeddings are passed through as-is. All other local models (e5, BGE-en, MiniLM) continue to use prefixes unchanged.
 
 > **Recommended for multilingual / cross-lingual use: `bge-m3`.** On a real 19-memory Korean graph, English natural-language queries against Korean content land the correct memory at rank #1 in **7/7** cases under bge-m3 versus **2/7** under e5 (e5 leans on literal BM25 token overlap, so an English query sharing no tokens with Korean content is buried below noise). bge-m3 also separates found from not-found cleanly via the absolute `min_score` gate (≈96% on the gate fixture), whereas e5 needs the gate disabled entirely. Use e5 only if you cannot supply the bge-m3 ONNX model.
@@ -368,7 +377,7 @@ Set `SUPER_MEMORY_DATA_DIR` to use a different storage directory.
 ## Limitations
 
 - **Linear scan** — suitable for personal use (~10k memories). FAISS/ChromaDB integration planned for larger scale.
-- **2-hop max** — deeper associative chains require `related()` tool calls by the agent.
+- **Deep traversal trade-off** — `recall()` supports `hops=1–5` (default `2`), but deeper traversal increases latency and can surface hub-key noise. Use `min_rel_score` to trim low-scoring associations, or `related()` for deliberate step-by-step exploration.
 - **Agent quality matters** — key selection on `remember` affects retrieval quality. System prompt tuning is important.
 - **Cross-lingual content bias** — with multilingual e5, raw content similarity favors same-language memories regardless of meaning. Tag memories with multilingual keys so the key graph (not biased content cosine) carries cross-lingual recall.
 - **Threshold calibration** — thresholds are tuned per embedding model. A new/uncalibrated model falls back to the BGE profile (with a warning); recalibrate via the `SUPER_MEMORY_*` env overrides.

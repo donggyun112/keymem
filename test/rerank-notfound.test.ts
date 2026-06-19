@@ -56,3 +56,37 @@ test("rerank not-found gate returns [] when top relevance is below the floor", a
   const fallback = (await g.recall("QQ", 5, null, false, 2, 0, 0, 0, 0)) as any[];
   assert.ok(fallback.length > 0, "null rerank scores must NOT trigger the not-found gate");
 });
+
+test("rerank not-found gate does NOT fire on cross-lingual (script mismatch)", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "sm-rrxl-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  process.env.SUPER_MEMORY_DATA_DIR = dir;
+  process.env.EMBEDDING_BACKEND = "local";
+  process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
+  process.env.SUPER_MEMORY_RERANK_MIN_SCORE = "0";
+  t.after(() => { delete process.env.SUPER_MEMORY_RERANK_MIN_SCORE; });
+
+  // Korean query, English (Latin) memories → cross-lingual logits run low even when
+  // relevant, so a low logit must NOT reject (the cosine/key gate already vouched).
+  const xvec: Record<string, number[]> = {
+    "직업한국어질의": [1, 0, 0, 0, 0],
+    "english memory one": [0.9, 0.4359, 0, 0, 0],
+    "english memory two": [0.85, 0, 0.5268, 0, 0],
+    ka: [0, 0, 0, 1, 0], kb: [0, 0, 0, 0, 1],
+  };
+  const emb = await import("../src/embedding.ts");
+  emb.__setTestEmbedder((tx: string) => xvec[tx] ?? [0, 0, 0, 1, 0]);
+  t.after(() => emb.__clearTestEmbedder());
+  const rer = await import("../src/reranker.ts");
+  t.after(() => rer.__clearTestReranker());
+  rer.__setTestReranker((_q, texts) => texts.map(() => -1)); // low logits
+
+  const mg = await import(`../src/memoryGraph.ts?rrxl=${n++}`);
+  const g = new mg.MemoryGraph();
+  await g.load();
+  await g.add("english memory one", ["ka"], {});
+  await g.add("english memory two", ["kb"], {});
+
+  const r = (await g.recall("직업한국어질의", 5, null, false, 2, 0, 0, 0, 0)) as any[];
+  assert.ok(r.length > 0, "cross-script (KR query ↔ EN memory) must bypass the gate despite low logits");
+});
