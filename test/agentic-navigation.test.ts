@@ -57,7 +57,7 @@ test("agent navigates Key → Memory → Key while aliases and hubs stay visible
   assert.equal(keyCandidate.suggested_tool, "read_key");
   assert.ok(!("content" in keyCandidate), "recall candidates must not expose memory content");
 
-  const keyRead = graph.readKey(programming.id, { limit: 2 }) as any;
+  const keyRead = (await graph.readKey(programming.id, { limit: 2 })) as any;
   assert.equal(keyRead.total, 3);
   assert.equal(keyRead.memories.length, 2);
   assert.equal(keyRead.next_offset, 2);

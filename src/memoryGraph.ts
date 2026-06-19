@@ -7,6 +7,11 @@ import MiniSearch from "minisearch";
 import { embedTextAsync, EMBEDDING_BACKEND, embeddingFingerprint, getThresholdProfile, isShortConcept, inContradictionBand } from "./embedding.js";
 import { rerankEnabled, rerankScores } from "./reranker.js";
 import type { Key, Memory, GraphData } from "./types.js";
+import {
+  RecallBuffer, decidePromotion,
+  AUTOKEY_ENABLED, AUTOKEY_BUFFER_CAPACITY, AUTOKEY_BUFFER_TTL_SECONDS,
+  AUTOKEY_PROMOTE_N, AUTOKEY_MAX_ALIASES, AUTOKEY_PRUNE_AGE_SECONDS,
+} from "./autokey.js";
 
 const DATA_DIR =
   process.env.SUPER_MEMORY_DATA_DIR ?? join(homedir(), ".super-memory");
@@ -207,6 +212,10 @@ export class MemoryGraph {
   private _saveSeq = 0;
   private _dirty = false;
   private _bm25: MiniSearch;
+  private _recallBuffer = new RecallBuffer({
+    capacity: AUTOKEY_BUFFER_CAPACITY,
+    ttlSeconds: AUTOKEY_BUFFER_TTL_SECONDS,
+  });
 
   constructor() {
     this._bm25 = new MiniSearch({
@@ -445,6 +454,7 @@ export class MemoryGraph {
       key_id: keyId,
       concept: key.concept,
       aliases: key.aliases ?? [],
+      learned_aliases: (key.learnedAliases ?? []).map((l) => l.alias),
       key_type: key.key_type,
       memory_count: memoryCount,
       is_hub: memoryCount >= KEY_HUB_MIN_LINKS,
@@ -544,7 +554,30 @@ export class MemoryGraph {
         seen.add(normalized);
         return true;
       });
-      this.keys[kid] = { ...k, aliases };
+      const aliasCandidates =
+        k.aliasCandidates && typeof k.aliasCandidates === "object" && !Array.isArray(k.aliasCandidates)
+          ? Object.fromEntries(
+              Object.entries(k.aliasCandidates).filter(
+                (entry): entry is [string, { count: number; lastSeen: number; queryText: string }] => {
+                  const v = entry[1];
+                  return (
+                    !!v &&
+                    typeof v === "object" &&
+                    typeof (v as { count?: unknown }).count === "number" &&
+                    typeof (v as { lastSeen?: unknown }).lastSeen === "number" &&
+                    typeof (v as { queryText?: unknown }).queryText === "string"
+                  );
+                }
+              )
+            )
+          : undefined;
+      const learnedAliases = Array.isArray(k.learnedAliases)
+        ? k.learnedAliases.filter(
+            (l): l is { alias: string; addedAt: number; hits: number } =>
+              !!l && typeof l.alias === "string" && typeof l.addedAt === "number" && typeof l.hits === "number"
+          )
+        : undefined;
+      this.keys[kid] = { ...k, aliases, aliasCandidates, learnedAliases };
     }
 
     for (const [mid, m] of Object.entries(raw.memories ?? {})) {
@@ -956,13 +989,21 @@ export class MemoryGraph {
       const queryLower = cleanQuery.toLowerCase();
       const keyIds = Object.keys(this.keys);
       const sims = batchCosineSim(qEmb, keyIds.map((kid) => this.keys[kid].embedding));
+      // Content signal: max cosine of a key's member memories to the query. Lets a key whose
+      // CONTENT matches the query surface even when its coined concept does not lexically or
+      // semantically hit the query — the cure for key-coining dependence (pure key-space
+      // search is blind to content). Computed once over all memories, then maxed per key.
+      const memIds = Object.keys(this.memories);
+      const memSimArr = batchCosineSim(qEmb, memIds.map((mid) => this.memories[mid].embedding));
+      const memSim = new Map<string, number>();
+      for (let j = 0; j < memIds.length; j++) memSim.set(memIds[j], memSimArr[j]);
       const candidates: Array<{
         key_id: string;
         concept: string;
         aliases: string[];
         key_type: Key["key_type"];
         score: number;
-        match_type: "concept" | "alias" | "semantic";
+        match_type: "concept" | "alias" | "semantic" | "content";
         memory_count: number;
         is_hub: boolean;
         specificity: number;
@@ -981,14 +1022,25 @@ export class MemoryGraph {
         const aliases = key.aliases ?? [];
         const conceptLiteral = literalKeyMatch(queryLower, key.concept);
         const matchedAlias = aliases.find((alias) => literalKeyMatch(queryLower, alias));
+        if (matchedAlias && key.learnedAliases) {
+          const la = key.learnedAliases.find((l) => l.alias.toLowerCase() === matchedAlias.toLowerCase());
+          if (la) la.hits += 1;
+        }
         const literal = conceptLiteral || matchedAlias !== undefined;
+        let contentSim = 0;
+        for (const mid of activeIds) {
+          const s = memSim.get(mid) ?? 0;
+          if (s > contentSim) contentSim = s;
+        }
+        const keySim = sims[i];
         if (
           (key.key_type === "name" || key.key_type === "proper_noun")
             ? !literal
-            : !literal && sims[i] < KEY_RECALL_THRESHOLD
+            : !literal && keySim < KEY_RECALL_THRESHOLD && contentSim < CONTENT_RECALL_THRESHOLD
         ) {
           continue;
         }
+        const relevance = literal ? 1 : Math.max(keySim, contentSim);
 
         const memoryCount = activeIds.length;
         candidates.push({
@@ -996,8 +1048,8 @@ export class MemoryGraph {
           concept: key.concept,
           aliases,
           key_type: key.key_type,
-          score: Math.round((literal ? 1 : sims[i]) * 1000) / 1000,
-          match_type: matchedAlias ? "alias" : conceptLiteral ? "concept" : "semantic",
+          score: Math.round(relevance * 1000) / 1000,
+          match_type: matchedAlias ? "alias" : conceptLiteral ? "concept" : contentSim > keySim ? "content" : "semantic",
           memory_count: memoryCount,
           is_hub: memoryCount >= KEY_HUB_MIN_LINKS,
           specificity: Math.round((1 / memoryCount) * 1000) / 1000,
@@ -1008,27 +1060,46 @@ export class MemoryGraph {
         });
       }
 
-      return candidates
+      const result = candidates
         .sort((a, b) => Number(b._literal) - Number(a._literal) || b.score - a.score || b.specificity - a.specificity)
         .slice(0, topK)
         .map(({ _literal, ...candidate }) => candidate);
+
+      if (AUTOKEY_ENABLED) {
+        const weak = result.filter((c) => c.match_type === "semantic");
+        if (weak.length > 0) {
+          this._recallBuffer.push({
+            queryText: cleanQuery,
+            weakKeyScores: new Map(weak.map((c) => [c.key_id, c.score])),
+          });
+        }
+      }
+      return result;
     });
   }
 
-  readKey(
+  async readKey(
     keyId: string,
-    options: { namespace?: string | null; limit?: number; offset?: number } = {}
-  ): object {
+    options: { namespace?: string | null; limit?: number; offset?: number; query?: string | null } = {}
+  ): Promise<object> {
     if (!(keyId in this.keys)) throw new Error(`Key ${keyId} not found`);
     const namespace = options.namespace ?? null;
     const limit = Math.max(1, Math.min(50, Math.floor(options.limit ?? 10)));
     const offset = Math.max(0, Math.floor(options.offset ?? 0));
+    // Query-aware ranking: when a query is supplied, order this key's memories by content
+    // relevance to it (not only by link weight). This is what makes a generic hub key usable —
+    // the target rises to the top instead of being buried among the hub's other members.
+    // Omitted query reproduces the prior link-weight ordering exactly (rel = 1).
+    const cleanQuery = options.query?.trim();
+    const qEmb = cleanQuery ? await embedTextAsync(cleanQuery, "query") : null;
+    if (qEmb) this._checkDim(qEmb);
 
     const ranked = this._activeMemoryIdsForKey(keyId, namespace)
       .map((mid) => {
         const mem = this.memories[mid];
         const linkWeight = this._getLinkWeight(keyId, mid);
-        const score = linkWeight * (0.9 + mem.depth * 0.1) * this._timeFactor(mem);
+        const rel = qEmb ? cosineSim(qEmb, mem.embedding) : 1;
+        const score = rel * linkWeight * (0.9 + mem.depth * 0.1) * this._timeFactor(mem);
         return { mid, mem, linkWeight, score };
       })
       .sort((a, b) => b.score - a.score || b.mem.created_at - a.mem.created_at);
@@ -1050,6 +1121,49 @@ export class MemoryGraph {
       total: ranked.length,
       next_offset: offset + limit < ranked.length ? offset + limit : null,
     };
+  }
+
+  // Auto-key self-healing: a memory was just confirmed (read) via viaKeyId. If that key
+  // was a recent WEAK (semantic) recall match, the originating query is candidate
+  // vocabulary the key is missing. Accumulate heat; promote at threshold. Runs inside
+  // readMemory's lock; readMemory's unconditional save() persists any mutation.
+  private async _maybeLearnAlias(keyId: string, memoryId: string): Promise<void> {
+    const entry = this._recallBuffer.consumeWeakMatch(keyId);
+    if (!entry) return;
+    const key = this.keys[keyId];
+    if (!key) return;
+    const q = entry.queryText.trim();
+    if (q.length < 2) return;
+    const norm = q.toLowerCase();
+    if (key.concept.toLowerCase() === norm) return;
+    if ((key.aliases ?? []).some((a) => a.toLowerCase() === norm)) return;
+
+    key.aliasCandidates ??= {};
+    const prev = key.aliasCandidates[norm];
+    const candidate = { count: (prev?.count ?? 0) + 1, lastSeen: Date.now() / 1000, queryText: q };
+    key.aliasCandidates[norm] = candidate;
+
+    const decision = decidePromotion({
+      count: candidate.count,
+      query: q,
+      cosine: entry.weakKeyScores.get(keyId) ?? 0,
+      learnedAliasCount: key.learnedAliases?.length ?? 0,
+      aliasThreshold: KEY_MERGE_THRESHOLD,
+      newKeyThreshold: KEY_AUTO_LINK_THRESHOLD,
+      promoteN: AUTOKEY_PROMOTE_N,
+      maxAliases: AUTOKEY_MAX_ALIASES,
+    });
+
+    if (decision === "alias") {
+      this._recordKeyAlias(keyId, q);
+      key.learnedAliases ??= [];
+      key.learnedAliases.push({ alias: q, addedAt: Date.now() / 1000, hits: 0 });
+      delete key.aliasCandidates[norm];
+    } else if (decision === "newKey") {
+      const newKid = await this.findOrCreateKey(q, "concept");
+      this._link(newKid, memoryId);
+      delete key.aliasCandidates[norm];
+    }
   }
 
   async readMemory(
@@ -1077,6 +1191,10 @@ export class MemoryGraph {
           memoryId,
           this._getLinkWeight(viaKeyId, memoryId) + LINK_REINFORCE_AMOUNT
         );
+      }
+
+      if (AUTOKEY_ENABLED && viaKeyId) {
+        await this._maybeLearnAlias(viaKeyId, memoryId);
       }
 
       const connectedKeys = [...(this._memToKeys[memoryId] ?? new Map())]
@@ -1662,7 +1780,38 @@ export class MemoryGraph {
       }
       this._removeMemoryReferences(expired);
       this._pruneOrphanKeys();
-      if (expired.length > 0) await this.save();
+
+      let pruned = false;
+      const now = Date.now() / 1000;
+      for (const key of Object.values(this.keys)) {
+        if (!key.learnedAliases?.length) continue;
+        const keep = key.learnedAliases.filter(
+          (l) => l.hits > 0 || now - l.addedAt < AUTOKEY_PRUNE_AGE_SECONDS
+        );
+        if (keep.length === key.learnedAliases.length) continue;
+        const dropped = new Set(
+          key.learnedAliases.filter((l) => !keep.includes(l)).map((l) => l.alias.toLowerCase())
+        );
+        key.learnedAliases = keep;
+        key.aliases = (key.aliases ?? []).filter((a) => !dropped.has(a.toLowerCase()));
+        pruned = true;
+      }
+
+      // Drop stale alias candidates — heat that never reached promotion (e.g. long
+      // non-promotable queries that fail isShortConcept) — so the persisted ledger
+      // cannot grow without bound on a long-lived key.
+      for (const key of Object.values(this.keys)) {
+        if (!key.aliasCandidates) continue;
+        for (const [norm, cand] of Object.entries(key.aliasCandidates)) {
+          if (now - cand.lastSeen >= AUTOKEY_PRUNE_AGE_SECONDS) {
+            delete key.aliasCandidates[norm];
+            pruned = true;
+          }
+        }
+        if (Object.keys(key.aliasCandidates).length === 0) delete key.aliasCandidates;
+      }
+
+      if (expired.length > 0 || pruned) await this.save();
       return expired.length;
     });
   }

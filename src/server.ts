@@ -137,11 +137,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "read_key",
       description:
-        "Inspect one key cluster. Returns canonical key/aliases/hub metadata plus ranked memory IDs and metadata — never memory content. Call read_memory on promising handles. Use limit/offset to page through hub keys without flooding context.",
+        "Inspect one key cluster. Returns canonical key/aliases/hub metadata plus ranked memory IDs and metadata — never memory content. Call read_memory on promising handles. Use limit/offset to page through hub keys without flooding context. Pass the original query: handles are then ranked by content relevance to it, which is essential for hub keys so the target memory surfaces first instead of being buried.",
       inputSchema: {
         type: "object",
         properties: {
           key_id: { type: "string" },
+          query: { type: "string" },
           namespace: { type: "string" },
           limit: { type: "number" },
           offset: { type: "number" },
@@ -345,7 +346,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "read_key": {
-        const result = graph.readKey(a.key_id as string, {
+        const result = await graph.readKey(a.key_id as string, {
+          query: typeof a.query === "string" ? a.query : null,
           namespace: typeof a.namespace === "string" ? a.namespace : null,
           limit: typeof a.limit === "number" ? a.limit : 10,
           offset: typeof a.offset === "number" ? a.offset : 0,

@@ -217,6 +217,10 @@ SUPER_MEMORY_MEMORY_DEDUP=0.99
 | `SUPER_MEMORY_MIN_SCORE` | per-model (e.g. `0.55` for bge-m3) | Absolute cosine floor for optional `recall_memories()`. Set to `0` to disable. |
 | `SUPER_MEMORY_GATE_Z` | `0` by default | Opt-in distribution gate for `recall_memories()` (robust-z, median/MAD). Values around 2–5 are typical; `0` disables it. |
 | `SUPER_MEMORY_CONTRADICTION` | per-model (e.g. `0.80` for bge-m3) | Contradiction-band lower bound. Memory pairs whose cosine similarity falls in `[contradiction, memoryDedup)` are flagged as contradictions. `read_memory()`, `related()`, and optional `recall_memories()` expose conflicting IDs. |
+| `SUPER_MEMORY_AUTOKEY` | `true` | Auto-key self-healing: learn missing search terms from real usage. Set `false` to disable. |
+| `SUPER_MEMORY_AUTOKEY_PROMOTE_N` | `3` | Weak-confirmed reads of a `(key, query)` pair before the query is folded into the key space. |
+| `SUPER_MEMORY_AUTOKEY_MAX_ALIASES` | `8` | Max learned aliases promoted per key. |
+| `SUPER_MEMORY_AUTOKEY_PRUNE_AGE` | `2592000` | Seconds before a never-hit learned alias is pruned by `cleanup_expired` (30 days). |
 
 **Why e5 gates are opt-in:** multilingual-e5's narrow cosine band (~0.86–0.99) makes a static floor unreliable, while held-out tests showed distribution and key-proximity gates can also overfit. Both are disabled by default to avoid hiding real memories. Use bge-m3 for reliable not-found behavior, or calibrate e5 gates on your own corpus.
 
