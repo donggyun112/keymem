@@ -73,10 +73,10 @@
     },
     {
       "id": "dup-08",
-      "a": "미나의 목표는 super-memory를 표준 메모리 레이어로 만드는 것",
-      "b": "미나는 super-memory를 표준 메모리 레이어로 성장시키고 싶어한다",
-      "keys_a": ["목표", "super-memory", "비전"],
-      "keys_b": ["목표", "super-memory", "비전"],
+      "a": "미나의 목표는 keymem를 표준 메모리 레이어로 만드는 것",
+      "b": "미나는 keymem를 표준 메모리 레이어로 성장시키고 싶어한다",
+      "keys_a": ["목표", "keymem", "비전"],
+      "keys_b": ["목표", "keymem", "비전"],
       "relation": "duplicate",
       "confidence": "high",
       "split": "train"
@@ -253,9 +253,9 @@
     },
     {
       "id": "ind-04",
-      "a": "미나는 super-memory라는 오픈소스 프로젝트를 만든다",
+      "a": "미나는 keymem라는 오픈소스 프로젝트를 만든다",
       "b": "미나가 좋아하는 음식은 떡볶이와 파스타다",
-      "keys_a": ["프로젝트", "super-memory", "오픈소스"],
+      "keys_a": ["프로젝트", "keymem", "오픈소스"],
       "keys_b": ["음식", "떡볶이", "파스타"],
       "relation": "independent",
       "confidence": "high",
@@ -273,9 +273,9 @@
     },
     {
       "id": "ind-06",
-      "a": "The super-memory project is written in TypeScript and published on npm",
+      "a": "The keymem project is written in TypeScript and published on npm",
       "b": "Mina visited Kyoto last spring and loved the temples",
-      "keys_a": ["super-memory", "TypeScript", "npm", "프로젝트"],
+      "keys_a": ["keymem", "TypeScript", "npm", "프로젝트"],
       "keys_b": ["여행", "Kyoto", "Mina"],
       "relation": "independent",
       "confidence": "high",
@@ -293,9 +293,9 @@
     },
     {
       "id": "ind-08",
-      "a": "미나의 목표는 super-memory를 표준 메모리 레이어로 만드는 것",
+      "a": "미나의 목표는 keymem를 표준 메모리 레이어로 만드는 것",
       "b": "미나는 강아지 한 마리를 키운다",
-      "keys_a": ["목표", "super-memory", "비전"],
+      "keys_a": ["목표", "keymem", "비전"],
       "keys_b": ["반려동물", "강아지", "키우는것"],
       "relation": "independent",
       "confidence": "high",
@@ -314,9 +314,9 @@
     {
       "id": "ind-10",
       "a": "사용자 이름은 미나이다",
-      "b": "The super-memory project is written in TypeScript and published on npm",
+      "b": "The keymem project is written in TypeScript and published on npm",
       "keys_a": ["이름", "미나", "Mina", "name"],
-      "keys_b": ["super-memory", "TypeScript", "npm"],
+      "keys_b": ["keymem", "TypeScript", "npm"],
       "relation": "independent",
       "confidence": "high",
       "split": "train"

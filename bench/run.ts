@@ -19,7 +19,7 @@ type Q = { q: string; expect: string[]; category: string };
 const fixture = JSON.parse(await readFile(resolve("bench/fixture.json"), "utf-8")) as { memories: Mem[]; queries: Q[] };
 
 const dir = await mkdtemp(join(tmpdir(), "sm-bench-"));
-process.env.SUPER_MEMORY_DATA_DIR = dir;
+process.env.KEYMEM_DATA_DIR = dir;
 const { MemoryGraph } = await import("../src/memoryGraph.ts");
 const { LOCAL_EMBEDDING_MODEL } = await import("../src/embedding.ts");
 
@@ -56,7 +56,7 @@ for (const q of fixture.queries) {
 }
 
 const pct = (x: number) => `${(x * 100).toFixed(0)}%`;
-console.log(`\nsuper-memory search-quality benchmark — model=${LOCAL_EMBEDDING_MODEL}`);
+console.log(`\nkeymem search-quality benchmark — model=${LOCAL_EMBEDDING_MODEL}`);
 console.log("─".repeat(72));
 console.log("category        n   recall@1  recall@5   MRR     notfound");
 for (const [name, a] of Object.entries(cats)) {

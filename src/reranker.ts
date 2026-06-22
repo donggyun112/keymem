@@ -1,4 +1,4 @@
-// Cross-encoder reranker (opt-in via SUPER_MEMORY_RERANK=true).
+// Cross-encoder reranker (opt-in via KEYMEM_RERANK=true).
 //
 // The retriever (recall) finds candidate memories; this re-scores the top of that list by
 // JOINT (query, memory) relevance — fixing cases where the right memory is in the result
@@ -12,6 +12,7 @@ import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { KNOWN_MODELS, defaultModelDir, ensureModelFiles } from "./modelDownload.js";
+import { cfgRaw } from "./env.js";
 
 let _testReranker:
   | ((query: string, texts: string[]) => number[] | Promise<number[]>)
@@ -25,10 +26,10 @@ export function __clearTestReranker(): void {
 }
 
 export function rerankEnabled(): boolean {
-  return _testReranker !== null || process.env.SUPER_MEMORY_RERANK === "true";
+  return _testReranker !== null || cfgRaw("RERANK") === "true";
 }
 
-const MODEL_DIR = process.env.SUPER_MEMORY_RERANK_MODEL_PATH ?? defaultModelDir("reranker");
+const MODEL_DIR = cfgRaw("RERANK_MODEL_PATH") ?? defaultModelDir("reranker");
 const MAX_CHARS = 512; // truncate memory text fed to the cross-encoder
 
 let _loaded = false;

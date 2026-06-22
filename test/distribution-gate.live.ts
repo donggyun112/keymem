@@ -25,8 +25,8 @@ await g.load();
 const seed: [string, string[]][] = [
   ["사용자 이름은 동균이다", ["이름", "동균"]],
   ["동균은 고양이 두 마리를 키운다", ["고양이", "동균"]],
-  ["동균의 목표는 super-memory를 표준 메모리 레이어로 만드는 것", ["super-memory", "목표"]],
-  ["super-memory는 TypeScript로 작성된 LLM 장기 메모리 시스템", ["super-memory", "개발"]],
+  ["동균의 목표는 keymem를 표준 메모리 레이어로 만드는 것", ["keymem", "목표"]],
+  ["keymem는 TypeScript로 작성된 LLM 장기 메모리 시스템", ["keymem", "개발"]],
   ["사용자는 커피를 좋아한다", ["커피", "음료"]],
   ["회의는 매주 월요일 오전 10시", ["회의", "일정"]],
   ["프로젝트는 npm에 배포되어 있다", ["배포", "npm"]],
@@ -44,7 +44,7 @@ async function topZ(q: string): Promise<number> {
   const top = Math.max(...sims);
   return robustZScore(top, sims);
 }
-const found = ["이름", "고양이", "super-memory 목표", "커피"];
+const found = ["이름", "고양이", "keymem 목표", "커피"];
 const notFound = ["블록체인 합의 알고리즘", "양자역학 블랙홀", "축구 월드컵 결승", "비트코인 시세"];
 console.log("FOUND queries (robust-z of top):");
 for (const q of found) console.log(`  ${(await topZ(q)).toFixed(2).padStart(6)}  ${q}`);

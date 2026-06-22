@@ -34,7 +34,7 @@ const res = calibrate(scored, {
 });
 
 const pct = (x: number) => `${(x * 100).toFixed(0)}%`;
-console.log(`\nsuper-memory calibration — model=${LOCAL_EMBEDDING_MODEL} | train=${res.trainN} held-out=${res.heldOutN}`);
+console.log(`\nkeymem calibration — model=${LOCAL_EMBEDDING_MODEL} | train=${res.trainN} held-out=${res.heldOutN}`);
 console.log("─".repeat(64));
 console.log(`BEST (train macro-F1): floor=${res.best.floor} cut=${res.best.dedupCut} -> ${res.best.macroF1.toFixed(2)}`);
 console.log(`HELD-OUT macro-F1: ${res.heldOut.macroF1.toFixed(2)}  Δ=${res.overfitDelta.toFixed(2)} ${res.overfitDelta > 0.10 ? "⚠ OVERFIT" : "OK"}`);
