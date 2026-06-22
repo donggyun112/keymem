@@ -402,6 +402,17 @@ Set `KEYMEM_DATA_DIR` to use a different storage directory.
 
 ---
 
+## Benchmarks
+
+An ablation isolating the key-graph's contribution (same engine, same `bge-m3` embeddings,
+graph expansion on vs off) shows it reaches **+33pp** more connected-but-dissimilar memories
+than flat 1-hop retrieval can reach at all (`reach@10` 50% → 83%) — though associative hits
+land low-ranked, not top-5. The read path is O(1) (`read_memory` p50 ~45ms → ~0.01ms @ 500
+memories). Full methodology, honest costs, and the agentic-search trajectory caveat: see
+**[BENCHMARKS.md](BENCHMARKS.md)**.
+
+---
+
 ## Limitations
 
 - **Linear scan** — suitable for personal use (~10k memories). FAISS/ChromaDB integration planned for larger scale.

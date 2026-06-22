@@ -1,0 +1,43 @@
+{
+  "_doc": "Associative-recall ablation fixture. Each 'assoc2' query's expected target is a FAR memory reachable only via a shared key 2 hops away (connected-but-dissimilar): the query has low direct similarity to the target, but matches a near memory that shares a key with it. 'direct' queries are 1-hop controls (should score equally under both conditions). 'notfound' must return nothing. Ground truth = expect[] of memory ids. The benchmark runs each query under DIRECT (expand=false,hops=1 ≈ flat semantic store) vs GRAPH (expand=true,hops=2 = keymem associative traversal) to isolate the graph's contribution.",
+  "memories": [
+    { "id": "name",  "content": "사용자 이름은 미나이다", "keys": ["이름", "미나", "Mina", "name"], "key_types": { "미나": "name", "Mina": "name" } },
+    { "id": "live",  "content": "미나는 서울 마포구에 산다", "keys": ["거주지", "사는곳", "마포구", "서울"] },
+
+    { "id": "dog",     "content": "미나는 보리라는 이름의 강아지를 키운다", "keys": ["강아지", "보리", "반려동물"], "key_types": { "보리": "name" } },
+    { "id": "dog_med", "content": "보리는 닭고기 알레르기가 있어 오리고기 사료를 먹는다", "keys": ["보리", "알레르기", "사료", "오리고기"], "key_types": { "보리": "name" } },
+
+    { "id": "hobby",   "content": "미나는 주말마다 실내 클라이밍을 즐긴다", "keys": ["취미", "클라이밍", "주말"] },
+    { "id": "injury",  "content": "작년에 클라이밍을 하다 손목을 다쳐 한동안 물리치료를 받았다", "keys": ["클라이밍", "손목", "부상", "물리치료"] },
+
+    { "id": "drink",   "content": "미나는 매일 오후 아이스 라떼를 마신다", "keys": ["라떼", "커피", "카페인", "음료"] },
+    { "id": "sleep",   "content": "미나는 요즘 밤에 잠을 잘 이루지 못해 고생한다", "keys": ["수면", "불면", "카페인", "건강"] },
+
+    { "id": "job",     "content": "Mina works as a backend engineer at a fintech startup", "keys": ["직업", "engineer", "fintech", "백엔드"], "key_types": { "Mina": "name" } },
+    { "id": "lang",    "content": "Mina writes most of her services in Go and Rust", "keys": ["Go", "Rust", "언어", "백엔드"], "key_types": { "Mina": "name" } },
+
+    { "id": "travel",  "content": "Mina visited Kyoto last spring and loved the old temples", "keys": ["여행", "Kyoto", "교토"], "key_types": { "Mina": "name" } },
+    { "id": "kyoto_food", "content": "교토의 한 작은 가게에서 먹은 라멘이 인생 라멘이었다고 한다", "keys": ["교토", "라멘", "음식"] },
+
+    { "id": "project", "content": "미나는 keymem라는 오픈소스 메모리 라이브러리를 만든다", "keys": ["keymem", "프로젝트", "오픈소스"] },
+    { "id": "goal",    "content": "미나의 목표는 keymem을 에이전트의 표준 메모리 레이어로 만드는 것", "keys": ["keymem", "목표", "비전"] }
+  ],
+  "queries": [
+    { "q": "미나 이름", "expect": ["name"], "category": "direct" },
+    { "q": "미나는 어디 살아", "expect": ["live"], "category": "direct" },
+    { "q": "미나가 마시는 음료", "expect": ["drink"], "category": "direct" },
+    { "q": "미나 직업이 뭐야", "expect": ["job"], "category": "direct" },
+    { "q": "미나 취미", "expect": ["hobby"], "category": "direct" },
+
+    { "q": "미나가 키우는 강아지", "expect": ["dog_med"], "category": "assoc2" },
+    { "q": "미나 주말에 뭐해", "expect": ["injury"], "category": "assoc2" },
+    { "q": "미나가 즐겨 마시는 커피", "expect": ["sleep"], "category": "assoc2" },
+    { "q": "미나가 하는 일", "expect": ["lang"], "category": "assoc2" },
+    { "q": "미나 봄 여행", "expect": ["kyoto_food"], "category": "assoc2" },
+    { "q": "미나가 만드는 오픈소스", "expect": ["goal"], "category": "assoc2" },
+
+    { "q": "미나 전화번호", "expect": [], "category": "notfound" },
+    { "q": "미나 형제자매", "expect": [], "category": "notfound" },
+    { "q": "블록체인 합의 알고리즘", "expect": [], "category": "notfound" }
+  ]
+}

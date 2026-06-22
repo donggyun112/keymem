@@ -1,0 +1,265 @@
+{
+  "model": "bge-m3",
+  "conditions": [
+    {
+      "name": "DIRECT",
+      "expand": false,
+      "hops": 1
+    },
+    {
+      "name": "GRAPH",
+      "expand": true,
+      "hops": 2
+    }
+  ],
+  "aggregates": {
+    "DIRECT": {
+      "direct": {
+        "n": 5,
+        "hit5": 4,
+        "hit10": 5,
+        "mrr": 4.111111111111111,
+        "nf_ok": 0,
+        "nf_n": 0
+      },
+      "assoc2": {
+        "n": 6,
+        "hit5": 2,
+        "hit10": 3,
+        "mrr": 0.8,
+        "nf_ok": 0,
+        "nf_n": 0
+      },
+      "notfound": {
+        "n": 0,
+        "hit5": 0,
+        "hit10": 0,
+        "mrr": 0,
+        "nf_ok": 1,
+        "nf_n": 3
+      }
+    },
+    "GRAPH": {
+      "direct": {
+        "n": 5,
+        "hit5": 4,
+        "hit10": 5,
+        "mrr": 3.444444444444444,
+        "nf_ok": 0,
+        "nf_n": 0
+      },
+      "assoc2": {
+        "n": 6,
+        "hit5": 2,
+        "hit10": 5,
+        "mrr": 1.4020202020202022,
+        "nf_ok": 0,
+        "nf_n": 0
+      },
+      "notfound": {
+        "n": 0,
+        "hit5": 0,
+        "hit10": 0,
+        "mrr": 0,
+        "nf_ok": 1,
+        "nf_n": 3
+      }
+    }
+  },
+  "perQuery": [
+    {
+      "q": "미나 이름",
+      "category": "direct",
+      "condition": "DIRECT",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "미나는 어디 살아",
+      "category": "direct",
+      "condition": "DIRECT",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "미나가 마시는 음료",
+      "category": "direct",
+      "condition": "DIRECT",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "미나 직업이 뭐야",
+      "category": "direct",
+      "condition": "DIRECT",
+      "hit5": false,
+      "hit10": true,
+      "rank": 9
+    },
+    {
+      "q": "미나 취미",
+      "category": "direct",
+      "condition": "DIRECT",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "미나가 키우는 강아지",
+      "category": "assoc2",
+      "condition": "DIRECT",
+      "hit5": false,
+      "hit10": false,
+      "rank": null
+    },
+    {
+      "q": "미나 주말에 뭐해",
+      "category": "assoc2",
+      "condition": "DIRECT",
+      "hit5": false,
+      "hit10": false,
+      "rank": null
+    },
+    {
+      "q": "미나가 즐겨 마시는 커피",
+      "category": "assoc2",
+      "condition": "DIRECT",
+      "hit5": true,
+      "hit10": true,
+      "rank": 5
+    },
+    {
+      "q": "미나가 하는 일",
+      "category": "assoc2",
+      "condition": "DIRECT",
+      "hit5": false,
+      "hit10": true,
+      "rank": 10
+    },
+    {
+      "q": "미나 봄 여행",
+      "category": "assoc2",
+      "condition": "DIRECT",
+      "hit5": false,
+      "hit10": false,
+      "rank": null
+    },
+    {
+      "q": "미나가 만드는 오픈소스",
+      "category": "assoc2",
+      "condition": "DIRECT",
+      "hit5": true,
+      "hit10": true,
+      "rank": 2
+    },
+    {
+      "q": "미나 이름",
+      "category": "direct",
+      "condition": "GRAPH",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "미나는 어디 살아",
+      "category": "direct",
+      "condition": "GRAPH",
+      "hit5": true,
+      "hit10": true,
+      "rank": 3
+    },
+    {
+      "q": "미나가 마시는 음료",
+      "category": "direct",
+      "condition": "GRAPH",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "미나 직업이 뭐야",
+      "category": "direct",
+      "condition": "GRAPH",
+      "hit5": false,
+      "hit10": true,
+      "rank": 9
+    },
+    {
+      "q": "미나 취미",
+      "category": "direct",
+      "condition": "GRAPH",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "미나가 키우는 강아지",
+      "category": "assoc2",
+      "condition": "GRAPH",
+      "hit5": false,
+      "hit10": true,
+      "rank": 10
+    },
+    {
+      "q": "미나 주말에 뭐해",
+      "category": "assoc2",
+      "condition": "GRAPH",
+      "hit5": false,
+      "hit10": true,
+      "rank": 9
+    },
+    {
+      "q": "미나가 즐겨 마시는 커피",
+      "category": "assoc2",
+      "condition": "GRAPH",
+      "hit5": true,
+      "hit10": true,
+      "rank": 2
+    },
+    {
+      "q": "미나가 하는 일",
+      "category": "assoc2",
+      "condition": "GRAPH",
+      "hit5": false,
+      "hit10": true,
+      "rank": 10
+    },
+    {
+      "q": "미나 봄 여행",
+      "category": "assoc2",
+      "condition": "GRAPH",
+      "hit5": false,
+      "hit10": false,
+      "rank": 11
+    },
+    {
+      "q": "미나가 만드는 오픈소스",
+      "category": "assoc2",
+      "condition": "GRAPH",
+      "hit5": true,
+      "hit10": true,
+      "rank": 2
+    },
+    {
+      "q": "미나 전화번호",
+      "category": "notfound",
+      "condition": "GRAPH",
+      "returned": 10
+    },
+    {
+      "q": "미나 형제자매",
+      "category": "notfound",
+      "condition": "GRAPH",
+      "returned": 10
+    },
+    {
+      "q": "블록체인 합의 알고리즘",
+      "category": "notfound",
+      "condition": "GRAPH",
+      "returned": 0
+    }
+  ]
+}
