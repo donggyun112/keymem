@@ -1,18 +1,38 @@
 {
   "model": "bge-m3",
   "conditions": [
-    {
-      "name": "DIRECT",
-      "expand": false,
-      "hops": 1
-    },
-    {
-      "name": "GRAPH",
-      "expand": true,
-      "hops": 2
-    }
+    "BM25",
+    "DIRECT",
+    "GRAPH"
   ],
+  "topK": 10,
   "aggregates": {
+    "BM25": {
+      "direct": {
+        "n": 5,
+        "hit5": 4,
+        "hit10": 4,
+        "mrr": 2.4000000000000004,
+        "nf_ok": 0,
+        "nf_n": 0
+      },
+      "assoc2": {
+        "n": 6,
+        "hit5": 1,
+        "hit10": 2,
+        "mrr": 1.1428571428571428,
+        "nf_ok": 0,
+        "nf_n": 0
+      },
+      "notfound": {
+        "n": 0,
+        "hit5": 0,
+        "hit10": 0,
+        "mrr": 0,
+        "nf_ok": 1,
+        "nf_n": 3
+      }
+    },
     "DIRECT": {
       "direct": {
         "n": 5,
@@ -67,6 +87,94 @@
     }
   },
   "perQuery": [
+    {
+      "q": "미나 이름",
+      "category": "direct",
+      "condition": "BM25",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "미나는 어디 살아",
+      "category": "direct",
+      "condition": "BM25",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "미나가 마시는 음료",
+      "category": "direct",
+      "condition": "BM25",
+      "hit5": true,
+      "hit10": true,
+      "rank": 5
+    },
+    {
+      "q": "미나 직업이 뭐야",
+      "category": "direct",
+      "condition": "BM25",
+      "hit5": false,
+      "hit10": false,
+      "rank": null
+    },
+    {
+      "q": "미나 취미",
+      "category": "direct",
+      "condition": "BM25",
+      "hit5": true,
+      "hit10": true,
+      "rank": 5
+    },
+    {
+      "q": "미나가 키우는 강아지",
+      "category": "assoc2",
+      "condition": "BM25",
+      "hit5": false,
+      "hit10": false,
+      "rank": null
+    },
+    {
+      "q": "미나 주말에 뭐해",
+      "category": "assoc2",
+      "condition": "BM25",
+      "hit5": false,
+      "hit10": false,
+      "rank": null
+    },
+    {
+      "q": "미나가 즐겨 마시는 커피",
+      "category": "assoc2",
+      "condition": "BM25",
+      "hit5": false,
+      "hit10": true,
+      "rank": 7
+    },
+    {
+      "q": "미나가 하는 일",
+      "category": "assoc2",
+      "condition": "BM25",
+      "hit5": false,
+      "hit10": false,
+      "rank": null
+    },
+    {
+      "q": "미나 봄 여행",
+      "category": "assoc2",
+      "condition": "BM25",
+      "hit5": false,
+      "hit10": false,
+      "rank": null
+    },
+    {
+      "q": "미나가 만드는 오픈소스",
+      "category": "assoc2",
+      "condition": "BM25",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
     {
       "q": "미나 이름",
       "category": "direct",
@@ -242,24 +350,6 @@
       "hit5": true,
       "hit10": true,
       "rank": 2
-    },
-    {
-      "q": "미나 전화번호",
-      "category": "notfound",
-      "condition": "GRAPH",
-      "returned": 10
-    },
-    {
-      "q": "미나 형제자매",
-      "category": "notfound",
-      "condition": "GRAPH",
-      "returned": 10
-    },
-    {
-      "q": "블록체인 합의 알고리즘",
-      "category": "notfound",
-      "condition": "GRAPH",
-      "returned": 0
     }
   ]
 }

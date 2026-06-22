@@ -4,8 +4,9 @@ What this measures and, honestly, what it doesn't. The goal is to **prove how mu
 key-graph actually buys you** — isolated causally, not asserted by metaphor — and to mark the
 limits plainly.
 
-> TL;DR: On connected-but-dissimilar recall, the key-graph reaches **+33pp** more targets than
-> flat 1-hop retrieval can reach at all (reach@10 50% → 83%). The read path was also made
+> TL;DR: On connected-but-dissimilar recall, the key-graph reaches **83%** of targets vs **50%**
+> for flat dense (keymem 1-hop) and **33%** for flat lexical (BM25) — i.e. **+33pp over the best
+> flat baseline** at finding things flat retrieval can't reach at all. The read path was also made
 > **O(1) instead of O(graph)** (read_memory p50 ~45ms → ~0.01ms @ 500 memories). But the
 > associative hits land **low-ranked** (not top-5), not-found precision is weak at small scale,
 > and none of this is a head-to-head SOTA claim vs mem0/Zep. Details below.
@@ -35,13 +36,17 @@ claim, but an honest one.
 
 ## 1. Associative-recall ablation
 
-**Design.** Same engine, same data, same real embeddings (`bge-m3`), two retrieval conditions
-that differ *only* in graph expansion:
+**Design.** Same data, same real embeddings (`bge-m3`), three retrievers — two flat baselines
+(one external) and keymem's graph:
 
-| Condition | call | meaning |
+| Condition | how | meaning |
 |---|---|---|
-| **DIRECT** | `recall(expand=false, hops=1)` | 1-hop semantic match — approximates a flat semantic store's reach |
+| **BM25** | standalone MiniSearch over content | classic flat *lexical* store (no embeddings, no graph) |
+| **DIRECT** | `recall(expand=false, hops=1)` | flat *semantic* reach — keymem 1-hop, no expansion |
 | **GRAPH** | `recall(expand=true, hops=2)` | keymem's multi-hop key-graph traversal |
+
+BM25 and DIRECT are the flat baselines; GRAPH adds graph traversal. The delta isolates what the
+key-graph buys over flat lexical / flat semantic retrieval.
 
 **Dataset** (`bench/assoc-fixture.json`): a 14-memory bilingual persona graph. Each `assoc2`
 query's answer is a **far memory reachable only via a shared key two hops away** (e.g. *"미나가
@@ -54,23 +59,25 @@ traversal should reach it. `direct` queries are 1-hop controls; `notfound` must 
 
 ### Results (`bge-m3`, n per category)
 
-| category | metric | DIRECT | GRAPH | Δ |
+| category | metric | BM25 | DIRECT | GRAPH |
 |---|---|---:|---:|---:|
-| **assoc2** (6) | **reach@10** | 50% | **83%** | **+33pp** |
-| | hit@5 | 33% | 33% | 0pp |
-| | MRR | 0.13 | 0.23 | +0.10 |
-| direct (5) | reach@10 | 100% | 100% | 0pp |
-| | hit@5 | 80% | 80% | 0pp |
-| | MRR | 0.82 | 0.69 | **−0.13** |
-| notfound (3) | not-found acc | 1/3 | 1/3 | — |
+| **assoc2** (6) | **reach@10** | 33% | 50% | **83%** |
+| | hit@5 | 17% | 33% | 33% |
+| | MRR | 0.19 | 0.13 | 0.23 |
+| direct (5) | reach@10 | 80% | 100% | 100% |
+| | hit@5 | 80% | 80% | 80% |
+| | MRR | 0.48 | 0.82 | **0.69** |
+| notfound (3) | not-found acc | 1/3 | 1/3 | 1/3 |
 
 ### What this proves (and doesn't)
 
-- ✅ **The key-graph reaches connected-but-dissimilar memories that flat retrieval cannot.**
-  On `assoc2`, DIRECT reaches 3/6 targets; GRAPH reaches 5/6 (the 6th lands at rank 11, just
-  outside the window). That +33pp reach is the thesis — *measured*, not asserted. Per-query,
-  the graph pulls in the dog-allergy / climbing-injury / caffeine-sleep facts via shared keys
-  that 1-hop similarity never surfaces.
+- ✅ **The key-graph reaches connected-but-dissimilar memories that *both* flat baselines cannot.**
+  On `assoc2`, BM25 reaches 2/6 targets, DIRECT (flat semantic) 3/6, GRAPH 5/6 (the 6th lands at
+  rank 11, just outside the window). +33pp over flat-dense, +50pp over flat-lexical — *measured*,
+  not asserted. Per-query, the graph pulls in the dog-allergy / climbing-injury / caffeine-sleep
+  facts via shared keys that neither lexical nor 1-hop semantic similarity ever surfaces. (On the
+  `direct` control, DIRECT/GRAPH both reach 100% vs BM25's 80% — embeddings already beat lexical
+  on plain queries; the graph's distinct contribution is the associative reach.)
 - ⚠️ **The gain is in *reachability*, not top rank.** `HOP_DECAY` scores 2-hop hits low, so they
   arrive at ranks 9–11 — `hit@5` shows **no** gain. The value is real for an agent that
   navigates/pages (the intended `recall → read_key → read_memory` flow), much weaker if you only
