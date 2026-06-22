@@ -6,6 +6,7 @@ import {
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { MemoryGraph, loadConversation, sanitizeKeys } from "./memoryGraph.js";
+import { cfgRaw } from "./env.js";
 
 function parseArray(v: unknown): unknown[] | null {
   if (Array.isArray(v)) return v;
@@ -29,7 +30,7 @@ function parseNumber(v: unknown): number | null {
   return null;
 }
 
-const DIRECT_RECALL_ENABLED = process.env.SUPER_MEMORY_DIRECT_RECALL === "true";
+const DIRECT_RECALL_ENABLED = cfgRaw("DIRECT_RECALL") === "true";
 
 const MEMORY_SYSTEM = `\
 You are a helpful assistant. You have long-term memory — use it silently and proactively.
@@ -112,7 +113,7 @@ function stats(): string {
 }
 
 export const server = new Server(
-  { name: "super-memory", version: "0.10.2" },
+  { name: "keymem", version: "0.11.0" },
   { capabilities: { tools: {}, prompts: {} } }
 );
 
@@ -169,7 +170,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           {
             name: "recall_memories",
             description:
-              "Optional compatibility mode: directly return ranked memories using BM25+dense+RRF and graph expansion. Disabled unless SUPER_MEMORY_DIRECT_RECALL=true. Prefer recall → read_key → read_memory for agent-driven navigation.",
+              "Optional compatibility mode: directly return ranked memories using BM25+dense+RRF and graph expansion. Disabled unless KEYMEM_DIRECT_RECALL=true. Prefer recall → read_key → read_memory for agent-driven navigation.",
             inputSchema: {
               type: "object",
               properties: {
@@ -524,7 +525,7 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => ({
     {
       name: "memory_system_prompt",
       description:
-        "System prompt for LLM agents using super-memory. Include this in your system prompt.",
+        "System prompt for LLM agents using keymem. Include this in your system prompt.",
     },
   ],
 }));

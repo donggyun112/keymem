@@ -1,8 +1,8 @@
 import { readFile, writeFile, mkdir, appendFile, rename, copyFile } from "fs/promises";
 import { randomBytes } from "crypto";
 import { join } from "path";
-import { homedir } from "os";
 import { Mutex } from "async-mutex";
+import { cfgRaw, dataDir } from "./env.js";
 import MiniSearch from "minisearch";
 import { embedTextAsync, EMBEDDING_BACKEND, embeddingFingerprint, getThresholdProfile, isShortConcept, inContradictionBand } from "./embedding.js";
 import { rerankEnabled, rerankScores } from "./reranker.js";
@@ -13,8 +13,7 @@ import {
   AUTOKEY_PROMOTE_N, AUTOKEY_MAX_ALIASES, AUTOKEY_PRUNE_AGE_SECONDS,
 } from "./autokey.js";
 
-const DATA_DIR =
-  process.env.SUPER_MEMORY_DATA_DIR ?? join(homedir(), ".super-memory");
+const DATA_DIR = dataDir();
 const GRAPH_FILE = join(DATA_DIR, "graph.json");
 const CONVERSATIONS_DIR = join(DATA_DIR, "conversations");
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
@@ -42,17 +41,17 @@ const DENSE_RESULT_DEPTH = 50;
 
 // related() ranks neighbors by shared-key specificity (IDF) and caps the list, so a hub
 // key (shared by many) can't flood the chain. Keeps recall→related→related navigable.
-const RELATED_LIMIT = Number(process.env.SUPER_MEMORY_RELATED_LIMIT ?? 20);
+const RELATED_LIMIT = Number(cfgRaw("RELATED_LIMIT") ?? 20);
 const RELATED_EXPLICIT_BONUS = 1.0; // an explicit link is the strongest connection signal
-const _hubMinLinks = Number(process.env.SUPER_MEMORY_KEY_HUB_MIN_LINKS ?? 3);
+const _hubMinLinks = Number(cfgRaw("KEY_HUB_MIN_LINKS") ?? 3);
 const KEY_HUB_MIN_LINKS = Number.isFinite(_hubMinLinks)
   ? Math.max(2, Math.floor(_hubMinLinks))
   : 3;
 
-// When the cross-encoder reranker is on (SUPER_MEMORY_RERANK), re-score this many of the
+// When the cross-encoder reranker is on (KEYMEM_RERANK), re-score this many of the
 // top fused candidates by joint (query, memory) relevance, then keep the requested top_k.
 // A wider pool than top_k lets the reranker rescue a right answer the fused score buried.
-const RERANK_POOL = Number(process.env.SUPER_MEMORY_RERANK_POOL ?? 30);
+const RERANK_POOL = Number(cfgRaw("RERANK_POOL") ?? 30);
 
 // Rerank-based not-found gate (opt-in). The cross-encoder's absolute relevance logit is a
 // stronger "does this memory actually answer the query" signal than bi-encoder cosine, so a
@@ -61,7 +60,7 @@ const RERANK_POOL = Number(process.env.SUPER_MEMORY_RERANK_POOL ?? 30);
 // queries only — cross-lingual relevance logits run low even when relevant, so cross-lingual
 // not-found must lean on key anchors, not this floor.
 const RERANK_MIN_SCORE =
-  process.env.SUPER_MEMORY_RERANK_MIN_SCORE !== undefined ? Number(process.env.SUPER_MEMORY_RERANK_MIN_SCORE) : null;
+  cfgRaw("RERANK_MIN_SCORE") !== undefined ? Number(cfgRaw("RERANK_MIN_SCORE")) : null;
 
 // KR↔Latin script check. The rerank not-found gate only trusts its logit when the query and
 // the top candidate share script — cross-lingual (e.g. Korean query ↔ English memory) logits
@@ -330,7 +329,7 @@ export class MemoryGraph {
         `Embedding dimension mismatch: existing data uses ${this._storedDim}-dim, ` +
           `current backend (${EMBEDDING_BACKEND}) produces ${dim}-dim.\n` +
           `Restart the server to auto-migrate (re-embeds all data with the current ` +
-          `backend, preserving content), or set SUPER_MEMORY_AUTO_MIGRATE=false to opt out.`
+          `backend, preserving content), or set KEYMEM_AUTO_MIGRATE=false to opt out.`
       );
     }
   }
@@ -339,7 +338,7 @@ export class MemoryGraph {
   // Switching backends (e.g. OpenAI 1536-dim → local 768/1024-dim) used to make
   // every recall/remember throw forever. Here we detect the mismatch on load and
   // re-embed all keys and memories with the current backend — content, links,
-  // depth, and access history are preserved. Disable with SUPER_MEMORY_AUTO_MIGRATE=false.
+  // depth, and access history are preserved. Disable with KEYMEM_AUTO_MIGRATE=false.
   private async _ensureEmbeddingDim(): Promise<void> {
     if (this._storedDim === null) return;
     let probeDim: number;
@@ -360,10 +359,10 @@ export class MemoryGraph {
     // Legacy graphs (no fingerprint) can't be diffed automatically, so a
     // same-dim swap off them is undetectable. FORCE_REEMBED is the explicit
     // one-shot for that switch: re-embed everything with the current backend.
-    const forced = process.env.SUPER_MEMORY_FORCE_REEMBED === "true";
+    const forced = cfgRaw("FORCE_REEMBED") === "true";
     if (!dimChanged && !modelChanged && !forced) return;
 
-    if (!forced && process.env.SUPER_MEMORY_AUTO_MIGRATE === "false") {
+    if (!forced && cfgRaw("AUTO_MIGRATE") === "false") {
       const reason = dimChanged
         ? `stored embeddings are ${this._storedDim}-dim but the current backend produces ${probeDim}-dim`
         : `stored embeddings were built by "${this._storedFingerprint}" but the current backend is "${currentFp}"`;

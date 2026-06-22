@@ -4,10 +4,10 @@
 // and fastembed built-ins (e5, bge-base, …) never reach here, and an existing local model
 // directory is used as-is — so enabling this changes nothing for those paths (backward
 // compatible). It only fills in a model that would otherwise be missing.
-import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { existsSync, mkdirSync, createWriteStream, renameSync, statSync } from "node:fs";
 import { Readable } from "node:stream";
+import { homeBaseDir } from "./env.js";
 
 export interface DownloadSpec {
   repo: string; // default source for files that don't override it
@@ -40,7 +40,7 @@ export const KNOWN_MODELS: Record<string, DownloadSpec> = {
 };
 
 export function defaultModelDir(name: string): string {
-  return join(homedir(), ".super-memory", "models", name);
+  return join(homeBaseDir(), "models", name);
 }
 
 export type Fetcher = (url: string, destPath: string) => Promise<void>;
@@ -76,7 +76,7 @@ export async function ensureModelFiles(spec: DownloadSpec, dir: string, fetcher:
     if (present(dest)) continue;
     const repo = f.repo ?? spec.repo;
     const url = `https://huggingface.co/${repo}/resolve/main/${f.src}`;
-    console.error(`[super-memory] model file missing — downloading ${f.dest} from ${repo} (one-time)…`);
+    console.error(`[keymem] model file missing — downloading ${f.dest} from ${repo} (one-time)…`);
     await fetcher(url, dest);
   }
   return dir;

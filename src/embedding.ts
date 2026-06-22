@@ -5,6 +5,7 @@ import OpenAI from "openai";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { KNOWN_MODELS, defaultModelDir, ensureModelFiles, type Fetcher } from "./modelDownload.js";
+import { cfgRaw, cfgName } from "./env.js";
 
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 export const OPENAI_EMBEDDING_MODEL =
@@ -135,7 +136,7 @@ export const THRESHOLD_PROFILES: Record<string, ThresholdProfile> = {
   // Measured FOUND z: [2.80, 3.33, 4.33, 4.81] (min 2.80).
   // Measured NOT-FOUND z: [0.87, 0.98, 1.51, 2.28] (max 2.28).
   // Gap [2.28, 2.80] — chose 2.5 (biased toward lower edge to avoid blocking real matches).
-  // Margin is narrow (~0.52σ gap, n=8 fixture); SUPER_MEMORY_GATE_Z is the per-deployment
+  // Margin is narrow (~0.52σ gap, n=8 fixture); KEYMEM_GATE_Z is the per-deployment
   // escape hatch for re-tuning if the gap shifts on a different corpus or model variant.
   // Known e5 limitation: the gate keys off maxContentSim (content cosine only), so a
   // genuinely-relevant hit that anchors solely via a fuzzy (non-literal) key match but
@@ -151,7 +152,7 @@ export const THRESHOLD_PROFILES: Record<string, ThresholdProfile> = {
   // higher content-z (전화번호 z=4.70) or topContentCos (동균 나이 0.891) than a real
   // match. Since hiding a real memory (false negative) is a worse failure than returning
   // noise, e5 defaults to no gate (0.7.0 behavior: never hides). The gate machinery is
-  // env-opt-in (SUPER_MEMORY_GATE_Z / _KEY_GATE) for users who accept the precision/recall
+  // env-opt-in (KEYMEM_GATE_Z / _KEY_GATE) for users who accept the precision/recall
   // tradeoff; for RELIABLE not-found detection use bge-m3, which separates cleanly via the
   // absolute minScore gate (verified found→hit / not-found→[] end-to-end).
   e5: { keyMerge: 0.97, memoryDedup: 0.985, keyAutoLink: 0.93, keyRecall: 0.85, contentRecall: 0.8, minScore: 0.8, contradiction: 0.95, gateZ: 0, keyGate: 0, shortKeyMerge: 0 },
@@ -253,21 +254,21 @@ function localModelFamily(): "e5" | "bge" | "minilm" | "bgem3" {
   if (!_warnedUncalibrated) {
     _warnedUncalibrated = true;
     console.error(
-      `[super-memory] WARNING: no calibrated threshold profile for ` +
+      `[keymem] WARNING: no calibrated threshold profile for ` +
         `LOCAL_EMBEDDING_MODEL="${LOCAL_EMBEDDING_MODEL}". Falling back to BGE ` +
         `thresholds — the graph may mis-cluster. Override per-threshold with ` +
-        `SUPER_MEMORY_KEY_MERGE / _MEMORY_DEDUP / _KEY_AUTOLINK / _KEY_RECALL / _CONTENT_RECALL / _MIN_SCORE / _CONTRADICTION.`
+        `KEYMEM_KEY_MERGE / _MEMORY_DEDUP / _KEY_AUTOLINK / _KEY_RECALL / _CONTENT_RECALL / _MIN_SCORE / _CONTRADICTION.`
     );
   }
   return "bge";
 }
 
-function envThreshold(name: string): number | undefined {
-  const raw = process.env[name];
+function envThreshold(suffix: string): number | undefined {
+  const raw = cfgRaw(suffix);
   if (raw === undefined || raw.trim() === "") return undefined;
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0 || n > 1) {
-    console.error(`[super-memory] WARNING: ignoring ${name}="${raw}" (must be a number in [0,1]).`);
+    console.error(`[keymem] WARNING: ignoring ${cfgName(suffix)}="${raw}" (must be a number in [0,1]).`);
     return undefined;
   }
   return n;
@@ -275,12 +276,12 @@ function envThreshold(name: string): number | undefined {
 
 // Like envThreshold but for non-negative unbounded values (e.g. a z-score gate),
 // which legitimately exceed 1. Rejects negative / non-finite input.
-function envNonNegative(name: string): number | undefined {
-  const raw = process.env[name];
+function envNonNegative(suffix: string): number | undefined {
+  const raw = cfgRaw(suffix);
   if (raw === undefined || raw.trim() === "") return undefined;
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) {
-    console.error(`[super-memory] WARNING: ignoring ${name}="${raw}" (must be a number >= 0).`);
+    console.error(`[keymem] WARNING: ignoring ${cfgName(suffix)}="${raw}" (must be a number >= 0).`);
     return undefined;
   }
   return n;
@@ -294,16 +295,16 @@ export function getThresholdProfile(): ThresholdProfile {
       ? THRESHOLD_PROFILES.openai
       : THRESHOLD_PROFILES[localModelFamily()];
   return {
-    keyMerge: envThreshold("SUPER_MEMORY_KEY_MERGE") ?? base.keyMerge,
-    memoryDedup: envThreshold("SUPER_MEMORY_MEMORY_DEDUP") ?? base.memoryDedup,
-    keyAutoLink: envThreshold("SUPER_MEMORY_KEY_AUTOLINK") ?? base.keyAutoLink,
-    keyRecall: envThreshold("SUPER_MEMORY_KEY_RECALL") ?? base.keyRecall,
-    contentRecall: envThreshold("SUPER_MEMORY_CONTENT_RECALL") ?? base.contentRecall,
-    minScore: envThreshold("SUPER_MEMORY_MIN_SCORE") ?? base.minScore,
-    contradiction: envThreshold("SUPER_MEMORY_CONTRADICTION") ?? base.contradiction,
-    gateZ: envNonNegative("SUPER_MEMORY_GATE_Z") ?? base.gateZ,
-    keyGate: envThreshold("SUPER_MEMORY_KEY_GATE") ?? base.keyGate,
-    shortKeyMerge: envThreshold("SUPER_MEMORY_SHORT_KEY_MERGE") ?? base.shortKeyMerge,
+    keyMerge: envThreshold("KEY_MERGE") ?? base.keyMerge,
+    memoryDedup: envThreshold("MEMORY_DEDUP") ?? base.memoryDedup,
+    keyAutoLink: envThreshold("KEY_AUTOLINK") ?? base.keyAutoLink,
+    keyRecall: envThreshold("KEY_RECALL") ?? base.keyRecall,
+    contentRecall: envThreshold("CONTENT_RECALL") ?? base.contentRecall,
+    minScore: envThreshold("MIN_SCORE") ?? base.minScore,
+    contradiction: envThreshold("CONTRADICTION") ?? base.contradiction,
+    gateZ: envNonNegative("GATE_Z") ?? base.gateZ,
+    keyGate: envThreshold("KEY_GATE") ?? base.keyGate,
+    shortKeyMerge: envThreshold("SHORT_KEY_MERGE") ?? base.shortKeyMerge,
   };
 }
 

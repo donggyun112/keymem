@@ -81,7 +81,7 @@ async function contentRank(g: any, query: string, tg: string): Promise<number> {
 
 async function runArm(label: string, keyOf: (f: typeof FACTS[number]) => string[], tag: string) {
   const dir = await mkdtemp(join(tmpdir(), `sm-knv-${tag}-`));
-  process.env.SUPER_MEMORY_DATA_DIR = dir;
+  process.env.KEYMEM_DATA_DIR = dir;
   const mg = await import(`../src/memoryGraph.ts?knv=${tag}`);
   const g = new mg.MemoryGraph();
   await g.load();
@@ -107,9 +107,9 @@ const rows: string[] = [];
 rows.push(await runArm("specific (good)", (f) => f.specific, "spec"));
 rows.push(await runArm("generic (hubs)", (f) => f.generic, "gen"));
 rows.push(await runArm("synonym, merge ON", (f) => f.synonym, "synon"));
-process.env.SUPER_MEMORY_KEY_MERGE = "1.0"; // exact-match only -> merge effectively OFF
+process.env.KEYMEM_KEY_MERGE = "1.0"; // exact-match only -> merge effectively OFF
 rows.push(await runArm("synonym, merge OFF", (f) => f.synonym, "synoff"));
-delete process.env.SUPER_MEMORY_KEY_MERGE;
+delete process.env.KEYMEM_KEY_MERGE;
 
 console.log(`\nkey-coining dependence + merge defense — model=${process.env.LOCAL_EMBEDDING_MODEL}`);
 console.log("avgCost = mean rank of target in the searchKeys->readKey path (lower=better)");

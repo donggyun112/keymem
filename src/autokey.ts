@@ -1,4 +1,5 @@
 import { isShortConcept } from "./embedding.js";
+import { cfgRaw } from "./env.js";
 
 export interface RecallBufferEntry {
   queryText: string;
@@ -57,22 +58,22 @@ export class RecallBuffer {
   }
 }
 
-function envInt(name: string, fallback: number, min: number): number {
-  const raw = process.env[name];
+function envInt(suffix: string, fallback: number, min: number): number {
+  const raw = cfgRaw(suffix);
   if (raw === undefined || raw.trim() === "") return fallback;
   const n = Number(raw);
   return Number.isFinite(n) && n >= min ? Math.floor(n) : fallback;
 }
 
-// Feature flag. Default ON; set SUPER_MEMORY_AUTOKEY=false to disable (mirrors
-// SUPER_MEMORY_AUTO_MIGRATE). Read once at import.
-export const AUTOKEY_ENABLED = process.env.SUPER_MEMORY_AUTOKEY !== "false";
-export const AUTOKEY_PROMOTE_N = envInt("SUPER_MEMORY_AUTOKEY_PROMOTE_N", 3, 1);
-export const AUTOKEY_MAX_ALIASES = envInt("SUPER_MEMORY_AUTOKEY_MAX_ALIASES", 8, 0);
+// Feature flag. Default ON; set KEYMEM_AUTOKEY=false to disable (mirrors
+// KEYMEM_AUTO_MIGRATE). Read once at import.
+export const AUTOKEY_ENABLED = cfgRaw("AUTOKEY") !== "false";
+export const AUTOKEY_PROMOTE_N = envInt("AUTOKEY_PROMOTE_N", 3, 1);
+export const AUTOKEY_MAX_ALIASES = envInt("AUTOKEY_MAX_ALIASES", 8, 0);
 export const AUTOKEY_BUFFER_CAPACITY = 32;
 export const AUTOKEY_BUFFER_TTL_SECONDS = 300;
 export const AUTOKEY_PRUNE_AGE_SECONDS = envInt(
-  "SUPER_MEMORY_AUTOKEY_PRUNE_AGE", 30 * 24 * 3600, 0
+  "AUTOKEY_PRUNE_AGE", 30 * 24 * 3600, 0
 );
 
 // Pure policy: given accumulated heat and the recall-time query↔key cosine, decide

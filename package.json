@@ -1,33 +1,40 @@
 {
-  "name": "mcp-super-memory",
+  "name": "keymem",
   "version": "0.11.0",
   "type": "module",
-  "description": "N:M Associative Memory System for LLM Agents",
+  "description": "Associative memory for LLM agents — a key-graph memory layer (MCP server) that recalls by association, not just vector similarity. A graph-based alternative to vector-store agent memory.",
   "keywords": [
     "mcp",
+    "mcp-server",
+    "model-context-protocol",
     "memory",
+    "ai-memory",
+    "agent-memory",
+    "associative-memory",
+    "long-term-memory",
+    "memory-layer",
     "llm",
     "agent",
-    "embeddings",
     "knowledge-graph",
-    "associative-memory",
+    "embeddings",
     "rag",
     "reranker",
-    "bge-m3"
+    "bge-m3",
+    "mem0-alternative"
   ],
-  "homepage": "https://github.com/donggyun112/super-memory#readme",
+  "homepage": "https://github.com/donggyun112/keymem#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/donggyun112/super-memory.git"
+    "url": "git+https://github.com/donggyun112/keymem.git"
   },
   "bugs": {
-    "url": "https://github.com/donggyun112/super-memory/issues"
+    "url": "https://github.com/donggyun112/keymem/issues"
   },
   "author": "donggyun112 (https://github.com/donggyun112)",
   "license": "MIT",
   "main": "dist/index.js",
   "bin": {
-    "mcp-super-memory": "dist/index.js"
+    "keymem": "dist/index.js"
   },
   "files": [
     "dist",
