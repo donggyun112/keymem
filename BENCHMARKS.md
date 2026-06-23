@@ -224,8 +224,16 @@ expanded memories in one call. Is that worth it, and at what noise cost? Sweep o
   = 85% costs ~5.7/8. So inject trades context noise for recall — the right N depends on how much
   noise the consuming model tolerates (stronger models → push N higher). This is exactly the curve
   a *depth-weighted* injection would target: fill those noise slots with confirmed (deep) memories
-  rather than arbitrary neighbours. (Not yet exposed as an MCP tool flag — `recallInject` exists on
-  the graph with a unit test; wiring + depth-weighting are the next experiment.)
+  rather than arbitrary neighbours.
+
+**Now wired** (v0.13.0): the `recall` MCP tool takes `inject:true` (→ `{keys, memories}` in one
+call), plus `inject_prefer_depth` (surface confirmed/deep memories first) and
+`inject_explore_shallow` (reserve one slot for a weak/recent memory — an ε-exploration so shallow
+memories can resurface and be reinforced). The selection policy is unit-tested (`selectInject`,
+`test/inject-select.test.ts`). **Honest limit:** depth-weighting and exploration only matter once
+memories sit at *different* depths over real use — a one-shot benchmark has all memories at equal
+(near-zero) depth, so their *value* is longitudinal and **not** demonstrated here; only the policy
+logic is verified. Defaults are off; the deliberate-navigation flow is unchanged.
 
 ---
 

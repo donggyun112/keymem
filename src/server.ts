@@ -131,7 +131,7 @@ function stats(): string {
 }
 
 export const server = new Server(
-  { name: "keymem", version: "0.12.2" },
+  { name: "keymem", version: "0.13.0" },
   { capabilities: { tools: {}, prompts: {} } }
 );
 
@@ -142,13 +142,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "recall",
       description:
-        "CALL THIS FIRST before every first response. Search the Key Space and return canonical key clusters only — never memory content. Results include aliases, key type, match score, linked-memory count, hub status, and specificity. Select a useful key, call read_key(key_id), then call read_memory(memory_id, via_key_id) before using a fact. Use short focused noun queries and decompose multi-fact questions into several recall calls.",
+        "CALL THIS FIRST before every first response. Search the Key Space and return canonical key clusters only — never memory content. Results include aliases, key type, match score, linked-memory count, hub status, and specificity. Select a useful key, call read_key(key_id), then call read_memory(memory_id, via_key_id) before using a fact. Use short focused noun queries and decompose multi-fact questions into several recall calls. EXPERIMENTAL: set inject:true to ALSO get the top connected memories' content in one call (skips manual read_key/read_memory) — returns {keys, memories}. Opt-in: trades the deliberate-navigation flow's context-efficiency and precision (the injected set carries lower-precision associative neighbours) for fewer round trips. inject_top_k caps the injected set; inject_prefer_depth favors confirmed (deep) memories; inject_explore_shallow reserves one slot for a weak/recent memory.",
       inputSchema: {
         type: "object",
         properties: {
           query: { type: "string" },
           top_k: { type: "number" },
           namespace: { type: "string" },
+          inject: { type: "boolean" },
+          inject_top_k: { type: "number" },
+          inject_prefer_depth: { type: "boolean" },
+          inject_explore_shallow: { type: "boolean" },
         },
         required: ["query"],
       },
@@ -359,6 +363,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     switch (name) {
       case "recall": {
+        if (a.inject === true) {
+          const injected = await graph.recallInject(
+            a.query as string,
+            typeof a.inject_top_k === "number" ? a.inject_top_k : 5,
+            typeof a.namespace === "string" ? a.namespace : null,
+            {
+              preferDepth: a.inject_prefer_depth === true,
+              exploreShallow: a.inject_explore_shallow === true,
+            }
+          );
+          return { content: [{ type: "text", text: JSON.stringify(injected, null, 0) }] };
+        }
         const results = await graph.searchKeys(
           a.query as string,
           typeof a.top_k === "number" ? a.top_k : 8,

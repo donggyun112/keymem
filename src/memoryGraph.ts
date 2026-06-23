@@ -3,6 +3,7 @@ import { randomBytes } from "crypto";
 import { join } from "path";
 import { Mutex } from "async-mutex";
 import { cfgRaw, dataDir } from "./env.js";
+import { selectInject } from "./inject.js";
 import MiniSearch from "minisearch";
 import { embedTextAsync, EMBEDDING_BACKEND, embeddingFingerprint, getThresholdProfile, isShortConcept, inContradictionBand } from "./embedding.js";
 import { rerankEnabled, rerankScores } from "./reranker.js";
@@ -1284,12 +1285,21 @@ export class MemoryGraph {
   async recallInject(
     query: string,
     topK = 5,
-    namespace: string | null = null
+    namespace: string | null = null,
+    opts: { preferDepth?: boolean; exploreShallow?: boolean } = {}
   ): Promise<{ keys: object[]; memories: object[] }> {
-    // Navigation keys (so the agent can still steer) + the top-N expanded memories. minScore=0
-    // so HOP_DECAY'd associative hits aren't gated away — injecting them is the whole point.
+    // Navigation keys (so the agent can still steer) + selected top-N expanded memories. minScore=0
+    // so HOP_DECAY'd associative hits aren't gated away — injecting them is the whole point. Pull a
+    // wider candidate pool, then let selectInject pick by relevance / depth / exploration.
     const keys = await this.searchKeys(query, 8, namespace);
-    const memories = await this.recall(query, topK, namespace, true, 2, 0, 0);
+    const pool = (await this.recall(
+      query, Math.max(topK * 3, 15), namespace, true, 2, 0, 0
+    )) as Array<{ id: string }>;
+    const cands = pool.map((m) => ({ id: m.id, depth: this.memories[m.id]?.depth ?? 0 }));
+    const byId = new Map(pool.map((m) => [m.id, m]));
+    const memories = selectInject(cands, topK, opts)
+      .map((id) => byId.get(id))
+      .filter((m): m is { id: string } => Boolean(m));
     return { keys, memories };
   }
 
