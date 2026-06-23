@@ -6,6 +6,8 @@
 
 **The associative memory layer for LLM agents — recall by association, not just similarity.**
 
+![keymem demo — asking about the party cake surfaces Mina's peanut allergy via a shared key](docs/keymem-demo.gif)
+
 Most agent memory is a vector store. It surfaces what *sounds like* your query — and misses everything your query is *connected to*.
 
 `keymem` stores memories in a **key graph** instead. A search for **"Newton"** can still reach **"strawberries"** — Newton → apple → fruit → strawberry. The path lives in the graph, not in embedding space. It runs locally as an **MCP server**, so any MCP-compatible agent gets human-like associative recall with no external database.
