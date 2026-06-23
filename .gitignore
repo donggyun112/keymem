@@ -14,3 +14,4 @@ local_cache/
 coverage/
 .npmrc
 eval/
+bench/hotpot-slice.json

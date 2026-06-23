@@ -418,12 +418,13 @@ Set `KEYMEM_DATA_DIR` to use a different storage directory.
 
 ## Benchmarks
 
-An ablation isolating the key-graph's contribution (same engine, same `bge-m3` embeddings,
-graph expansion on vs off) shows it reaches **+33pp** more connected-but-dissimilar memories
-than flat 1-hop retrieval can reach at all (`reach@10` 50% → 83%) — though associative hits
-land low-ranked, not top-5. The read path is O(1) (`read_memory` p50 ~45ms → ~0.01ms @ 500
-memories). Full methodology, honest costs, and the agentic-search trajectory caveat: see
-**[BENCHMARKS.md](BENCHMARKS.md)**.
+On **HotpotQA** bridge questions (real external multi-hop data, gold labels, no LLM judge), the
+key-graph retrieves **both** gold supporting paragraphs **78%** of the time vs **60%** for flat
+semantic retrieval and **49%** for lexical — the connected-but-dissimilar case it's built for.
+(On non-multi-hop "comparison" questions it slightly *hurts* — an honest negative.) A self-built
+ablation isolates the same effect (+33pp reach), and the read path is O(1) (`read_memory` p50
+~45ms → ~0.01ms @ 500 memories). Full methodology, honest costs, and the agentic-search
+trajectory caveat: see **[BENCHMARKS.md](BENCHMARKS.md)**.
 
 ---
 

@@ -4,12 +4,14 @@ What this measures and, honestly, what it doesn't. The goal is to **prove how mu
 key-graph actually buys you** — isolated causally, not asserted by metaphor — and to mark the
 limits plainly.
 
-> TL;DR: On connected-but-dissimilar recall, the key-graph reaches **83%** of targets vs **50%**
-> for flat dense (keymem 1-hop) and **33%** for flat lexical (BM25) — i.e. **+33pp over the best
-> flat baseline** at finding things flat retrieval can't reach at all. The read path was also made
-> **O(1) instead of O(graph)** (read_memory p50 ~45ms → ~0.01ms @ 500 memories). But the
-> associative hits land **low-ranked** (not top-5), not-found precision is weak at small scale,
-> and none of this is a head-to-head SOTA claim vs mem0/Zep. Details below.
+> TL;DR: On **HotpotQA bridge questions** (real external multi-hop data, gold labels), the graph
+> retrieves **both** gold supporting paragraphs **78%** of the time vs **60%** for flat semantic
+> and **49%** for lexical — and on a self-built connected-but-dissimilar probe it reaches **+33pp**
+> more targets than flat retrieval reaches at all. The read path was also made **O(1) instead of
+> O(graph)** (read_memory p50 ~45ms → ~0.01ms @ 500 memories). Honest costs: the gain is specific
+> to the *multi-hop* case (it slightly *hurts* HotpotQA "comparison" questions), it's
+> retrieval-recall not end-task accuracy, and none of this is a head-to-head SOTA claim vs
+> mem0/Zep. Details below.
 
 ---
 
@@ -90,7 +92,44 @@ traversal should reach it. `direct` queries are 1-hop controls; `notfound` must 
 
 ---
 
-## 2. Read-path latency (the v0.12.1 fix)
+## 2. External validation: HotpotQA multi-hop retrieval
+
+§1 uses a dataset I built, so here's the same question on data I didn't. [HotpotQA](https://hotpotqa.github.io/)
+(distractor) ships, per question, **10 paragraphs (2 gold "supporting" + 8 distractors) plus gold
+supporting-fact labels** — so we measure support *retrieval* with **no LLM judge**. Mapping to
+keymem: each paragraph becomes a memory keyed by its own title + any other paragraph title it
+mentions in-text, so a **bridge** entity (what links the question's paragraph to the answer's)
+becomes a shared key. For **bridge** questions the answer paragraph is connected-but-dissimilar to
+the query (the query never names it) — exactly keymem's case. **comparison** questions name both
+entities up front (no bridge to traverse) — a built-in negative control. Each question is scored
+in isolation over only its 10 paragraphs. Run: `tsx bench/hotpot.ts`.
+
+### Results (`bge-m3`, N=120 = 96 bridge + 24 comparison, top-5 of 10)
+
+| question type | metric | BM25 | DIRECT | GRAPH |
+|---|---|---:|---:|---:|
+| **bridge** (96) | support-recall@5 | 70% | 78% | **88%** |
+| | **both@5** (got both golds) | 49% | 60% | **78%** |
+| comparison (24) | support-recall@5 | 57% | 81% | 77% |
+| | both@5 | 25% | 63% | **54%** |
+| all (120) | both@5 | 44% | 61% | **73%** |
+
+- ✅ **On bridge (multi-hop, connected-but-dissimilar — keymem's case) the graph clearly wins**:
+  both gold paragraphs retrieved **78%** of the time vs **60%** (flat semantic) and **49%**
+  (lexical) — +18pp / +29pp, on real external data with gold labels, n=96. This is a stronger
+  result than §1 (here the bridge-reached support lands inside top-5 because the pool is only 10).
+- ⚠️ **On comparison questions the graph slightly *hurts*** (both@5 54% vs DIRECT's 63%) — expected:
+  both entities are already in the query, so there's no bridge to traverse and expansion just adds
+  noise. An honest negative that confirms the gain is *specifically* the multi-hop case, not free.
+- This is **retrieval-recall of the gold paragraphs, not end-task answer accuracy** — getting both
+  supports is necessary, not sufficient, for a correct answer (no LLM judge here).
+
+**Caveats.** Keys are auto-derived (title + mentioned-titles) — a heuristic both conditions share
+(so the ablation is fair), but the absolute numbers depend on it; a real deployment would need
+NER/autokey to produce comparable keys. One dataset, one embedder, document multi-hop (not
+conversational personal memory).
+
+## 3. Read-path latency (the v0.12.1 fix)
 
 `read_memory` rewrote the entire `graph.json` on every call (it bumps depth/access), making each
 read **O(graph size)**. Reads are the frequent path (every `recall → read_key → read_memory`);
@@ -110,7 +149,7 @@ worth trading durability for.
 
 ---
 
-## 3. Honest scope & the trajectory caveat
+## 4. Honest scope & the trajectory caveat
 
 **Scope.** Small synthetic persona graph (14 memories), one embedder, one author's fixtures.
 This is **not** LoCoMo/LongMemEval scale, and it is **not** a head-to-head vs mem0/Zep — those
@@ -143,9 +182,15 @@ word.
 ## Reproduce
 
 ```bash
-tsx bench/ablation.ts     # associative-recall ablation (real bge-m3, ~570MB first run)
-tsx bench/perf.ts         # latency vs store size (synthetic embedder)
+tsx bench/ablation.ts     # §1 associative-recall ablation (real bge-m3, ~570MB first run)
+tsx bench/perf.ts         # §3 latency vs store size (synthetic embedder)
 tsx bench/run.ts          # the existing search-quality regression fixture
+
+# §2 external HotpotQA — first fetch a slice (no full download), then run:
+curl -s "https://datasets-server.huggingface.co/rows?dataset=hotpotqa/hotpot_qa&config=distractor&split=validation&offset=0&length=100" \
+  | python3 -c "import sys,json;rows=[r['row'] for r in json.load(sys.stdin)['rows']];print(json.dumps([{'id':r['id'],'question':r['question'],'answer':r['answer'],'type':r['type'],'support':r['supporting_facts']['title'],'titles':r['context']['title'],'paras':[' '.join(s) for s in r['context']['sentences']]} for r in rows]))" \
+  > bench/hotpot-slice.json
+tsx bench/hotpot.ts 100
 ```
 
 Sources: [LoCoMo](https://github.com/snap-research/locomo) · [LongMemEval](https://github.com/xiaowu0162/LongMemEval) · [Zep vs Mem0 methodology dispute](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/) · [Mem0 paper](https://arxiv.org/pdf/2504.19413) · [Agentic search replacing RAG (VentureBeat, 2026)](https://venturebeat.com/data/context-architecture-is-replacing-rag-as-agentic-ai-pushes-enterprise-retrieval-to-its-limits)

@@ -1,0 +1,58 @@
+{
+  "model": "bge-m3",
+  "N": 120,
+  "topK": 5,
+  "aggregates": {
+    "BM25": {
+      "bridge": {
+        "n": 96,
+        "recall": 67.5,
+        "both": 47
+      },
+      "comparison": {
+        "n": 24,
+        "recall": 13.666666666666668,
+        "both": 6
+      },
+      "all": {
+        "n": 120,
+        "recall": 81.16666666666666,
+        "both": 53
+      }
+    },
+    "DIRECT": {
+      "bridge": {
+        "n": 96,
+        "recall": 75.16666666666666,
+        "both": 58
+      },
+      "comparison": {
+        "n": 24,
+        "recall": 19.5,
+        "both": 15
+      },
+      "all": {
+        "n": 120,
+        "recall": 94.66666666666667,
+        "both": 73
+      }
+    },
+    "GRAPH": {
+      "bridge": {
+        "n": 96,
+        "recall": 84.16666666666666,
+        "both": 75
+      },
+      "comparison": {
+        "n": 24,
+        "recall": 18.5,
+        "both": 13
+      },
+      "all": {
+        "n": 120,
+        "recall": 102.66666666666669,
+        "both": 88
+      }
+    }
+  }
+}
