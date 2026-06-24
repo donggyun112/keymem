@@ -437,6 +437,54 @@ export class MemoryGraph {
     }
   }
 
+  // Move every memory link from `fromId` onto `intoId` (keeping the stronger weight on conflict),
+  // fold the merged key's concept + aliases into `intoId` as aliases, then delete `fromId`. The
+  // relink primitive behind fragmentation healing.
+  private _mergeKeyInto(fromId: string, intoId: string): void {
+    if (fromId === intoId || !this.keys[fromId] || !this.keys[intoId]) return;
+    for (const [mid, w] of this._keyToMems[fromId] ?? new Map<string, number>()) {
+      if (this._hasLink(intoId, mid)) {
+        this._setLinkWeight(intoId, mid, Math.max(this._getLinkWeight(intoId, mid), w));
+      } else {
+        this._link(intoId, mid, w);
+      }
+      this._memToKeys[mid]?.delete(fromId);
+    }
+    this._recordKeyAlias(intoId, this.keys[fromId].concept);
+    for (const a of this.keys[fromId].aliases ?? []) this._recordKeyAlias(intoId, a);
+    delete this._keyToMems[fromId];
+    delete this.keys[fromId];
+  }
+
+  // One-time heal: collapse keys that share a surface string but were split across key_types (a name
+  // hub + a concept twin from before cross-type reconciliation existed) into a single cluster.
+  // Canonical = the name/proper_noun key (literal-match); ties broken by most-linked. Idempotent —
+  // once healed and saved, later loads find no duplicates. Returns the number of keys merged away.
+  private _healFragmentedKeys(): number {
+    const byString = new Map<string, string[]>();
+    for (const [kid, key] of Object.entries(this.keys)) {
+      const norm = key.concept.toLowerCase();
+      (byString.get(norm) ?? byString.set(norm, []).get(norm)!).push(kid);
+    }
+    const rank = (kid: string): number => {
+      const t = this.keys[kid].key_type;
+      const strong = t === "name" || t === "proper_noun" ? 1 : 0;
+      return strong * 1e7 + (this._keyToMems[kid]?.size ?? 0);
+    };
+    let merged = 0;
+    for (const kids of byString.values()) {
+      if (kids.length < 2) continue;
+      const canonical = kids.reduce((a, b) => (rank(b) > rank(a) ? b : a));
+      for (const kid of kids) {
+        if (kid === canonical) continue;
+        this._mergeKeyInto(kid, canonical);
+        merged++;
+      }
+    }
+    if (merged > 0) this.markDirty();
+    return merged;
+  }
+
   private _activeMemoryIdsForKey(keyId: string, namespace?: string | null): string[] {
     const active: string[] = [];
     for (const mid of this._keyToMems[keyId]?.keys() ?? []) {
@@ -532,6 +580,16 @@ export class MemoryGraph {
       .map((kid) => this.keys[kid].concept);
   }
 
+  // Like getKeysForMemory but carries each key's id alongside its concept. Used by inject so a
+  // consumer can jump straight to read_key(key_id) — no concept→id resolution round trip.
+  getKeyRefsForMemory(memId: string): Array<{ concept: string; key_id: string }> {
+    const kids = this._memToKeys[memId];
+    if (!kids) return [];
+    return [...kids.keys()]
+      .filter((kid) => kid in this.keys)
+      .map((kid) => ({ concept: this.keys[kid].concept, key_id: kid }));
+  }
+
   // ── I/O ──
 
   async load(): Promise<void> {
@@ -619,6 +677,10 @@ export class MemoryGraph {
 
     this._pruneDanglingExplicitLinks();
 
+    // Heal keys fragmented across key_types in stores written before cross-type reconciliation.
+    const healed = this._healFragmentedKeys();
+    if (healed > 0) console.error(`[graph] healed ${healed} fragmented key(s)`);
+
     for (const [mid, mem] of Object.entries(this.memories)) {
       if (mem.supersedes) {
         this._supersededBy[mem.supersedes] = mid;
@@ -680,10 +742,27 @@ export class MemoryGraph {
     concept: string,
     keyType: "concept" | "name" | "proper_noun" = "concept"
   ): Promise<string> {
-    if (keyType === "name" || keyType === "proper_noun") {
-      for (const [kid, key] of Object.entries(this.keys)) {
-        if (key.concept === concept && key.key_type === keyType) return kid;
+    const normalizedConcept = concept.toLowerCase();
+
+    // Cross-type reconciliation FIRST: the same surface string must resolve to ONE key cluster
+    // regardless of the requested type. Without this, a `name` hub and a `concept` key for the same
+    // string ("동균") fragment the same entity — pivoting onto the 1-memory twin is a dead end.
+    // name/proper_noun is canonical (it carries literal-match + entity precedence), so a concept
+    // request joins an existing name key, and a name request PROMOTES an existing concept twin in
+    // place: its id, memories and links are kept, it just gains literal-match semantics.
+    for (const [kid, key] of Object.entries(this.keys)) {
+      const terms = [key.concept, ...(key.aliases ?? [])];
+      if (!terms.some((term) => term.toLowerCase() === normalizedConcept)) continue;
+      if ((keyType === "name" || keyType === "proper_noun") && key.key_type === "concept") {
+        key.key_type = keyType; // promote the twin in place
       }
+      this._recordKeyAlias(kid, concept);
+      return kid;
+    }
+
+    // No same-string key exists. name/proper_noun never semantic-merges (distinct entities can be
+    // near-synonyms), so create one outright.
+    if (keyType === "name" || keyType === "proper_noun") {
       const kid = uid();
       this.keys[kid] = {
         id: kid,
@@ -693,16 +772,6 @@ export class MemoryGraph {
         key_type: keyType,
       };
       return kid;
-    }
-
-    const normalizedConcept = concept.toLowerCase();
-    for (const [kid, key] of Object.entries(this.keys)) {
-      if (key.key_type !== "concept") continue;
-      const terms = [key.concept, ...(key.aliases ?? [])];
-      if (terms.some((term) => term.toLowerCase() === normalizedConcept)) {
-        this._recordKeyAlias(kid, concept);
-        return kid;
-      }
     }
 
     // Short concept keys merge only on exact (case-insensitive) string match, so
@@ -1336,7 +1405,10 @@ export class MemoryGraph {
     const byId = new Map(supported.map((m) => [m.id, m]));
     const memories = selectInject(cands, topK, opts)
       .map((id) => byId.get(id))
-      .filter((m): m is { id: string } => Boolean(m));
+      .filter((m): m is { id: string } => Boolean(m))
+      // Enrich keys with key_id so the agent can read_key() directly — inject's whole point is
+      // skipping round trips, and a bare concept would force a resolution step right back in.
+      .map((m) => ({ ...m, keys: this.getKeyRefsForMemory(m.id) }));
     return { keys, memories };
   }
 

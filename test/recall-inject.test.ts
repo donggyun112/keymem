@@ -149,6 +149,39 @@ test("recallInject excludes BM25-only lexical noise riding alongside a real anch
   assert.ok(!ids.includes(junk2), `BM25-only junk2 must NOT be injected, got ${ids.join(",")}`);
 });
 
+test("recallInject memories carry key_id alongside concept, so read_key needs no resolution step", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "sm-inject-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  process.env.KEYMEM_DATA_DIR = dir;
+  process.env.EMBEDDING_BACKEND = "local";
+  process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
+
+  const emb = await import("../src/embedding.ts");
+  emb.__setTestEmbedder((tx: string) => vec(tx));
+  t.after(() => emb.__clearTestEmbedder());
+
+  const mg = await import(`../src/memoryGraph.ts?inject=${n++}`);
+  const g = new mg.MemoryGraph();
+  await g.load();
+
+  await g.add("user works at Acme", ["job", "Acme"], {});
+  await g.add("Acme was founded in 1990", ["Acme", "history"], {});
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const r: any = await g.recallInject("user job", 5, null);
+  assert.ok(r.memories.length > 0, "has injected memories");
+  for (const m of r.memories) {
+    assert.ok(Array.isArray(m.keys) && m.keys.length > 0, "memory has keys");
+    for (const k of m.keys) {
+      assert.equal(typeof k, "object", `key must be {concept, key_id}, got ${JSON.stringify(k)}`);
+      assert.equal(typeof k.concept, "string", "key has concept");
+      assert.equal(typeof k.key_id, "string", "key has key_id");
+      // key_id must resolve to the SAME key the concept names — a direct read_key target.
+      assert.equal(g.keys[k.key_id]?.concept, k.concept, "key_id resolves to the named key");
+    }
+  }
+});
+
 test("recallInject is passive — it does not reinforce or depth-bump the memories it surfaces", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "sm-inject-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
