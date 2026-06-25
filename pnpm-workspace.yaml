@@ -1,0 +1,7 @@
+# Approve native build scripts so `pnpm install` does not exit 1 under pnpm 10+ (which blocks
+# dependency build scripts by default). onnxruntime-node needs its script to place the native
+# binary, or embedding fails at runtime; esbuild is pulled in by tsx. Required for the Glama
+# Docker build (it runs `pnpm install` with pnpm 10.x) and for any pnpm-based install to succeed.
+onlyBuiltDependencies:
+  - esbuild
+  - onnxruntime-node
