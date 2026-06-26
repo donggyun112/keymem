@@ -18,6 +18,7 @@ async function loadModule(env: {
   codexHome?: string;
   claudeSessionId?: string;
   codexThreadId?: string;
+  transcriptAccess?: string;
 }) {
   if (env.claudeConfigDir) process.env.CLAUDE_CONFIG_DIR = env.claudeConfigDir;
   else delete process.env.CLAUDE_CONFIG_DIR;
@@ -27,6 +28,8 @@ async function loadModule(env: {
   else delete process.env.CLAUDE_CODE_SESSION_ID;
   if (env.codexThreadId) process.env.CODEX_THREAD_ID = env.codexThreadId;
   else delete process.env.CODEX_THREAD_ID;
+  if (env.transcriptAccess !== undefined) process.env.KEYMEM_TRANSCRIPT_ACCESS = env.transcriptAccess;
+  else delete process.env.KEYMEM_TRANSCRIPT_ACCESS;
   return import(`../src/nativeTranscripts.ts?test=${importCounter++}`);
 }
 
@@ -223,6 +226,28 @@ test("detectActiveSession picks the most-recently-modified transcript", async (t
   assert.equal(active.agent, "codex");
   assert.equal(active.session_id, codexUuid);
   assert.equal(active.turn, 1); // 2 turns (user, assistant) → latest index
+});
+
+test("transcriptAccessEnabled: on when a host session env is present", async () => {
+  const m1 = await loadModule({ claudeSessionId: UUID });
+  assert.equal(m1.transcriptAccessEnabled(), true);
+  const m2 = await loadModule({ codexThreadId: "019f0226-8525-7ab0-8369-7dc41701eea1" });
+  assert.equal(m2.transcriptAccessEnabled(), true);
+});
+
+test("transcriptAccessEnabled: off by default with no env and no flag", async () => {
+  const m = await loadModule({});
+  assert.equal(m.transcriptAccessEnabled(), false);
+});
+
+test("transcriptAccessEnabled: explicit flag opts in without host env", async () => {
+  const m = await loadModule({ transcriptAccess: "true" });
+  assert.equal(m.transcriptAccessEnabled(), true);
+});
+
+test("transcriptAccessEnabled: explicit false overrides a present host env", async () => {
+  const m = await loadModule({ claudeSessionId: UUID, transcriptAccess: "false" });
+  assert.equal(m.transcriptAccessEnabled(), false);
 });
 
 test("detectActiveSession trusts CLAUDE_CODE_SESSION_ID over mtime", async (t) => {

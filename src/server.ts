@@ -11,6 +11,7 @@ import {
   loadNativeAuto,
   listNativeSessions,
   detectActiveSession,
+  transcriptAccessEnabled,
   type Agent,
 } from "./nativeTranscripts.js";
 import { cfgRaw } from "./env.js";
@@ -71,6 +72,7 @@ export function buildSource(
 // Detect the live host session once, swallowing any error so a transcript-read
 // hiccup never blocks a memory save.
 async function detectHostLink(): Promise<{ agent: Agent; session_id: string; turn: number } | null> {
+  if (!transcriptAccessEnabled()) return null; // don't read/stamp transcripts when untrusted
   try {
     return await detectActiveSession();
   } catch {
@@ -165,8 +167,13 @@ export const server = new Server(
 
 // ── Tool definitions ──
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
+// Tools that read the host's local transcripts; hidden unless trusted (see
+// transcriptAccessEnabled) so they aren't exposed over a plain server or a
+// non-owner agent.
+const TRANSCRIPT_TOOLS = new Set(["get_conversation", "list_sessions"]);
+
+server.setRequestHandler(ListToolsRequestSchema, async () => {
+  const tools = [
     {
       name: "recall",
       description:
@@ -413,8 +420,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: [],
       },
     },
-  ],
-}));
+  ];
+  return {
+    tools: transcriptAccessEnabled()
+      ? tools
+      : tools.filter((t) => !TRANSCRIPT_TOOLS.has(t.name)),
+  };
+});
 
 // ── Tool call handler ──
 
@@ -548,6 +560,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "get_conversation": {
+        if (!transcriptAccessEnabled()) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  error:
+                    "Transcript access is disabled. Run keymem under a host agent (Claude Code / Codex) or set KEYMEM_TRANSCRIPT_ACCESS=true.",
+                }),
+              },
+            ],
+          };
+        }
         const sessionId = a.session_id as string;
         const turn = typeof a.turn === "number" ? a.turn : null;
         const agent = a.agent === "claude" || a.agent === "codex" ? (a.agent as Agent) : null;
@@ -564,6 +589,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "list_sessions": {
+        if (!transcriptAccessEnabled()) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  error:
+                    "Transcript access is disabled. Run keymem under a host agent (Claude Code / Codex) or set KEYMEM_TRANSCRIPT_ACCESS=true.",
+                }),
+              },
+            ],
+          };
+        }
         const sessions = await listNativeSessions({
           agent: a.agent === "claude" || a.agent === "codex" ? (a.agent as Agent) : undefined,
           limit: typeof a.limit === "number" ? a.limit : undefined,

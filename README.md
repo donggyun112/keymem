@@ -425,6 +425,8 @@ Set `KEYMEM_DATA_DIR` to use a different storage directory.
 
 `session_id` is restricted to a UUID and resolved within these roots (with symlink checks) to prevent path traversal.
 
+**Access is gated.** Because transcripts are local, potentially sensitive history, `get_conversation` and `list_sessions` are **only exposed when keymem is trusted as the owner's personal local agent** — i.e. a recognized host injected its session env (`CLAUDE_CODE_SESSION_ID` / `CODEX_THREAD_ID`), or you explicitly opt in with `KEYMEM_TRANSCRIPT_ACCESS=true`. Otherwise (a plain server, a remote deployment, a non-owner/custom agent) the two tools are hidden from `tools/list`, calling them is refused, and memories are saved without a host link. Set `KEYMEM_TRANSCRIPT_ACCESS=false` to force-disable even under a host agent.
+
 **Linking a memory to its source conversation.** When you save a memory, keymem stamps the active host session onto its `source` (`host_session` / `host_agent` / `host_turn`) so a recalled memory can drill back to the verbatim exchange via `get_conversation`. The active session is found two ways:
 
 1. **Deterministic** — the host injects its session id into every MCP server it spawns, and keymem reads it directly: Claude Code → `CLAUDE_CODE_SESSION_ID`, Codex → `CODEX_THREAD_ID` (which equals the rollout file's session id). The link is exact, with no guessing.

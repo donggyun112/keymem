@@ -55,6 +55,19 @@ function rootFor(agent: Agent): string {
   return agent === "claude" ? claudeRoot() : codexRoot();
 }
 
+// These tools read the host's local conversation transcripts — potentially
+// sensitive history spanning every project on the machine. Only expose them
+// when we can trust we're the owner's personal local agent: i.e. a recognized
+// host injected its session env (Claude Code / Codex), or the operator
+// explicitly opted in. An explicit flag wins either way. This keeps transcripts
+// from leaking when keymem is reached over a plain server or a custom agent.
+export function transcriptAccessEnabled(): boolean {
+  const flag = process.env.KEYMEM_TRANSCRIPT_ACCESS;
+  if (flag === "true") return true;
+  if (flag === "false") return false;
+  return Boolean(process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_THREAD_ID);
+}
+
 // The host agent stamps its current session id into the MCP server's env.
 function envSession(): { agent: Agent; session_id: string } | null {
   const claude = process.env.CLAUDE_CODE_SESSION_ID;
