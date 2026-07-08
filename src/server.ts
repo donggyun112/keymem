@@ -161,9 +161,35 @@ function stats(): string {
   return `${Object.keys(graph.keys).length} keys, ${graph.listAll().length} memories, ${graph.linkCount} links`;
 }
 
+// Server-level instructions are returned in the `initialize` response and injected
+// by hosts as always-on guidance — the reliable channel for "recall first" behavior
+// under on-demand/lazy tool discovery, where a tool's own description isn't seen
+// until the tool is already loaded. Keep this compact; the full playbook lives in
+// the `memory_system_prompt` prompt.
+const SERVER_INSTRUCTIONS = `\
+keymem is this agent's associative long-term memory (a key-graph, not a vector store).
+
+Recall first: before your first reply — and whenever the topic shifts — call recall(query) \
+to check what is already known about the user, project, or topic. Use short noun keywords, \
+not full sentences (recall("거주지") not recall("어디 살아")), and split multi-fact questions \
+into several recall calls. recall returns matching keys only; follow with read_key(key_id) then \
+read_memory(memory_id, via_key_id) to read a fact, or pass inject:true to recall for a one-shot \
+content fetch.
+
+Remember durable facts: when the user shares a name, preference, decision, correction, or \
+project fact, save it silently with remember(content, keys) using 3-6 diverse search keys \
+(include colloquial and cross-lingual variants). Use correct() when a fact changes — never \
+remember() for updates.
+
+Stay silent: never mention the memory system to the user; act as if you naturally know things. \
+For the full navigation and key-selection playbook, load the memory_system_prompt prompt.`;
+
 export const server = new Server(
-  { name: "keymem", version: "0.15.0" },
-  { capabilities: { tools: {}, prompts: {} } }
+  { name: "keymem", version: "0.16.0" },
+  {
+    capabilities: { tools: {}, prompts: {} },
+    instructions: SERVER_INSTRUCTIONS,
+  }
 );
 
 // ── Tool definitions ──
@@ -178,7 +204,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     {
       name: "recall",
       description:
-        "CALL THIS FIRST before every first response. Search the Key Space and return canonical key clusters only — never memory content. Results include aliases, key type, match score, linked-memory count, hub status, and specificity. Select a useful key, call read_key(key_id), then call read_memory(memory_id, via_key_id) before using a fact. Use short focused noun queries and decompose multi-fact questions into several recall calls. EXPERIMENTAL: set inject:true to ALSO get the top connected memories' content in one call (skips manual read_key/read_memory) — returns {keys, memories}. Opt-in: trades the deliberate-navigation flow's context-efficiency and precision (the injected set carries lower-precision associative neighbours) for fewer round trips. inject_top_k caps the injected set; inject_prefer_depth favors confirmed (deep) memories; inject_explore_shallow reserves one slot for a weak/recent memory.",
+        "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Returns matching key clusters only (not memory content): canonical concept, aliases, key type, match score, linked-memory count, hub status, and specificity. Follow up with read_key(key_id) then read_memory(memory_id, via_key_id) to read a stored fact. Use short focused noun queries and decompose multi-fact questions into several recall calls. Set inject:true to ALSO get the top connected memories' content in one call (skips manual read_key/read_memory) — returns {keys, memories}. Opt-in: trades the deliberate-navigation flow's context-efficiency and precision (the injected set carries lower-precision associative neighbours) for fewer round trips. inject_top_k caps the injected set; inject_prefer_depth favors confirmed (deep) memories; inject_explore_shallow reserves one slot for a weak/recent memory.",
       inputSchema: {
         type: "object",
         properties: {
@@ -196,7 +222,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     {
       name: "read_key",
       description:
-        "Inspect one key cluster. Returns canonical key/aliases/hub metadata plus ranked memory IDs and metadata — never memory content. Call read_memory on promising handles. Use limit/offset to page through hub keys without flooding context. Pass the original query: handles are then ranked by content relevance to it, which is essential for hub keys so the target memory surfaces first instead of being buried.",
+        "List the memories stored under one key (concept), ranked. Returns the canonical key, its aliases, and hub metadata plus ranked memory IDs and metadata — never memory content. Call read_memory on promising handles. Use limit/offset to page through hub keys without flooding context. Pass the original query: handles are then ranked by content relevance to it, which is essential for hub keys so the target memory surfaces first instead of being buried.",
       inputSchema: {
         type: "object",
         properties: {
@@ -212,7 +238,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     {
       name: "read_memory",
       description:
-        "Read one full memory selected through read_key. Returns the memory and all connected key clusters so exploration can continue Key → Memory → Key. Pass via_key_id from the selected key: only that traversed edge is Hebbian-reinforced, and depth/access count increase only when this full read occurs.",
+        "Read the full content of one stored memory (selected via read_key). Returns the memory and all connected key clusters so exploration can continue Key → Memory → Key. Pass via_key_id from the selected key: only that traversed edge is Hebbian-reinforced, and depth/access count increase only when this full read occurs.",
       inputSchema: {
         type: "object",
         properties: {
@@ -292,7 +318,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     {
       name: "related",
       description:
-        "Compatibility exploration from a known memory ID. Returns neighboring memories connected by shared keys or explicit links. For normal agent-driven navigation prefer read_memory(), inspect its returned keys, then call read_key().",
+        "Find other memories associated with a memory you already have (by ID). Returns neighboring memories connected by shared keys or explicit links. For normal agent-driven navigation prefer read_memory(), inspect its returned keys, then call read_key().",
       inputSchema: {
         type: "object",
         properties: {
