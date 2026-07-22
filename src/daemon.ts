@@ -11,7 +11,7 @@ const DEFAULT_IDLE_MS = Number(process.env.KEYMEM_DAEMON_IDLE_MS ?? 10 * 60_000)
 
 export async function startDaemon(
   opts: { port?: number; idleMs?: number } = {}
-): Promise<{ port: number; close: () => Promise<void> }> {
+): Promise<{ port: number; close: () => Promise<void>; sessionCount: () => number }> {
   const idleMs = opts.idleMs ?? DEFAULT_IDLE_MS;
   await graph.load(); // 임베딩 모델은 첫 사용 시 lazy load
 
@@ -75,6 +75,27 @@ export async function startDaemon(
         rejectBadRequest(res, "Bad Request: unknown or expired session ID");
         return;
       }
+      if (req.method === "GET") {
+        // GET /mcp는 이 세션의 standalone SSE 스트림이다 — shim이 살아있는 동안 계속 열려
+        // 있는 연결로, "이 세션이 아직 쓰이고 있다"는 유일한 신호다. shim이 SIGKILL 등으로
+        // 죽으면 이 소켓은 res.end() 없이 그냥 끊긴다. SDK(WebStandardStreamableHTTPServerTransport)
+        // 는 이 경우 내부 스트림 매핑만 지우고 transport.onclose는 절대 호출하지 않는다
+        // (node_modules/@modelcontextprotocol/sdk의 standalone SSE ReadableStream의 cancel()
+        // 콜백을 직접 확인함) — 그래서 phantom 세션이 transports map에 영원히 남고 idle-exit이
+        // 절대 발생하지 않는다.
+        //
+        // res.writableEnded로 "서버가 직접 정상 종료(res.end())"와 "연결이 그냥 끊겨버림"을
+        // 구분한다: 서버가 스트림을 능동적으로 닫을 때(transport.close()/closeStandaloneSSEStream())는
+        // res.end()가 먼저 호출되어 'close' 시점엔 이미 writableEnded===true이므로 건드리지 않는다.
+        // 조용하지만 살아있는 세션은 소켓이 열린 채로 유지되므로 'close' 이벤트 자체가 절대
+        // 발생하지 않는다 — 그래서 이 훅은 quiet-but-alive 세션을 절대 죽이지 않는다.
+        const staleTransport = transport;
+        res.on("close", () => {
+          if (!res.writableEnded) {
+            staleTransport.close().catch(() => {});
+          }
+        });
+      }
     } else if (isInitializeRequest(body)) {
       // 새 세션은 오직 (세션 id 없음 + initialize 요청)일 때만 생성한다.
       cancelIdle();
@@ -107,6 +128,9 @@ export async function startDaemon(
 
   return {
     port,
+    // 테스트 전용 읽기 전용 훅: 현재 열려 있는(reap되지 않은) 세션 수. 프로덕션 코드 경로에는
+    // 영향 없음 — transports.size를 그대로 노출할 뿐이다.
+    sessionCount: () => transports.size,
     close: async () => {
       closing = true;
       cancelIdle();
