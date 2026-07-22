@@ -4,6 +4,46 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-07-22
+
+Run keymem as a single shared HTTP daemon behind a thin stdio shim, instead of one
+full server process per host session. Previously every host session (Claude Code,
+Codex, each terminal) spawned its own stdio server, so N sessions meant N processes
+each loading the embedding model (~1.5GB apiece) and N writers racing on the same
+`graph.json` under an in-process mutex that gave no cross-process protection. Now one
+resident daemon holds the graph and model once; the shims are lightweight proxies.
+
+### Added
+
+- **`keymem-shim`** — a stdio<->HTTP bridge the host spawns in place of the server. It
+  transparently proxies MCP messages to the shared daemon, attaching the host's
+  session identity (`X-Keymem-Host-Agent` / `X-Keymem-Host-Session`) on every request
+  so provenance stamping stays correct across many clients on one daemon. If the
+  daemon can't be reached or started, the shim falls back to running the server
+  in-process — identical to the previous behavior.
+- **`keymem-daemon`** — a resident StreamableHTTP MCP server (loopback only, default
+  port 8765 / `KEYMEM_DAEMON_PORT`). It loads the graph and embedding model once,
+  serves every shim session from that shared state, and self-exits after an idle
+  period (default 10 min / `KEYMEM_DAEMON_IDLE_MS`). Sessions whose connection drops
+  abruptly are reaped so idle-exit still fires.
+
+### Changed
+
+- **Host-session provenance now travels over request headers, not ambient detection.**
+  On the daemon path, `host_agent` / `host_session` / `host_turn` are derived from the
+  per-request `X-Keymem-Host-*` headers rather than the previous env/mtime heuristic,
+  so a memory saved through one session can never be stamped with another session's
+  identity. The env-based path is preserved for the in-process fallback.
+- **Single writer.** With one daemon owning `graph.json`, the existing `async-mutex`
+  serialization is now actually effective (previously each of N processes had its own
+  mutex over a shared file).
+
+### Notes
+
+- Backward compatible: the `keymem` bin still runs the in-process stdio server, so
+  existing setups are unchanged. Opt into the shared daemon by pointing your MCP
+  client's command at `keymem-shim` (i.e. `dist/shim.js`).
+
 ## [0.16.0] - 2026-07-08
 
 Make keymem discoverable under on-demand (lazy) MCP tool loading, where a tool's own
