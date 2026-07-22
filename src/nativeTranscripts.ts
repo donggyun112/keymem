@@ -77,6 +77,34 @@ function envSession(): { agent: Agent; session_id: string } | null {
   return null;
 }
 
+// Header-carried host session (daemon path). The shim stamps the host's session
+// id into X-Keymem-* on every HTTP request, giving the daemon the same
+// authoritative identity that env vars give a stdio child.
+export function hostSessionFromHeaders(
+  headers: Record<string, string | string[] | undefined> | undefined
+): { agent: Agent; session_id: string } | null {
+  if (!headers) return null;
+  const first = (v: string | string[] | undefined): string | undefined =>
+    Array.isArray(v) ? v[0] : v;
+  const agent = first(headers["x-keymem-host-agent"]);
+  const session = first(headers["x-keymem-host-session"]);
+  if (agent !== "claude" && agent !== "codex") return null;
+  if (!session || !UUID_PATTERN.test(session)) return null;
+  return { agent, session_id: session };
+}
+
+// Resolve a known {agent, session_id} to a full host link by reading the
+// transcript to compute the latest turn index. Shared by the env path
+// (detectActiveSession Tier-1) and the header path (daemon).
+export async function hostLinkFromSession(
+  s: { agent: Agent; session_id: string } | null
+): Promise<{ agent: Agent; session_id: string; turn: number } | null> {
+  if (!s) return null;
+  const file = await findSessionFile(s.agent, s.session_id);
+  const turns = file ? parseFor(s.agent, await readFile(file, "utf-8")) : [];
+  return { ...s, turn: Math.max(0, turns.length - 1) };
+}
+
 // ── Parsing ──
 
 function parseLines(text: string): Record<string, unknown>[] {
@@ -254,11 +282,7 @@ export async function detectActiveSession(
   // CODEX_THREAD_ID). When present it identifies the session exactly, with no
   // mtime guessing or cross-session ambiguity.
   const fromEnv = envSession();
-  if (fromEnv) {
-    const file = await findSessionFile(fromEnv.agent, fromEnv.session_id);
-    const turns = file ? parseFor(fromEnv.agent, await readFile(file, "utf-8")) : [];
-    return { ...fromEnv, turn: Math.max(0, turns.length - 1) };
-  }
+  if (fromEnv) return hostLinkFromSession(fromEnv);
 
   // Tier 2 — heuristic fallback (Codex, Claude Desktop, older clients): the
   // transcript being appended right now is the most-recently-modified file.
