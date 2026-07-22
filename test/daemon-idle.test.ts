@@ -30,3 +30,24 @@ test("unknown path returns 404", async () => {
     await d.close();
   }
 });
+
+test("stale/unknown mcp-session-id on a non-initialize request is rejected, not treated as a new session", async () => {
+  const d = await startDaemon({ port: 0, idleMs: 60_000 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${d.port}/mcp`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "mcp-session-id": "00000000-0000-0000-0000-000000000000",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list", id: 1 }),
+    });
+    assert.equal(res.status, 400);
+
+    // 데몬은 여전히 살아있고 상태(세션/유휴 타이머)가 오염되지 않아야 한다.
+    const health = await fetch(`http://127.0.0.1:${d.port}/health`);
+    assert.equal(health.status, 200);
+  } finally {
+    await d.close();
+  }
+});
