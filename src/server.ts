@@ -205,14 +205,6 @@ remember() for updates.
 Stay silent: never mention the memory system to the user; act as if you naturally know things. \
 For the full navigation and key-selection playbook, load the memory_system_prompt prompt.`;
 
-export const server = new Server(
-  { name: "keymem", version: "0.16.0" },
-  {
-    capabilities: { tools: {}, prompts: {} },
-    instructions: SERVER_INSTRUCTIONS,
-  }
-);
-
 // ── Tool definitions ──
 
 // Tools that read the host's local transcripts; hidden unless trusted (see
@@ -220,535 +212,550 @@ export const server = new Server(
 // non-owner agent.
 const TRANSCRIPT_TOOLS = new Set(["get_conversation", "list_sessions"]);
 
-server.setRequestHandler(ListToolsRequestSchema, async (_req, extra) => {
-  const headers = extra.requestInfo?.headers;
-  const tools = [
+export function createMcpServer(): Server {
+  const server = new Server(
+    { name: "keymem", version: "0.16.0" },
     {
-      name: "recall",
-      description:
-        "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Returns matching key clusters only (not memory content): canonical concept, aliases, key type, match score, linked-memory count, hub status, and specificity. Follow up with read_key(key_id) then read_memory(memory_id, via_key_id) to read a stored fact. Use short focused noun queries and decompose multi-fact questions into several recall calls. Set inject:true to ALSO get the top connected memories' content in one call (skips manual read_key/read_memory) — returns {keys, memories}. Opt-in: trades the deliberate-navigation flow's context-efficiency and precision (the injected set carries lower-precision associative neighbours) for fewer round trips. inject_top_k caps the injected set; inject_prefer_depth favors confirmed (deep) memories; inject_explore_shallow reserves one slot for a weak/recent memory.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          query: { type: "string" },
-          top_k: { type: "number" },
-          namespace: { type: "string" },
-          inject: { type: "boolean" },
-          inject_top_k: { type: "number" },
-          inject_prefer_depth: { type: "boolean" },
-          inject_explore_shallow: { type: "boolean" },
-        },
-        required: ["query"],
-      },
-    },
-    {
-      name: "read_key",
-      description:
-        "List the memories stored under one key (concept), ranked. Returns the canonical key, its aliases, and hub metadata plus ranked memory IDs and metadata — never memory content. Call read_memory on promising handles. Use limit/offset to page through hub keys without flooding context. Pass the original query: handles are then ranked by content relevance to it, which is essential for hub keys so the target memory surfaces first instead of being buried.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          key_id: { type: "string" },
-          query: { type: "string" },
-          namespace: { type: "string" },
-          limit: { type: "number" },
-          offset: { type: "number" },
-        },
-        required: ["key_id"],
-      },
-    },
-    {
-      name: "read_memory",
-      description:
-        "Read the full content of one stored memory (selected via read_key). Returns the memory and all connected key clusters so exploration can continue Key → Memory → Key. Pass via_key_id from the selected key: only that traversed edge is Hebbian-reinforced, and depth/access count increase only when this full read occurs.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          memory_id: { type: "string" },
-          via_key_id: { type: "string" },
-          namespace: { type: "string" },
-        },
-        required: ["memory_id"],
-      },
-    },
-    ...(DIRECT_RECALL_ENABLED
-      ? [
-          {
-            name: "recall_memories",
-            description:
-              "Optional compatibility mode: directly return ranked memories using BM25+dense+RRF and graph expansion. Disabled unless KEYMEM_DIRECT_RECALL=true. Prefer recall → read_key → read_memory for agent-driven navigation.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                query: { type: "string" },
-                top_k: { type: "number" },
-                namespace: { type: "string" },
-                expand: { type: "boolean" },
-                hops: { type: "number" },
-                min_rel_score: { type: "number" },
-                min_score: { type: "number" },
-                min_z: { type: "number" },
-                min_key_gate: { type: "number" },
-                min_depth: { type: "number" },
-              },
-              required: ["query"],
-            },
-          },
-        ]
-      : []),
-    {
-      name: "remember",
-      description:
-        "Save important information to memory. Keys are search terms — think 'what would I search to find this later?' Use 3-6 diverse keys. Before coining new keys, recall() the topic and reuse returned canonical concepts or aliases. Semantically merged synonyms become aliases in one key cluster; shared broad keys become navigable hubs. CROSS-LINGUAL: add keys in both languages. namespace groups memories by project/context; ttl_seconds sets expiry; related_to adds explicit memory links; source attaches provenance and is auto-stamped with the server session, a timestamp, and — when a host agent (Claude Code, Codex) transcript is active — host_session/host_agent/host_turn so the memory can be traced back to its original conversation via get_conversation.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          content: { type: "string" },
-          keys: { type: "array", items: { type: "string" } },
-          key_types: {
-            type: "object",
-            additionalProperties: { type: "string" },
-          },
-          namespace: { type: "string" },
-          ttl_seconds: { type: "number" },
-          related_to: { type: "array", items: { type: "string" } },
-          source: { type: "object", additionalProperties: true },
-        },
-        required: ["content", "keys"],
-      },
-    },
-    {
-      name: "correct",
-      description:
-        "Update outdated information. Use when user corrects you or info changes (e.g. moved cities, changed job). Old version is preserved but weakened — never lost. Omit keys to keep the same search terms. related_to links the updated memory to other memory IDs.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          memory_id: { type: "string" },
-          content: { type: "string" },
-          keys: { type: "array", items: { type: "string" } },
-          key_types: {
-            type: "object",
-            additionalProperties: { type: "string" },
-          },
-          related_to: { type: "array", items: { type: "string" } },
-          source: { type: "object", additionalProperties: true },
-        },
-        required: ["memory_id", "content"],
-      },
-    },
-    {
-      name: "related",
-      description:
-        "Find other memories associated with a memory you already have (by ID). Returns neighboring memories connected by shared keys or explicit links. For normal agent-driven navigation prefer read_memory(), inspect its returned keys, then call read_key().",
-      inputSchema: {
-        type: "object",
-        properties: {
-          memory_id: { type: "string" },
-        },
-        required: ["memory_id"],
-      },
-    },
-    {
-      name: "forget",
-      description:
-        "Permanently delete a memory. Only use for completely wrong information. For outdated info, use correct() instead — it preserves history.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          memory_id: { type: "string" },
-        },
-        required: ["memory_id"],
-      },
-    },
-    {
-      name: "get_conversation",
-      description:
-        "Load the original conversation turns for a past session when a recalled memory lacks the detail you need and you want the verbatim exchange. Reads the host coding agent's own on-disk transcript (Claude Code, Codex) — call list_sessions first to find a session_id. Falls back to keymem's own conversation log if a host integration wrote one. Pass turn to fetch a focused ±2-turn window (5 turns total) and keep context lean; omit turn to load the whole session. Returns turns [{turn, role, content, ts}] in chronological order, with non-conversational noise (reasoning, tool calls) stripped; an unknown session_id returns an empty array.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          session_id: {
-            type: "string",
-            description:
-              "Session id to load — the UUID from a list_sessions result, or the host_session stamped on a recalled memory's source (pass host_agent as agent and host_turn as turn to land on the exact exchange).",
-          },
-          turn: {
-            type: "number",
-            description:
-              "Optional 0-based turn index to center on; returns that turn plus the 2 before and 2 after (5 turns). Omit to return the full conversation.",
-          },
-          agent: {
-            type: "string",
-            enum: ["claude", "codex"],
-            description:
-              "Which host agent's transcript store to read. Omit to auto-detect by session id across all known agents.",
-          },
-        },
-        required: ["session_id"],
-      },
-    },
-    {
-      name: "list_sessions",
-      description:
-        "List recent conversation sessions recorded by host coding agents (Claude Code, Codex) on this machine, most recently modified first. Use this to discover a session_id (and its working directory) before calling get_conversation to read the verbatim transcript. Returns [{agent, session_id, cwd, modified, preview}] where preview is the first user message. Returns an empty array if no agent transcripts are found.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          agent: {
-            type: "string",
-            enum: ["claude", "codex"],
-            description: "Restrict to one host agent. Omit to list across all known agents.",
-          },
-          limit: {
-            type: "number",
-            description: "Maximum number of sessions to return (most recent first).",
-          },
-        },
-        required: [],
-      },
-    },
-    {
-      name: "list_memories",
-      description:
-        "List all stored memories. namespace filters by project/context. Expired memories are excluded. Prefer recall() for normal retrieval.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          namespace: { type: "string" },
-        },
-        required: [],
-      },
-    },
-    {
-      name: "remember_batch",
-      description:
-        "Save multiple memories in one call. Each item: {content, keys, key_types?, namespace?, ttl_seconds?, related_to?}. Returns list of saved IDs. More efficient than multiple remember() calls.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          items: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                content: { type: "string" },
-                keys: { type: "array", items: { type: "string" } },
-                key_types: {
-                  type: "object",
-                  additionalProperties: { type: "string" },
-                },
-                namespace: { type: "string" },
-                ttl_seconds: { type: "number" },
-                related_to: { type: "array", items: { type: "string" } },
-                source: { type: "object", additionalProperties: true },
-              },
-              required: ["content", "keys"],
-            },
-          },
-        },
-        required: ["items"],
-      },
-    },
-    {
-      name: "cleanup_expired",
-      description:
-        "Delete all memories past their ttl. Returns count of deleted memories. Call periodically to keep memory clean.",
-      inputSchema: {
-        type: "object",
-        properties: {},
-        required: [],
-      },
-    },
-    {
-      name: "memory_stats",
-      description: "Get counts of keys, memories, and links in the system.",
-      inputSchema: {
-        type: "object",
-        properties: {},
-        required: [],
-      },
-    },
-  ];
-  return {
-    tools: transcriptAccessForRequest(headers)
-      ? tools
-      : tools.filter((t) => !TRANSCRIPT_TOOLS.has(t.name)),
-  };
-});
+      capabilities: { tools: {}, prompts: {} },
+      instructions: SERVER_INSTRUCTIONS,
+    }
+  );
 
-// ── Tool call handler ──
-
-server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-  const { name, arguments: args } = request.params;
-  const a = (args ?? {}) as Record<string, unknown>;
-  const headers = extra.requestInfo?.headers;
-
-  try {
-    switch (name) {
-      case "recall": {
-        if (a.inject === true) {
-          const injected = await graph.recallInject(
-            a.query as string,
-            typeof a.inject_top_k === "number" ? a.inject_top_k : 5,
-            typeof a.namespace === "string" ? a.namespace : null,
+  server.setRequestHandler(ListToolsRequestSchema, async (_req, extra) => {
+    const headers = extra.requestInfo?.headers;
+    const tools = [
+      {
+        name: "recall",
+        description:
+          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Returns matching key clusters only (not memory content): canonical concept, aliases, key type, match score, linked-memory count, hub status, and specificity. Follow up with read_key(key_id) then read_memory(memory_id, via_key_id) to read a stored fact. Use short focused noun queries and decompose multi-fact questions into several recall calls. Set inject:true to ALSO get the top connected memories' content in one call (skips manual read_key/read_memory) — returns {keys, memories}. Opt-in: trades the deliberate-navigation flow's context-efficiency and precision (the injected set carries lower-precision associative neighbours) for fewer round trips. inject_top_k caps the injected set; inject_prefer_depth favors confirmed (deep) memories; inject_explore_shallow reserves one slot for a weak/recent memory.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            top_k: { type: "number" },
+            namespace: { type: "string" },
+            inject: { type: "boolean" },
+            inject_top_k: { type: "number" },
+            inject_prefer_depth: { type: "boolean" },
+            inject_explore_shallow: { type: "boolean" },
+          },
+          required: ["query"],
+        },
+      },
+      {
+        name: "read_key",
+        description:
+          "List the memories stored under one key (concept), ranked. Returns the canonical key, its aliases, and hub metadata plus ranked memory IDs and metadata — never memory content. Call read_memory on promising handles. Use limit/offset to page through hub keys without flooding context. Pass the original query: handles are then ranked by content relevance to it, which is essential for hub keys so the target memory surfaces first instead of being buried.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            key_id: { type: "string" },
+            query: { type: "string" },
+            namespace: { type: "string" },
+            limit: { type: "number" },
+            offset: { type: "number" },
+          },
+          required: ["key_id"],
+        },
+      },
+      {
+        name: "read_memory",
+        description:
+          "Read the full content of one stored memory (selected via read_key). Returns the memory and all connected key clusters so exploration can continue Key → Memory → Key. Pass via_key_id from the selected key: only that traversed edge is Hebbian-reinforced, and depth/access count increase only when this full read occurs.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            memory_id: { type: "string" },
+            via_key_id: { type: "string" },
+            namespace: { type: "string" },
+          },
+          required: ["memory_id"],
+        },
+      },
+      ...(DIRECT_RECALL_ENABLED
+        ? [
             {
-              preferDepth: a.inject_prefer_depth === true,
-              exploreShallow: a.inject_explore_shallow === true,
+              name: "recall_memories",
+              description:
+                "Optional compatibility mode: directly return ranked memories using BM25+dense+RRF and graph expansion. Disabled unless KEYMEM_DIRECT_RECALL=true. Prefer recall → read_key → read_memory for agent-driven navigation.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  query: { type: "string" },
+                  top_k: { type: "number" },
+                  namespace: { type: "string" },
+                  expand: { type: "boolean" },
+                  hops: { type: "number" },
+                  min_rel_score: { type: "number" },
+                  min_score: { type: "number" },
+                  min_z: { type: "number" },
+                  min_key_gate: { type: "number" },
+                  min_depth: { type: "number" },
+                },
+                required: ["query"],
+              },
+            },
+          ]
+        : []),
+      {
+        name: "remember",
+        description:
+          "Save important information to memory. Keys are search terms — think 'what would I search to find this later?' Use 3-6 diverse keys. Before coining new keys, recall() the topic and reuse returned canonical concepts or aliases. Semantically merged synonyms become aliases in one key cluster; shared broad keys become navigable hubs. CROSS-LINGUAL: add keys in both languages. namespace groups memories by project/context; ttl_seconds sets expiry; related_to adds explicit memory links; source attaches provenance and is auto-stamped with the server session, a timestamp, and — when a host agent (Claude Code, Codex) transcript is active — host_session/host_agent/host_turn so the memory can be traced back to its original conversation via get_conversation.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            content: { type: "string" },
+            keys: { type: "array", items: { type: "string" } },
+            key_types: {
+              type: "object",
+              additionalProperties: { type: "string" },
+            },
+            namespace: { type: "string" },
+            ttl_seconds: { type: "number" },
+            related_to: { type: "array", items: { type: "string" } },
+            source: { type: "object", additionalProperties: true },
+          },
+          required: ["content", "keys"],
+        },
+      },
+      {
+        name: "correct",
+        description:
+          "Update outdated information. Use when user corrects you or info changes (e.g. moved cities, changed job). Old version is preserved but weakened — never lost. Omit keys to keep the same search terms. related_to links the updated memory to other memory IDs.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            memory_id: { type: "string" },
+            content: { type: "string" },
+            keys: { type: "array", items: { type: "string" } },
+            key_types: {
+              type: "object",
+              additionalProperties: { type: "string" },
+            },
+            related_to: { type: "array", items: { type: "string" } },
+            source: { type: "object", additionalProperties: true },
+          },
+          required: ["memory_id", "content"],
+        },
+      },
+      {
+        name: "related",
+        description:
+          "Find other memories associated with a memory you already have (by ID). Returns neighboring memories connected by shared keys or explicit links. For normal agent-driven navigation prefer read_memory(), inspect its returned keys, then call read_key().",
+        inputSchema: {
+          type: "object",
+          properties: {
+            memory_id: { type: "string" },
+          },
+          required: ["memory_id"],
+        },
+      },
+      {
+        name: "forget",
+        description:
+          "Permanently delete a memory. Only use for completely wrong information. For outdated info, use correct() instead — it preserves history.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            memory_id: { type: "string" },
+          },
+          required: ["memory_id"],
+        },
+      },
+      {
+        name: "get_conversation",
+        description:
+          "Load the original conversation turns for a past session when a recalled memory lacks the detail you need and you want the verbatim exchange. Reads the host coding agent's own on-disk transcript (Claude Code, Codex) — call list_sessions first to find a session_id. Falls back to keymem's own conversation log if a host integration wrote one. Pass turn to fetch a focused ±2-turn window (5 turns total) and keep context lean; omit turn to load the whole session. Returns turns [{turn, role, content, ts}] in chronological order, with non-conversational noise (reasoning, tool calls) stripped; an unknown session_id returns an empty array.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            session_id: {
+              type: "string",
+              description:
+                "Session id to load — the UUID from a list_sessions result, or the host_session stamped on a recalled memory's source (pass host_agent as agent and host_turn as turn to land on the exact exchange).",
+            },
+            turn: {
+              type: "number",
+              description:
+                "Optional 0-based turn index to center on; returns that turn plus the 2 before and 2 after (5 turns). Omit to return the full conversation.",
+            },
+            agent: {
+              type: "string",
+              enum: ["claude", "codex"],
+              description:
+                "Which host agent's transcript store to read. Omit to auto-detect by session id across all known agents.",
+            },
+          },
+          required: ["session_id"],
+        },
+      },
+      {
+        name: "list_sessions",
+        description:
+          "List recent conversation sessions recorded by host coding agents (Claude Code, Codex) on this machine, most recently modified first. Use this to discover a session_id (and its working directory) before calling get_conversation to read the verbatim transcript. Returns [{agent, session_id, cwd, modified, preview}] where preview is the first user message. Returns an empty array if no agent transcripts are found.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            agent: {
+              type: "string",
+              enum: ["claude", "codex"],
+              description: "Restrict to one host agent. Omit to list across all known agents.",
+            },
+            limit: {
+              type: "number",
+              description: "Maximum number of sessions to return (most recent first).",
+            },
+          },
+          required: [],
+        },
+      },
+      {
+        name: "list_memories",
+        description:
+          "List all stored memories. namespace filters by project/context. Expired memories are excluded. Prefer recall() for normal retrieval.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            namespace: { type: "string" },
+          },
+          required: [],
+        },
+      },
+      {
+        name: "remember_batch",
+        description:
+          "Save multiple memories in one call. Each item: {content, keys, key_types?, namespace?, ttl_seconds?, related_to?}. Returns list of saved IDs. More efficient than multiple remember() calls.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            items: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  content: { type: "string" },
+                  keys: { type: "array", items: { type: "string" } },
+                  key_types: {
+                    type: "object",
+                    additionalProperties: { type: "string" },
+                  },
+                  namespace: { type: "string" },
+                  ttl_seconds: { type: "number" },
+                  related_to: { type: "array", items: { type: "string" } },
+                  source: { type: "object", additionalProperties: true },
+                },
+                required: ["content", "keys"],
+              },
+            },
+          },
+          required: ["items"],
+        },
+      },
+      {
+        name: "cleanup_expired",
+        description:
+          "Delete all memories past their ttl. Returns count of deleted memories. Call periodically to keep memory clean.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "memory_stats",
+        description: "Get counts of keys, memories, and links in the system.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+    ];
+    return {
+      tools: transcriptAccessForRequest(headers)
+        ? tools
+        : tools.filter((t) => !TRANSCRIPT_TOOLS.has(t.name)),
+    };
+  });
+
+  // ── Tool call handler ──
+
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    const { name, arguments: args } = request.params;
+    const a = (args ?? {}) as Record<string, unknown>;
+    const headers = extra.requestInfo?.headers;
+
+    try {
+      switch (name) {
+        case "recall": {
+          if (a.inject === true) {
+            const injected = await graph.recallInject(
+              a.query as string,
+              typeof a.inject_top_k === "number" ? a.inject_top_k : 5,
+              typeof a.namespace === "string" ? a.namespace : null,
+              {
+                preferDepth: a.inject_prefer_depth === true,
+                exploreShallow: a.inject_explore_shallow === true,
+              }
+            );
+            return { content: [{ type: "text", text: JSON.stringify(injected, null, 0) }] };
+          }
+          const results = await graph.searchKeys(
+            a.query as string,
+            typeof a.top_k === "number" ? a.top_k : 8,
+            typeof a.namespace === "string" ? a.namespace : null
+          );
+          return { content: [{ type: "text", text: JSON.stringify(results, null, 0) }] };
+        }
+
+        case "read_key": {
+          const result = await graph.readKey(a.key_id as string, {
+            query: typeof a.query === "string" ? a.query : null,
+            namespace: typeof a.namespace === "string" ? a.namespace : null,
+            limit: typeof a.limit === "number" ? a.limit : 10,
+            offset: typeof a.offset === "number" ? a.offset : 0,
+          });
+          return { content: [{ type: "text", text: JSON.stringify(result) }] };
+        }
+
+        case "read_memory": {
+          const result = await graph.readMemory(
+            a.memory_id as string,
+            typeof a.via_key_id === "string" ? a.via_key_id : null,
+            typeof a.namespace === "string" ? a.namespace : null
+          );
+          return { content: [{ type: "text", text: JSON.stringify(result) }] };
+        }
+
+        case "recall_memories": {
+          if (!DIRECT_RECALL_ENABLED) throw new Error("recall_memories is disabled");
+          const results = await graph.recall(
+            a.query as string,
+            typeof a.top_k === "number" ? a.top_k : 5,
+            typeof a.namespace === "string" ? a.namespace : null,
+            typeof a.expand === "boolean" ? a.expand : false,
+            typeof a.hops === "number" ? a.hops : 2,
+            typeof a.min_rel_score === "number" ? a.min_rel_score : 0,
+            typeof a.min_score === "number" ? a.min_score : undefined,
+            typeof a.min_z === "number" ? a.min_z : undefined,
+            typeof a.min_key_gate === "number" ? a.min_key_gate : undefined,
+            typeof a.min_depth === "number" ? a.min_depth : 0
+          );
+          return { content: [{ type: "text", text: JSON.stringify(results) }] };
+        }
+
+        case "remember": {
+          const keys = sanitizeKeys(a.keys);
+          const hostLink = await resolveHostLink(headers);
+          const [mid, wasDedup, superseded, conflict] = await graph.add(
+            a.content as string,
+            keys,
+            {
+              keyTypes: parseObject(a.key_types) as Record<string, string> | null,
+              namespace: typeof a.namespace === "string" ? a.namespace : "default",
+              ttlSeconds: parseNumber(a.ttl_seconds),
+              relatedTo: parseArray(a.related_to) as string[] | null,
+              source: buildSource(parseObject(a.source), "remember", hostLink),
             }
           );
-          return { content: [{ type: "text", text: JSON.stringify(injected, null, 0) }] };
-        }
-        const results = await graph.searchKeys(
-          a.query as string,
-          typeof a.top_k === "number" ? a.top_k : 8,
-          typeof a.namespace === "string" ? a.namespace : null
-        );
-        return { content: [{ type: "text", text: JSON.stringify(results, null, 0) }] };
-      }
-
-      case "read_key": {
-        const result = await graph.readKey(a.key_id as string, {
-          query: typeof a.query === "string" ? a.query : null,
-          namespace: typeof a.namespace === "string" ? a.namespace : null,
-          limit: typeof a.limit === "number" ? a.limit : 10,
-          offset: typeof a.offset === "number" ? a.offset : 0,
-        });
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-      }
-
-      case "read_memory": {
-        const result = await graph.readMemory(
-          a.memory_id as string,
-          typeof a.via_key_id === "string" ? a.via_key_id : null,
-          typeof a.namespace === "string" ? a.namespace : null
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-      }
-
-      case "recall_memories": {
-        if (!DIRECT_RECALL_ENABLED) throw new Error("recall_memories is disabled");
-        const results = await graph.recall(
-          a.query as string,
-          typeof a.top_k === "number" ? a.top_k : 5,
-          typeof a.namespace === "string" ? a.namespace : null,
-          typeof a.expand === "boolean" ? a.expand : false,
-          typeof a.hops === "number" ? a.hops : 2,
-          typeof a.min_rel_score === "number" ? a.min_rel_score : 0,
-          typeof a.min_score === "number" ? a.min_score : undefined,
-          typeof a.min_z === "number" ? a.min_z : undefined,
-          typeof a.min_key_gate === "number" ? a.min_key_gate : undefined,
-          typeof a.min_depth === "number" ? a.min_depth : 0
-        );
-        return { content: [{ type: "text", text: JSON.stringify(results) }] };
-      }
-
-      case "remember": {
-        const keys = sanitizeKeys(a.keys);
-        const hostLink = await resolveHostLink(headers);
-        const [mid, wasDedup, superseded, conflict] = await graph.add(
-          a.content as string,
-          keys,
-          {
-            keyTypes: parseObject(a.key_types) as Record<string, string> | null,
-            namespace: typeof a.namespace === "string" ? a.namespace : "default",
-            ttlSeconds: parseNumber(a.ttl_seconds),
-            relatedTo: parseArray(a.related_to) as string[] | null,
-            source: buildSource(parseObject(a.source), "remember", hostLink),
+          let result: Record<string, unknown>;
+          if (!wasDedup) {
+            result = { saved: mid };
+          } else if (conflict) {
+            // High similarity but a SHARED KEY — looks like a conflicting fact, not a
+            // restatement. Surface the superseded id so the overwrite is recoverable.
+            result = {
+              saved: mid,
+              superseded,
+              conflict: true,
+              note: `Replaced a memory that shared a key (id: ${superseded}). The previous fact is no longer retrievable via recall or read — only its id remains. If these are distinct or conflicting facts (not a restatement), re-add the previous one with a more specific key so both are kept.`,
+            };
+          } else {
+            result = {
+              saved: mid,
+              superseded,
+              deduplicated: true,
+              note: `Similar memory existed (id: ${superseded}) — updated instead of creating a duplicate.`,
+            };
           }
-        );
-        let result: Record<string, unknown>;
-        if (!wasDedup) {
-          result = { saved: mid };
-        } else if (conflict) {
-          // High similarity but a SHARED KEY — looks like a conflicting fact, not a
-          // restatement. Surface the superseded id so the overwrite is recoverable.
-          result = {
-            saved: mid,
-            superseded,
-            conflict: true,
-            note: `Replaced a memory that shared a key (id: ${superseded}). The previous fact is no longer retrievable via recall or read — only its id remains. If these are distinct or conflicting facts (not a restatement), re-add the previous one with a more specific key so both are kept.`,
-          };
-        } else {
-          result = {
-            saved: mid,
-            superseded,
-            deduplicated: true,
-            note: `Similar memory existed (id: ${superseded}) — updated instead of creating a duplicate.`,
-          };
+          return { content: [{ type: "text", text: JSON.stringify(result) }] };
         }
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-      }
 
-      case "correct": {
-        const hostLink = await resolveHostLink(headers);
-        const nid = await graph.supersede(
-          a.memory_id as string,
-          a.content as string,
-          {
-            keyConcepts: parseArray(a.keys) as string[] | null,
-            keyTypes: parseObject(a.key_types) as Record<string, string> | null,
-            relatedTo: parseArray(a.related_to) as string[] | null,
-            source: buildSource(parseObject(a.source), "correct", hostLink),
-          }
-        );
-        const retainedKeys = graph.getKeysForMemory(nid);
-        const note = buildRetagNote(a.keys, retainedKeys);
-        const result: Record<string, unknown> = { new_id: nid, superseded: a.memory_id };
-        if (note) result.note = note;
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-      }
-
-      case "related": {
-        const results = graph.getRelated(a.memory_id as string);
-        return { content: [{ type: "text", text: JSON.stringify(results) }] };
-      }
-
-      case "forget": {
-        const ok = await graph.delete(a.memory_id as string);
-        return { content: [{ type: "text", text: JSON.stringify({ deleted: ok }) }] };
-      }
-
-      case "get_conversation": {
-        if (!transcriptAccessForRequest(headers)) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  error:
-                    "Transcript access is disabled. Run keymem under a host agent (Claude Code / Codex) or set KEYMEM_TRANSCRIPT_ACCESS=true.",
-                }),
-              },
-            ],
-          };
-        }
-        const sessionId = a.session_id as string;
-        const turn = typeof a.turn === "number" ? a.turn : null;
-        const agent = a.agent === "claude" || a.agent === "codex" ? (a.agent as Agent) : null;
-        let turns: object[];
-        if (agent) {
-          turns = await loadNativeConversation(agent, sessionId, turn);
-        } else {
-          // No agent hint: try the host agents' native transcripts, then fall
-          // back to keymem's own conversation log.
-          turns = await loadNativeAuto(sessionId, turn);
-          if (turns.length === 0) turns = await loadConversation(sessionId, turn);
-        }
-        return { content: [{ type: "text", text: JSON.stringify(turns) }] };
-      }
-
-      case "list_sessions": {
-        if (!transcriptAccessForRequest(headers)) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  error:
-                    "Transcript access is disabled. Run keymem under a host agent (Claude Code / Codex) or set KEYMEM_TRANSCRIPT_ACCESS=true.",
-                }),
-              },
-            ],
-          };
-        }
-        const sessions = await listNativeSessions({
-          agent: a.agent === "claude" || a.agent === "codex" ? (a.agent as Agent) : undefined,
-          limit: typeof a.limit === "number" ? a.limit : undefined,
-        });
-        return { content: [{ type: "text", text: JSON.stringify(sessions) }] };
-      }
-
-      case "list_memories": {
-        const results = graph.listAll(
-          typeof a.namespace === "string" ? a.namespace : null
-        );
-        return { content: [{ type: "text", text: JSON.stringify(results) }] };
-      }
-
-      case "remember_batch": {
-        const items = (parseArray(a.items) ?? []) as Array<Record<string, unknown>>;
-        const hostLink = await resolveHostLink(headers); // detect once for the whole batch
-        const results: object[] = [];
-        for (const item of items) {
-          const content = item.content as string;
-          const keys = sanitizeKeys(item.keys);
-          if (!content || keys.length === 0) {
-            results.push({ error: "content and keys required", item });
-            continue;
-          }
-          const [mid, wasDedup] = await graph.add(content, keys, {
-            keyTypes: item.key_types as Record<string, string> | null,
-            namespace: typeof item.namespace === "string" ? item.namespace : "default",
-            ttlSeconds: parseNumber(item.ttl_seconds),
-            relatedTo: Array.isArray(item.related_to) ? (item.related_to as string[]) : null,
-            source: buildSource((item.source as Record<string, unknown>) ?? null, "remember_batch", hostLink),
-          });
-          results.push({ saved: mid, deduplicated: wasDedup });
-        }
-        return { content: [{ type: "text", text: JSON.stringify(results) }] };
-      }
-
-      case "cleanup_expired": {
-        const count = await graph.cleanupExpired();
-        return { content: [{ type: "text", text: JSON.stringify({ deleted: count }) }] };
-      }
-
-      case "memory_stats": {
-        return {
-          content: [
+        case "correct": {
+          const hostLink = await resolveHostLink(headers);
+          const nid = await graph.supersede(
+            a.memory_id as string,
+            a.content as string,
             {
-              type: "text",
-              text: JSON.stringify({
-                keys: Object.keys(graph.keys).length,
-                memories: graph.listAll().length,
-                links: graph.linkCount,
-              }),
-            },
-          ],
-        };
+              keyConcepts: parseArray(a.keys) as string[] | null,
+              keyTypes: parseObject(a.key_types) as Record<string, string> | null,
+              relatedTo: parseArray(a.related_to) as string[] | null,
+              source: buildSource(parseObject(a.source), "correct", hostLink),
+            }
+          );
+          const retainedKeys = graph.getKeysForMemory(nid);
+          const note = buildRetagNote(a.keys, retainedKeys);
+          const result: Record<string, unknown> = { new_id: nid, superseded: a.memory_id };
+          if (note) result.note = note;
+          return { content: [{ type: "text", text: JSON.stringify(result) }] };
+        }
+
+        case "related": {
+          const results = graph.getRelated(a.memory_id as string);
+          return { content: [{ type: "text", text: JSON.stringify(results) }] };
+        }
+
+        case "forget": {
+          const ok = await graph.delete(a.memory_id as string);
+          return { content: [{ type: "text", text: JSON.stringify({ deleted: ok }) }] };
+        }
+
+        case "get_conversation": {
+          if (!transcriptAccessForRequest(headers)) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    error:
+                      "Transcript access is disabled. Run keymem under a host agent (Claude Code / Codex) or set KEYMEM_TRANSCRIPT_ACCESS=true.",
+                  }),
+                },
+              ],
+            };
+          }
+          const sessionId = a.session_id as string;
+          const turn = typeof a.turn === "number" ? a.turn : null;
+          const agent = a.agent === "claude" || a.agent === "codex" ? (a.agent as Agent) : null;
+          let turns: object[];
+          if (agent) {
+            turns = await loadNativeConversation(agent, sessionId, turn);
+          } else {
+            // No agent hint: try the host agents' native transcripts, then fall
+            // back to keymem's own conversation log.
+            turns = await loadNativeAuto(sessionId, turn);
+            if (turns.length === 0) turns = await loadConversation(sessionId, turn);
+          }
+          return { content: [{ type: "text", text: JSON.stringify(turns) }] };
+        }
+
+        case "list_sessions": {
+          if (!transcriptAccessForRequest(headers)) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    error:
+                      "Transcript access is disabled. Run keymem under a host agent (Claude Code / Codex) or set KEYMEM_TRANSCRIPT_ACCESS=true.",
+                  }),
+                },
+              ],
+            };
+          }
+          const sessions = await listNativeSessions({
+            agent: a.agent === "claude" || a.agent === "codex" ? (a.agent as Agent) : undefined,
+            limit: typeof a.limit === "number" ? a.limit : undefined,
+          });
+          return { content: [{ type: "text", text: JSON.stringify(sessions) }] };
+        }
+
+        case "list_memories": {
+          const results = graph.listAll(
+            typeof a.namespace === "string" ? a.namespace : null
+          );
+          return { content: [{ type: "text", text: JSON.stringify(results) }] };
+        }
+
+        case "remember_batch": {
+          const items = (parseArray(a.items) ?? []) as Array<Record<string, unknown>>;
+          const hostLink = await resolveHostLink(headers); // detect once for the whole batch
+          const results: object[] = [];
+          for (const item of items) {
+            const content = item.content as string;
+            const keys = sanitizeKeys(item.keys);
+            if (!content || keys.length === 0) {
+              results.push({ error: "content and keys required", item });
+              continue;
+            }
+            const [mid, wasDedup] = await graph.add(content, keys, {
+              keyTypes: item.key_types as Record<string, string> | null,
+              namespace: typeof item.namespace === "string" ? item.namespace : "default",
+              ttlSeconds: parseNumber(item.ttl_seconds),
+              relatedTo: Array.isArray(item.related_to) ? (item.related_to as string[]) : null,
+              source: buildSource((item.source as Record<string, unknown>) ?? null, "remember_batch", hostLink),
+            });
+            results.push({ saved: mid, deduplicated: wasDedup });
+          }
+          return { content: [{ type: "text", text: JSON.stringify(results) }] };
+        }
+
+        case "cleanup_expired": {
+          const count = await graph.cleanupExpired();
+          return { content: [{ type: "text", text: JSON.stringify({ deleted: count }) }] };
+        }
+
+        case "memory_stats": {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  keys: Object.keys(graph.keys).length,
+                  memories: graph.listAll().length,
+                  links: graph.linkCount,
+                }),
+              },
+            ],
+          };
+        }
+
+        default:
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: `Unknown tool: ${name}` }) }],
+            isError: true,
+          };
       }
-
-      default:
-        return {
-          content: [{ type: "text", text: JSON.stringify({ error: `Unknown tool: ${name}` }) }],
-          isError: true,
-        };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: msg }) }],
+        isError: true,
+      };
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return {
-      content: [{ type: "text", text: JSON.stringify({ error: msg }) }],
-      isError: true,
-    };
-  }
-});
+  });
 
-// ── Prompt definitions ──
+  // ── Prompt definitions ──
 
-server.setRequestHandler(ListPromptsRequestSchema, async () => ({
-  prompts: [
-    {
-      name: "memory_system_prompt",
-      description:
-        "System prompt for LLM agents using keymem. Include this in your system prompt.",
-    },
-  ],
-}));
-
-server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-  if (request.params.name !== "memory_system_prompt") {
-    throw new Error(`Unknown prompt: ${request.params.name}`);
-  }
-  return {
-    messages: [
+  server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+    prompts: [
       {
-        role: "user",
-        content: {
-          type: "text",
-          text: MEMORY_SYSTEM.replace("{stats}", stats()),
-        },
+        name: "memory_system_prompt",
+        description:
+          "System prompt for LLM agents using keymem. Include this in your system prompt.",
       },
     ],
-  };
-});
+  }));
+
+  server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+    if (request.params.name !== "memory_system_prompt") {
+      throw new Error(`Unknown prompt: ${request.params.name}`);
+    }
+    return {
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: MEMORY_SYSTEM.replace("{stats}", stats()),
+          },
+        },
+      ],
+    };
+  });
+
+  return server;
+}
+
+// Back-compat: existing `import { server } from "./server.js"` consumers keep working.
+export const server = createMcpServer();
