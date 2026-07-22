@@ -67,3 +67,25 @@ test("transcriptAccessForRequest is true when host headers present", () => {
     true
   );
 });
+
+// Regression: the CallTool handlers for get_conversation/list_sessions must
+// gate on this same header-aware check (not the env-only
+// transcriptAccessEnabled()), so a daemon caller with trusted host-session
+// headers but no env flag still gets access — matching what ListTools
+// already advertises.
+test("transcriptAccessForRequest is true from headers alone, even when env transcript access is off", () => {
+  const prev = process.env.KEYMEM_TRANSCRIPT_ACCESS;
+  process.env.KEYMEM_TRANSCRIPT_ACCESS = "false";
+  try {
+    assert.equal(
+      transcriptAccessForRequest({
+        "x-keymem-host-agent": "claude",
+        "x-keymem-host-session": "e7f5b1d2-1602-4180-ac66-9f9acbd1f673",
+      }),
+      true
+    );
+  } finally {
+    if (prev === undefined) delete process.env.KEYMEM_TRANSCRIPT_ACCESS;
+    else process.env.KEYMEM_TRANSCRIPT_ACCESS = prev;
+  }
+});

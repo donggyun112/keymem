@@ -610,7 +610,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       }
 
       case "get_conversation": {
-        if (!transcriptAccessEnabled()) {
+        if (!transcriptAccessForRequest(headers)) {
           return {
             content: [
               {
@@ -639,7 +639,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       }
 
       case "list_sessions": {
-        if (!transcriptAccessEnabled()) {
+        if (!transcriptAccessForRequest(headers)) {
           return {
             content: [
               {
