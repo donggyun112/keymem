@@ -35,7 +35,9 @@
   "license": "MIT",
   "main": "dist/index.js",
   "bin": {
-    "keymem": "dist/index.js"
+    "keymem": "dist/index.js",
+    "keymem-shim": "dist/shim.js",
+    "keymem-daemon": "dist/daemon.js"
   },
   "files": [
     "dist",
@@ -50,6 +52,8 @@
     "prepare": "tsc",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
+    "daemon": "node dist/daemon.js",
+    "shim": "node dist/shim.js",
     "test": "tsx --test test/*.test.ts",
     "bench": "tsx bench/run.ts",
     "bench:keynav": "tsx bench/keynav.ts",
