@@ -12,6 +12,8 @@ import {
   listNativeSessions,
   detectActiveSession,
   transcriptAccessEnabled,
+  hostSessionFromHeaders,
+  hostLinkFromSession,
   type Agent,
 } from "./nativeTranscripts.js";
 import { cfgRaw } from "./env.js";
@@ -69,15 +71,28 @@ export function buildSource(
   };
 }
 
-// Detect the live host session once, swallowing any error so a transcript-read
-// hiccup never blocks a memory save.
-async function detectHostLink(): Promise<{ agent: Agent; session_id: string; turn: number } | null> {
-  if (!transcriptAccessEnabled()) return null; // don't read/stamp transcripts when untrusted
+type ReqHeaders = Record<string, string | string[] | undefined> | undefined;
+
+// Resolve the host transcript link for one request. Header path (daemon) is
+// authoritative and needs no ambient env trust. Env path (stdio in-process
+// fallback) keeps the old gated behavior, including the mtime heuristic.
+export async function resolveHostLink(
+  headers: ReqHeaders
+): Promise<{ agent: Agent; session_id: string; turn: number } | null> {
+  const fromHeader = hostSessionFromHeaders(headers);
+  if (fromHeader) return hostLinkFromSession(fromHeader);
+  if (!transcriptAccessEnabled()) return null;
   try {
     return await detectActiveSession();
   } catch {
     return null;
   }
+}
+
+// Transcript tools/stamping are allowed when we trust the caller: either the
+// request carries host-session headers (daemon) or the env opted in (stdio).
+export function transcriptAccessForRequest(headers: ReqHeaders): boolean {
+  return hostSessionFromHeaders(headers) != null || transcriptAccessEnabled();
 }
 
 const MEMORY_SYSTEM = `\
@@ -205,7 +220,8 @@ export const server = new Server(
 // non-owner agent.
 const TRANSCRIPT_TOOLS = new Set(["get_conversation", "list_sessions"]);
 
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+server.setRequestHandler(ListToolsRequestSchema, async (_req, extra) => {
+  const headers = extra.requestInfo?.headers;
   const tools = [
     {
       name: "recall",
@@ -455,7 +471,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     },
   ];
   return {
-    tools: transcriptAccessEnabled()
+    tools: transcriptAccessForRequest(headers)
       ? tools
       : tools.filter((t) => !TRANSCRIPT_TOOLS.has(t.name)),
   };
@@ -463,9 +479,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
 // ── Tool call handler ──
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   const { name, arguments: args } = request.params;
   const a = (args ?? {}) as Record<string, unknown>;
+  const headers = extra.requestInfo?.headers;
 
   try {
     switch (name) {
@@ -528,7 +545,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "remember": {
         const keys = sanitizeKeys(a.keys);
-        const hostLink = await detectHostLink();
+        const hostLink = await resolveHostLink(headers);
         const [mid, wasDedup, superseded, conflict] = await graph.add(
           a.content as string,
           keys,
@@ -564,7 +581,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "correct": {
-        const hostLink = await detectHostLink();
+        const hostLink = await resolveHostLink(headers);
         const nid = await graph.supersede(
           a.memory_id as string,
           a.content as string,
@@ -651,7 +668,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "remember_batch": {
         const items = (parseArray(a.items) ?? []) as Array<Record<string, unknown>>;
-        const hostLink = await detectHostLink(); // detect once for the whole batch
+        const hostLink = await resolveHostLink(headers); // detect once for the whole batch
         const results: object[] = [];
         for (const item of items) {
           const content = item.content as string;
