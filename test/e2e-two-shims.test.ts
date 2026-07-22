@@ -36,12 +36,10 @@ function client(port: number, sid: string) {
 }
 
 test("two clients on one daemon persist to shared graph with correct provenance", async () => {
-  // idleMs is intentionally small (not 60s): large enough that the idle timer cannot fire
-  // *during* the test (which finishes in well under a second), but small enough that if the
-  // daemon's shutdown path re-arms the idle timer after the last transport closes (see
-  // armIdle()/onclose in src/daemon.ts), the stray timer does not hold the test process open
-  // for a full minute.
-  const d = await startDaemon({ port: 0, idleMs: 1_000 });
+  // idleMs is intentionally LARGE (60s): src/daemon.ts's close() now sets a shutdown flag
+  // before tearing down transports, so armIdle() no-ops during/after shutdown and no stray
+  // timer is left pending — close() (and this test) resolve promptly regardless of idleMs.
+  const d = await startDaemon({ port: 0, idleMs: 60_000 });
   try {
     const a = client(d.port, SID_A);
     const b = client(d.port, SID_B);

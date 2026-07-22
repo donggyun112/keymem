@@ -16,10 +16,11 @@ export async function startDaemon(
   // 세션별 transport. 각 shim = 1 MCP 세션 = 1 Server 인스턴스(graph는 공유).
   const transports = new Map<string, StreamableHTTPServerTransport>();
   let idleTimer: NodeJS.Timeout | null = null;
+  let closing = false;
 
   const armIdle = () => {
-    if (idleTimer) clearTimeout(idleTimer);
-    if (transports.size === 0) {
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+    if (!closing && transports.size === 0) {
       idleTimer = setTimeout(() => process.exit(0), idleMs);
     }
   };
@@ -105,8 +106,12 @@ export async function startDaemon(
   return {
     port,
     close: async () => {
+      closing = true;
       cancelIdle();
       await Promise.allSettled([...transports.values()].map((t) => t.close()));
+      // Belt-and-suspenders: onclose→armIdle() no-ops while closing===true, but cancel again
+      // in case anything slipped in between.
+      cancelIdle();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     },
   };
