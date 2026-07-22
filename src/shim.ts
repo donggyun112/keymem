@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -103,7 +104,15 @@ async function main(): Promise<void> {
   return runInProcess();
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Resolve argv[1] to its realpath before comparing: when invoked via a
+// symlinked bin (e.g. the package.json `keymem-shim` bin), process.argv[1]
+// is the symlink path while import.meta.url is realpath-resolved, so a
+// naive string compare is falsy and main() silently never runs.
+function isCliEntry(): boolean {
+  return process.argv[1] !== undefined && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+}
+
+if (isCliEntry()) {
   main().catch((err) => {
     console.error("[shim fatal]", err);
     process.exit(1);

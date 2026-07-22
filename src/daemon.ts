@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { graph, createMcpServer } from "./server.js";
@@ -117,8 +119,16 @@ export async function startDaemon(
   };
 }
 
-// CLI 진입점
-if (import.meta.url === `file://${process.argv[1]}`) {
+// CLI 진입점. Resolve argv[1] to its realpath before comparing: when invoked
+// via a symlinked bin (e.g. the package.json `keymem-daemon` bin),
+// process.argv[1] is the symlink path while import.meta.url is
+// realpath-resolved, so a naive string compare is falsy and main() silently
+// never runs.
+function isCliEntry(): boolean {
+  return process.argv[1] !== undefined && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+}
+
+if (isCliEntry()) {
   startDaemon().catch((err) => {
     console.error("[daemon fatal]", err);
     process.exit(1);

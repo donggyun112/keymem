@@ -756,6 +756,3 @@ export function createMcpServer(): Server {
 
   return server;
 }
-
-// Back-compat: existing `import { server } from "./server.js"` consumers keep working.
-export const server = createMcpServer();
