@@ -20,6 +20,19 @@ export function hostHeaders(env: NodeJS.ProcessEnv = process.env): Record<string
   return {};
 }
 
+// The daemon must have NO ambient host-session identity: its only source of
+// host identity is per-request X-Keymem-Host-* headers (see hostHeaders()).
+// Strip the session-identifying vars before handing env to the spawned
+// daemon so it doesn't inherit whichever shim happened to autostart it.
+// KEYMEM_TRANSCRIPT_ACCESS (explicit opt-in/out) and everything else pass
+// through untouched.
+export function daemonEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const copy = { ...env };
+  delete copy.CLAUDE_CODE_SESSION_ID;
+  delete copy.CODEX_THREAD_ID;
+  return copy;
+}
+
 // Derives the /health URL for the same host:port as the given MCP url, so
 // ensureDaemon() actually checks the target it was asked about rather than
 // silently falling back to the module-level default port.
@@ -60,7 +73,7 @@ export async function ensureDaemon(
     const child = spawn(process.execPath, [daemonPath], {
       detached: true,
       stdio: "ignore",
-      env: process.env,
+      env: daemonEnv(process.env),
     });
     child.unref();
   }
