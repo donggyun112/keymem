@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.1] - 2026-07-26
+
+### Fixed
+
+- Preserve MCP sessions across transient standalone-SSE disconnects by giving the
+  SDK reconnect loop a grace window before reaping abandoned sessions.
+- Catch shim forwarding and close promise failures so a rejected HTTP send cannot
+  terminate the stdio proxy through an unhandled rejection.
+
+### Changed
+
+- Strengthen the `remember`/`remember_batch` end-of-turn durability gate and add
+  explicit persistent `CLAUDE.md` setup guidance for reliable Claude Code saving.
+- Synchronize the MCP handshake version with the package release version.
+
 ## [0.17.0] - 2026-07-22
 
 Run keymem as a single shared HTTP daemon behind a thin stdio shim, instead of one
