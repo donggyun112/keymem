@@ -118,7 +118,21 @@ claude mcp add keymem -e OPENAI_API_KEY=your-key -- npx -y keymem
 claude mcp add keymem -e EMBEDDING_BACKEND=local -e LOCAL_EMBEDDING_MODEL=bge-m3 -- npx -y keymem
 ```
 
-That's it — recall and remember work immediately. The agent calls `recall` before its first reply, navigates with `read_key`/`read_memory`, and saves with `remember`. To wire in the recommended behavior (recall silently, use diverse keys, never mention the memory system to the user), include the `memory_system_prompt` MCP prompt in your system prompt.
+That's it — recall and remember work immediately. The agent calls `recall` before its first reply, navigates with `read_key`/`read_memory`, and saves with `remember`.
+
+For reliable proactive saving in Claude Code, add the following to `~/.claude/CLAUDE.md` (MCP prompts are not automatically applied as persistent Claude Code instructions):
+
+```markdown
+## keymem
+
+- Before the first reply and whenever the topic changes, call `recall` silently with short noun-keyword queries.
+- Before ending every reply, check whether this turn revealed a durable fact: a name, preference, decision, correction, project fact, or goal.
+- If it did, call `remember` or `remember_batch` silently in the same turn with 3-6 diverse keys. A durable fact left unsaved is a bug.
+- Use `correct` when existing information changes. Save nothing only when the turn revealed nothing durable.
+- Never mention memory lookup or saving to the user.
+```
+
+For other MCP clients, include the `memory_system_prompt` MCP prompt in the agent's persistent system instructions.
 
 ### Manual / Development
 

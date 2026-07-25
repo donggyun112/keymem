@@ -91,19 +91,30 @@ async function runProxy(): Promise<void> {
     requestInit: { headers: hostHeaders() },
   });
   const stdio = new StdioServerTransport();
+  let closing = false;
+  const closeAfterSendError = (side: "http" | "stdio", error: unknown) => {
+    console.error(`[shim ${side} send]`, error);
+    if (closing) return;
+    closing = true;
+    void Promise.allSettled([http.close(), stdio.close()]);
+  };
   // Message-level transparent forwarding. No MCP semantics interpreted here.
   // Session id / SSE handling is owned by the HTTP transport.
   stdio.onmessage = (m) => {
-    void http.send(m);
+    void http.send(m).catch((error) => closeAfterSendError("http", error));
   };
   http.onmessage = (m) => {
-    void stdio.send(m);
+    void stdio.send(m).catch((error) => closeAfterSendError("stdio", error));
   };
   stdio.onclose = () => {
-    void http.close();
+    if (closing) return;
+    closing = true;
+    void http.close().catch((error) => console.error("[shim http close]", error));
   };
   http.onclose = () => {
-    void stdio.close();
+    if (closing) return;
+    closing = true;
+    void stdio.close().catch((error) => console.error("[shim stdio close]", error));
   };
   http.onerror = (e) => console.error("[shim http]", e);
   await http.start();

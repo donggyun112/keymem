@@ -64,7 +64,7 @@ test("abrupt connection drop (no graceful DELETE) is reaped so idle-exit can pro
   // explicit transport.close() call (DELETE handling or daemon shutdown) -- never from
   // the SDK's standalone-SSE ReadableStream `cancel()` callback that fires when the
   // GET stream's socket merely drops. So the session would live in `transports` forever.
-  const d = await startDaemon({ port: 0, idleMs: 60_000 });
+  const d = await startDaemon({ port: 0, idleMs: 60_000, sessionReapGraceMs: 100 });
   try {
     const clientTransport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${d.port}/mcp`));
     const client = new Client({ name: "test", version: "0" });
@@ -83,13 +83,51 @@ test("abrupt connection drop (no graceful DELETE) is reaped so idle-exit can pro
     // Abrupt drop: abort the transport directly (no DELETE sent).
     await clientTransport.close();
 
-    // The reap happens asynchronously off the server's res 'close' event; poll briefly.
+    // The reap happens after the reconnect grace window; poll briefly.
     const deadline = Date.now() + 2_000;
     while (d.sessionCount() > 0 && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 20));
     }
     assert.equal(d.sessionCount(), 0, "phantom session should be reaped after the connection drops");
   } finally {
+    await d.close();
+  }
+});
+
+test("transient SSE disconnect reconnects without expiring the MCP session", async () => {
+  const d = await startDaemon({ port: 0, idleMs: 60_000, sessionReapGraceMs: 200 });
+  const clientTransport = new StreamableHTTPClientTransport(
+    new URL(`http://127.0.0.1:${d.port}/mcp`),
+    {
+      reconnectionOptions: {
+        initialReconnectionDelay: 10,
+        maxReconnectionDelay: 10,
+        reconnectionDelayGrowFactor: 1,
+        maxRetries: 5,
+      },
+    }
+  );
+  const client = new Client({ name: "test", version: "0" });
+  try {
+    await client.connect(clientTransport);
+    assert.equal(d.sessionCount(), 1, "session should be registered after connect");
+
+    const deadline = Date.now() + 2_000;
+    while (d.sseConnectionCount() === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal(d.sseConnectionCount(), 1, "client should have an open standalone SSE stream");
+    assert.equal(d.disconnectSse(clientTransport.sessionId), 1, "test should drop the live SSE stream");
+
+    // Wait beyond the reap grace. A successful SDK reconnect cancels the pending reap,
+    // preserving both the MCP session id and subsequent tool calls.
+    await new Promise((r) => setTimeout(r, 350));
+    assert.equal(d.sessionCount(), 1, "reconnected session must survive the original reap deadline");
+    assert.equal(d.sseConnectionCount(), 1, "SDK should reopen the standalone SSE stream");
+    const tools = await client.listTools();
+    assert.ok(tools.tools.some((tool) => tool.name === "recall"));
+  } finally {
+    await client.close();
     await d.close();
   }
 });

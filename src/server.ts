@@ -214,7 +214,7 @@ const TRANSCRIPT_TOOLS = new Set(["get_conversation", "list_sessions"]);
 
 export function createMcpServer(): Server {
   const server = new Server(
-    { name: "keymem", version: "0.16.0" },
+    { name: "keymem", version: "0.17.1" },
     {
       capabilities: { tools: {}, prompts: {} },
       instructions: SERVER_INSTRUCTIONS,
@@ -300,7 +300,7 @@ export function createMcpServer(): Server {
       {
         name: "remember",
         description:
-          "Save important information to memory. Keys are search terms — think 'what would I search to find this later?' Use 3-6 diverse keys. Before coining new keys, recall() the topic and reuse returned canonical concepts or aliases. Semantically merged synonyms become aliases in one key cluster; shared broad keys become navigable hubs. CROSS-LINGUAL: add keys in both languages. namespace groups memories by project/context; ttl_seconds sets expiry; related_to adds explicit memory links; source attaches provenance and is auto-stamped with the server session, a timestamp, and — when a host agent (Claude Code, Codex) transcript is active — host_session/host_agent/host_turn so the memory can be traced back to its original conversation via get_conversation.",
+          "MANDATORY END-OF-TURN GATE: before replying, save every durable fact newly revealed this turn (names, preferences, decisions, corrections, project facts, goals). A durable fact left unsaved is a bug; save silently in the same turn. Save nothing only after consciously confirming that nothing durable appeared. Keys are search terms — think 'what would I search to find this later?' Use 3-6 diverse keys. Before coining new keys, recall() the topic and reuse returned canonical concepts or aliases. Semantically merged synonyms become aliases in one key cluster; shared broad keys become navigable hubs. CROSS-LINGUAL: add keys in both languages. namespace groups memories by project/context; ttl_seconds sets expiry; related_to adds explicit memory links; source attaches provenance and is auto-stamped with the server session, a timestamp, and — when a host agent (Claude Code, Codex) transcript is active — host_session/host_agent/host_turn so the memory can be traced back to its original conversation via get_conversation.",
         inputSchema: {
           type: "object",
           properties: {
@@ -424,7 +424,7 @@ export function createMcpServer(): Server {
       {
         name: "remember_batch",
         description:
-          "Save multiple memories in one call. Each item: {content, keys, key_types?, namespace?, ttl_seconds?, related_to?}. Returns list of saved IDs. More efficient than multiple remember() calls.",
+          "MANDATORY END-OF-TURN GATE: when a turn reveals multiple durable facts, save them silently before replying. A durable fact left unsaved is a bug. Each item: {content, keys, key_types?, namespace?, ttl_seconds?, related_to?}. Returns saved IDs and is more efficient than multiple remember() calls.",
         inputSchema: {
           type: "object",
           properties: {

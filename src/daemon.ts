@@ -8,15 +8,25 @@ import { graph, createMcpServer } from "./server.js";
 
 const DEFAULT_PORT = Number(process.env.KEYMEM_DAEMON_PORT ?? 8765);
 const DEFAULT_IDLE_MS = Number(process.env.KEYMEM_DAEMON_IDLE_MS ?? 10 * 60_000);
+const DEFAULT_SESSION_REAP_GRACE_MS = Number(process.env.KEYMEM_SESSION_REAP_GRACE_MS ?? 15_000);
 
 export async function startDaemon(
-  opts: { port?: number; idleMs?: number } = {}
-): Promise<{ port: number; close: () => Promise<void>; sessionCount: () => number }> {
+  opts: { port?: number; idleMs?: number; sessionReapGraceMs?: number } = {}
+): Promise<{
+  port: number;
+  close: () => Promise<void>;
+  sessionCount: () => number;
+  sseConnectionCount: () => number;
+  disconnectSse: (sessionId?: string) => number;
+}> {
   const idleMs = opts.idleMs ?? DEFAULT_IDLE_MS;
+  const sessionReapGraceMs = opts.sessionReapGraceMs ?? DEFAULT_SESSION_REAP_GRACE_MS;
   await graph.load(); // 임베딩 모델은 첫 사용 시 lazy load
 
   // 세션별 transport. 각 shim = 1 MCP 세션 = 1 Server 인스턴스(graph는 공유).
   const transports = new Map<string, StreamableHTTPServerTransport>();
+  const sseResponses = new Map<string, Set<ServerResponse>>();
+  const reapTimers = new Map<string, NodeJS.Timeout>();
   let idleTimer: NodeJS.Timeout | null = null;
   let closing = false;
 
@@ -28,6 +38,26 @@ export async function startDaemon(
   };
   const cancelIdle = () => {
     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  };
+  const cancelSessionReap = (sessionId: string) => {
+    const timer = reapTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    reapTimers.delete(sessionId);
+  };
+  const scheduleSessionReap = (
+    sessionId: string,
+    transport: StreamableHTTPServerTransport
+  ) => {
+    cancelSessionReap(sessionId);
+    if (closing) return;
+    const timer = setTimeout(() => {
+      reapTimers.delete(sessionId);
+      if ((sseResponses.get(sessionId)?.size ?? 0) > 0) return;
+      if (transports.get(sessionId) === transport) {
+        transport.close().catch(() => {});
+      }
+    }, sessionReapGraceMs);
+    reapTimers.set(sessionId, timer);
   };
 
   const readBody = (req: IncomingMessage): Promise<unknown> =>
@@ -75,6 +105,7 @@ export async function startDaemon(
         rejectBadRequest(res, "Bad Request: unknown or expired session ID");
         return;
       }
+      cancelSessionReap(sessionId);
       if (req.method === "GET") {
         // GET /mcp는 이 세션의 standalone SSE 스트림이다 — shim이 살아있는 동안 계속 열려
         // 있는 연결로, "이 세션이 아직 쓰이고 있다"는 유일한 신호다. shim이 SIGKILL 등으로
@@ -84,15 +115,23 @@ export async function startDaemon(
         // 콜백을 직접 확인함) — 그래서 phantom 세션이 transports map에 영원히 남고 idle-exit이
         // 절대 발생하지 않는다.
         //
-        // res.writableEnded로 "서버가 직접 정상 종료(res.end())"와 "연결이 그냥 끊겨버림"을
-        // 구분한다: 서버가 스트림을 능동적으로 닫을 때(transport.close()/closeStandaloneSSEStream())는
-        // res.end()가 먼저 호출되어 'close' 시점엔 이미 writableEnded===true이므로 건드리지 않는다.
-        // 조용하지만 살아있는 세션은 소켓이 열린 채로 유지되므로 'close' 이벤트 자체가 절대
-        // 발생하지 않는다 — 그래서 이 훅은 quiet-but-alive 세션을 절대 죽이지 않는다.
+        // SDK 클라이언트는 일시적인 SSE 단절 뒤 같은 session id로 재접속한다. 따라서 close 즉시
+        // transport를 삭제하면 정상 재접속도 stale-session 400으로 깨진다. 세션별 열린 SSE 수를
+        // 추적하고 마지막 스트림이 비정상 종료된 뒤 grace window 동안 재접속이 없을 때만 reap한다.
+        // res.writableEnded=true인 서버 주도 정상 종료는 reap을 예약하지 않는다.
         const staleTransport = transport;
+        let responses = sseResponses.get(sessionId);
+        if (!responses) {
+          responses = new Set();
+          sseResponses.set(sessionId, responses);
+        }
+        responses.add(res);
         res.on("close", () => {
-          if (!res.writableEnded) {
-            staleTransport.close().catch(() => {});
+          const active = sseResponses.get(sessionId);
+          active?.delete(res);
+          if (active?.size === 0) sseResponses.delete(sessionId);
+          if (!res.writableEnded && (active?.size ?? 0) === 0) {
+            scheduleSessionReap(sessionId, staleTransport);
           }
         });
       }
@@ -104,7 +143,11 @@ export async function startDaemon(
         onsessioninitialized: (id) => { transports.set(id, transport!); },
       });
       transport.onclose = () => {
-        if (transport!.sessionId) transports.delete(transport!.sessionId);
+        if (transport!.sessionId) {
+          cancelSessionReap(transport!.sessionId);
+          sseResponses.delete(transport!.sessionId);
+          transports.delete(transport!.sessionId);
+        }
         armIdle();
       };
       const mcp = createMcpServer();
@@ -116,6 +159,18 @@ export async function startDaemon(
     }
 
     await transport.handleRequest(req, res, body);
+
+    // SSE가 끊긴 grace window 중에도 POST 요청은 도착할 수 있다. 그 요청은 shim이 아직
+    // 살아있다는 신호이므로 기존 타이머를 연장하되, SSE가 끝내 복구되지 않는 경우 phantom
+    // session이 영구 잔류하지 않도록 요청 완료 뒤 reap을 다시 예약한다.
+    if (
+      sessionId &&
+      req.method !== "GET" &&
+      transports.get(sessionId) === transport &&
+      (sseResponses.get(sessionId)?.size ?? 0) === 0
+    ) {
+      scheduleSessionReap(sessionId, transport);
+    }
   });
 
   const port = await new Promise<number>((resolve) => {
@@ -131,10 +186,23 @@ export async function startDaemon(
     // 테스트 전용 읽기 전용 훅: 현재 열려 있는(reap되지 않은) 세션 수. 프로덕션 코드 경로에는
     // 영향 없음 — transports.size를 그대로 노출할 뿐이다.
     sessionCount: () => transports.size,
+    sseConnectionCount: () =>
+      [...sseResponses.values()].reduce((count, responses) => count + responses.size, 0),
+    // 테스트에서 네트워크 단절을 재현하기 위한 훅. 실제 종료 로직과 동일한 res 'close' 경로를 탄다.
+    disconnectSse: (sessionId?: string) => {
+      const targets = sessionId
+        ? [...(sseResponses.get(sessionId) ?? [])]
+        : [...sseResponses.values()].flatMap((responses) => [...responses]);
+      for (const response of targets) response.destroy();
+      return targets.length;
+    },
     close: async () => {
       closing = true;
       cancelIdle();
+      for (const timer of reapTimers.values()) clearTimeout(timer);
+      reapTimers.clear();
       await Promise.allSettled([...transports.values()].map((t) => t.close()));
+      sseResponses.clear();
       // Belt-and-suspenders: onclose→armIdle() no-ops while closing===true, but cancel again
       // in case anything slipped in between.
       cancelIdle();
