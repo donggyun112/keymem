@@ -227,7 +227,7 @@ export function createMcpServer(): Server {
       {
         name: "recall",
         description:
-          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Returns matching key clusters only (not memory content): canonical concept, aliases, key type, match score, linked-memory count, hub status, and specificity. Follow up with read_key(key_id) then read_memory(memory_id, via_key_id) to read a stored fact. Use short focused noun queries and decompose multi-fact questions into several recall calls. Set inject:true to ALSO get the top connected memories' content in one call (skips manual read_key/read_memory) — returns {keys, memories}. Opt-in: trades the deliberate-navigation flow's context-efficiency and precision (the injected set carries lower-precision associative neighbours) for fewer round trips. inject_top_k caps the injected set; inject_prefer_depth favors confirmed (deep) memories; inject_explore_shallow reserves one slot for a weak/recent memory.",
+          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Returns matching key clusters only (not memory content): canonical concept, aliases, key type, match score, linked-memory count, hub status, and specificity. Follow up with read_key(key_id) then read_memory(memory_id, via_key_id) to read a stored fact. Use short focused noun queries and decompose multi-fact questions into several recall calls. Set inject:true to ALSO get the best connected memory preview in one call (skips manual read_key/read_memory) — returns {keys, memories}. inject_top_k defaults to 1; inject_max_chars defaults to 2000 and marks truncated previews so read_memory can fetch the full content. Injection defaults to a precision gate; set inject_min_rel_score to 0 only for explicit associative exploration. inject_prefer_depth favors confirmed memories; inject_explore_shallow reserves one slot for a weak/recent memory.",
         inputSchema: {
           type: "object",
           properties: {
@@ -236,6 +236,8 @@ export function createMcpServer(): Server {
             namespace: { type: "string" },
             inject: { type: "boolean" },
             inject_top_k: { type: "number" },
+            inject_max_chars: { type: "number" },
+            inject_min_rel_score: { type: "number" },
             inject_prefer_depth: { type: "boolean" },
             inject_explore_shallow: { type: "boolean" },
           },
@@ -491,11 +493,17 @@ export function createMcpServer(): Server {
           if (a.inject === true) {
             const injected = await graph.recallInject(
               a.query as string,
-              typeof a.inject_top_k === "number" ? a.inject_top_k : 5,
+              typeof a.inject_top_k === "number" ? a.inject_top_k : 1,
               typeof a.namespace === "string" ? a.namespace : null,
               {
                 preferDepth: a.inject_prefer_depth === true,
                 exploreShallow: a.inject_explore_shallow === true,
+                maxChars:
+                  typeof a.inject_max_chars === "number" ? a.inject_max_chars : undefined,
+                minRelScore:
+                  typeof a.inject_min_rel_score === "number"
+                    ? a.inject_min_rel_score
+                    : undefined,
               }
             );
             return { content: [{ type: "text", text: JSON.stringify(injected, null, 0) }] };

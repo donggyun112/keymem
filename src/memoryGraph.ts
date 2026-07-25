@@ -55,6 +55,15 @@ const KEY_HUB_MIN_LINKS = Number.isFinite(_hubMinLinks)
 // A wider pool than top_k lets the reranker rescue a right answer the fused score buried.
 const RERANK_POOL = Number(cfgRaw("RERANK_POOL") ?? 30);
 
+const _injectMinRelScore = Number(cfgRaw("INJECT_MIN_REL_SCORE") ?? 0.2);
+const INJECT_MIN_REL_SCORE = Number.isFinite(_injectMinRelScore)
+  ? Math.max(0, Math.min(0.9, _injectMinRelScore))
+  : 0.2;
+const _injectMaxChars = Number(cfgRaw("INJECT_MAX_CHARS") ?? 2000);
+const INJECT_MAX_CHARS = Number.isFinite(_injectMaxChars)
+  ? Math.max(256, Math.min(20_000, Math.floor(_injectMaxChars)))
+  : 2000;
+
 // Rerank-based not-found gate (opt-in). The cross-encoder's absolute relevance logit is a
 // stronger "does this memory actually answer the query" signal than bi-encoder cosine, so a
 // low top logit means the query is unanswerable → return []. Unset = disabled. A definite
@@ -76,6 +85,71 @@ function literalKeyMatch(queryLower: string, term: string): boolean {
   if (!term || term.length < 2) return false;
   const esc = term.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(^|[^\\p{L}\\p{N}])${esc}($|[^\\p{L}\\p{N}])`, "u").test(queryLower);
+}
+
+function structuredQueryTokens(query: string): string[] {
+  return [
+    ...query.matchAll(
+      /(?:^|[^\p{L}\p{N}])((?:v?\d+\.)+\d+(?:[-+][\p{L}\p{N}.-]+)?|#[0-9]+|[a-f0-9]{7,40})(?=$|[^\p{L}\p{N}])/giu
+    ),
+  ].map((m) => m[1].toLowerCase());
+}
+
+function hasStructuredTokenCoverage(
+  query: string,
+  memory: { content?: string; keys?: Array<string | { concept?: string }> }
+): boolean {
+  const required = structuredQueryTokens(query);
+  if (required.length === 0) return true;
+  const keyText = (memory.keys ?? [])
+    .map((key) => (typeof key === "string" ? key : key.concept ?? ""))
+    .join(" ");
+  const haystack = `${memory.content ?? ""} ${keyText}`.toLowerCase();
+  return required.every((token) => haystack.includes(token));
+}
+
+const QUERY_FILLER = new Set([
+  "내", "나의", "뭐", "뭐야", "뭔가", "무슨", "어느", "있어", "있니",
+  "알려", "알려줘", "해줘", "좋아해", "좋아하는", "선호하는", "쓰니", "했어",
+  "관련", "대한", "what", "which", "who", "where", "when", "why", "how",
+  "is", "are", "was", "were", "do", "does", "did", "my", "me", "tell",
+  "about", "the", "a", "an", "please",
+]);
+
+function meaningfulQueryTokens(query: string): string[] {
+  return [...query.toLowerCase().matchAll(/[\p{L}\p{N}_.+#-]+/gu)]
+    .map((match) => match[0])
+    .filter((token) => token.length >= 2 && !QUERY_FILLER.has(token));
+}
+
+function hasLexicalQueryCoverage(
+  query: string,
+  memory: { content?: string; keys?: Array<string | { concept?: string }> }
+): boolean {
+  const required = meaningfulQueryTokens(query);
+  if (required.length === 0) return false;
+  const keyText = (memory.keys ?? [])
+    .map((key) => (typeof key === "string" ? key : key.concept ?? ""))
+    .join(" ");
+  const haystack = `${memory.content ?? ""} ${keyText}`.toLowerCase();
+  const covered = required.filter((token) => haystack.includes(token)).length;
+  return covered * 2 > required.length;
+}
+
+function truncateInjectedContent<T extends { content?: string }>(
+  memory: T,
+  maxChars: number
+): T & { content_truncated?: true; content_chars?: number } {
+  const content = memory.content ?? "";
+  if (content.length <= maxChars) return memory;
+  const marker = "\n…[truncated; use read_memory for full content]";
+  const previewLength = Math.max(0, maxChars - marker.length);
+  return {
+    ...memory,
+    content: `${content.slice(0, previewLength).trimEnd()}${marker}`,
+    content_truncated: true,
+    content_chars: content.length,
+  };
 }
 
 const LINK_WEIGHT_DEFAULT = 1.0;
@@ -1393,9 +1467,14 @@ export class MemoryGraph {
   // round trips — hence opt-in, never the default. (TDD stub — replaced below.)
   async recallInject(
     query: string,
-    topK = 5,
+    topK = 1,
     namespace: string | null = null,
-    opts: { preferDepth?: boolean; exploreShallow?: boolean } = {}
+    opts: {
+      preferDepth?: boolean;
+      exploreShallow?: boolean;
+      maxChars?: number;
+      minRelScore?: number;
+    } = {}
   ): Promise<{ keys: object[]; memories: object[] }> {
     // Navigation keys (so the agent can still steer) + selected top-N expanded memories. Keep the
     // default absolute anchor gate (minScore = MIN_SCORE_THRESHOLD). The gate is ANCHOR-based, not
@@ -1405,10 +1484,23 @@ export class MemoryGraph {
     // (e.g. a cross-lingual miss) filled every slot with coincidental BM25 hits — pure junk. Pull a
     // wider candidate pool, then let selectInject pick by relevance / depth / exploration.
     const keys = await this.searchKeys(query, 8, namespace);
+    const minRelScore = Number.isFinite(opts.minRelScore)
+      ? Math.max(0, Math.min(0.9, opts.minRelScore as number))
+      : INJECT_MIN_REL_SCORE;
+    const maxChars = Number.isFinite(opts.maxChars)
+      ? Math.max(256, Math.min(20_000, Math.floor(opts.maxChars as number)))
+      : INJECT_MAX_CHARS;
+    type InjectMemory = {
+      id: string;
+      content: string;
+      keys?: Array<string | { concept?: string }>;
+      matched_via?: string[];
+      score: number;
+    };
     const pool = (await this.recall(
       query, Math.max(topK * 3, 15), namespace, true, 2, 0, MIN_SCORE_THRESHOLD,
       GATE_Z_THRESHOLD, KEY_GATE_THRESHOLD, 0, false // reinforce=false: injection is passive
-    )) as Array<{ id: string; matched_via?: string[] }>;
+    )) as InjectMemory[];
     // Inject is associative/semantic expansion, so only memories with DENSE or GRAPH support belong
     // in it: a content/key cosine match, or a (via)/(linked) hop from a genuine anchor. Once any
     // anchor clears the gate, recall keeps the WHOLE fused set — which includes memories pulled in
@@ -1417,15 +1509,21 @@ export class MemoryGraph {
     // scores sit in the same noise band as real cross-lingual hits, so a relative floor can't tell
     // them apart — the matched_via provenance can. Drop candidates whose ONLY signal is "(bm25)".
     // Plain recall (deliberate navigation) still returns BM25 hits; this exclusion is inject-scoped.
-    const supported = pool.filter((m) => (m.matched_via ?? []).some((v) => v !== "(bm25)"));
-    const cands = supported.map((m) => ({ id: m.id, depth: this.memories[m.id]?.depth ?? 0 }));
-    const byId = new Map(supported.map((m) => [m.id, m]));
+    const supported = pool
+      .filter((m) => (m.matched_via ?? []).some((v) => v !== "(bm25)"))
+      .filter((m) => hasStructuredTokenCoverage(query, m))
+      .filter((m) => minRelScore <= 0 || hasLexicalQueryCoverage(query, m));
+    const relativeFloor = supported.length ? supported[0].score * minRelScore : 0;
+    const precise = supported.filter((m) => m.score >= relativeFloor);
+    const cands = precise.map((m) => ({ id: m.id, depth: this.memories[m.id]?.depth ?? 0 }));
+    const byId = new Map(precise.map((m) => [m.id, m]));
     const memories = selectInject(cands, topK, opts)
       .map((id) => byId.get(id))
-      .filter((m): m is { id: string } => Boolean(m))
+      .filter((m): m is InjectMemory => Boolean(m))
       // Enrich keys with key_id so the agent can read_key() directly — inject's whole point is
       // skipping round trips, and a bare concept would force a resolution step right back in.
-      .map((m) => ({ ...m, keys: this.getKeyRefsForMemory(m.id) }));
+      .map((m) => ({ ...m, keys: this.getKeyRefsForMemory(m.id) }))
+      .map((m) => truncateInjectedContent(m, maxChars));
     return { keys, memories };
   }
 

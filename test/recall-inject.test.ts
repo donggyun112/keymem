@@ -39,7 +39,7 @@ test("recallInject surfaces the connected-but-dissimilar memory in one call", as
   const [bId] = await g.add("Acme was founded in 1990", ["Acme", "history"], {}); // B — connected via Acme only
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const r: any = await g.recallInject("user job", 5, null);
+  const r: any = await g.recallInject("user job", 5, null, { minRelScore: 0 });
   assert.ok(Array.isArray(r.keys) && r.keys.length > 0, "returns navigation keys");
   assert.ok(
     r.memories.some((m: { id: string }) => m.id === bId),
@@ -208,4 +208,98 @@ test("recallInject is passive — it does not reinforce or depth-bump the memori
   assert.equal(g.memories[aId].access_count, 0, "inject must not bump access_count");
   assert.equal(g.memories[bId].access_count, 0, "inject must not bump access_count");
   assert.equal(g.memories[aId].depth, g.memories[bId].depth, "inject must not depth-bump unevenly");
+});
+
+test("recallInject defaults to one memory to avoid associative context flooding", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "sm-inject-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  process.env.KEYMEM_DATA_DIR = dir;
+  process.env.EMBEDDING_BACKEND = "local";
+  process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
+
+  const emb = await import("../src/embedding.ts");
+  emb.__setTestEmbedder((tx: string) => vec(tx));
+  t.after(() => emb.__clearTestEmbedder());
+
+  const mg = await import(`../src/memoryGraph.ts?inject=${n++}`);
+  const g = new mg.MemoryGraph();
+  await g.load();
+
+  await g.add("user works at Acme", ["job", "Acme"], {});
+  await g.add("user has another job memory", ["job"], {});
+
+  const r: any = await g.recallInject("user job");
+  assert.equal(r.memories.length, 1);
+});
+
+test("recallInject rejects candidates that mismatch a version or hash in the query", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "sm-inject-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  process.env.KEYMEM_DATA_DIR = dir;
+  process.env.EMBEDDING_BACKEND = "local";
+  process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
+
+  const emb = await import("../src/embedding.ts");
+  emb.__setTestEmbedder(() => [1, 0, 0, 0]);
+  t.after(() => emb.__clearTestEmbedder());
+
+  const mg = await import(`../src/memoryGraph.ts?inject=${n++}`);
+  const g = new mg.MemoryGraph();
+  await g.load();
+
+  await g.add("agent-sandbox v0.6.1 release completed", ["release", "v0.6.1"], {});
+
+  const wrongVersion: any = await g.recallInject("keymem v0.17.1 release", 3);
+  assert.equal(wrongVersion.memories.length, 0, "a different version must not be injected");
+});
+
+test("recallInject requires full query-term coverage instead of answering from a shared subject", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "sm-inject-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  process.env.KEYMEM_DATA_DIR = dir;
+  process.env.EMBEDDING_BACKEND = "local";
+  process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
+
+  const emb = await import("../src/embedding.ts");
+  emb.__setTestEmbedder(() => [1, 0, 0, 0]);
+  t.after(() => emb.__clearTestEmbedder());
+
+  const mg = await import(`../src/memoryGraph.ts?inject=${n++}`);
+  const g = new mg.MemoryGraph();
+  await g.load();
+
+  await g.add("Donggyun likes coffee", ["Donggyun", "coffee"], {});
+  await g.add("The user's name is Donggyun", ["name", "Donggyun"], {});
+
+  const absentAttribute: any = await g.recallInject("Donggyun age");
+  assert.equal(absentAttribute.memories.length, 0, "matching only the subject is not an answer");
+
+  const knownFact: any = await g.recallInject("what is my name");
+  assert.equal(knownFact.memories.length, 1, "question filler must not block a covered fact");
+  assert.match(knownFact.memories[0].content, /name is Donggyun/);
+});
+
+test("recallInject truncates long previews and reports the original size", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "sm-inject-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  process.env.KEYMEM_DATA_DIR = dir;
+  process.env.EMBEDDING_BACKEND = "local";
+  process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
+
+  const emb = await import("../src/embedding.ts");
+  emb.__setTestEmbedder(() => [1, 0, 0, 0]);
+  t.after(() => emb.__clearTestEmbedder());
+
+  const mg = await import(`../src/memoryGraph.ts?inject=${n++}`);
+  const g = new mg.MemoryGraph();
+  await g.load();
+
+  const content = `token guard ${"x".repeat(4000)}`;
+  await g.add(content, ["token guard"], {});
+
+  const r: any = await g.recallInject("token guard", 1, null, { maxChars: 256 });
+  assert.equal(r.memories.length, 1);
+  assert.ok(r.memories[0].content.length <= 256);
+  assert.equal(r.memories[0].content_truncated, true);
+  assert.equal(r.memories[0].content_chars, content.length);
 });
