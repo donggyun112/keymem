@@ -5,11 +5,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { runInProcess } from "./index.js";
 
 const PORT = Number(process.env.KEYMEM_DAEMON_PORT ?? 8765);
 const MCP_URL = `http://127.0.0.1:${PORT}/mcp`;
 const HEALTH_URL = `http://127.0.0.1:${PORT}/health`;
+const DAEMON_AUTOSTART = process.env.KEYMEM_DAEMON_AUTOSTART !== "false";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function hostHeaders(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
@@ -87,42 +89,186 @@ export async function ensureDaemon(
 }
 
 async function runProxy(): Promise<void> {
-  const http = new StreamableHTTPClientTransport(new URL(MCP_URL), {
-    requestInit: { headers: hostHeaders() },
-  });
   const stdio = new StdioServerTransport();
+  let http: StreamableHTTPClientTransport | null = null;
+  let httpGeneration = 0;
+  let reconnecting: Promise<void> | null = null;
+  let outbound = Promise.resolve();
+  let initializeRequest: JSONRPCMessage | null = null;
+  let initializedNotification: JSONRPCMessage | null = null;
+  let replayResponseId: string | null = null;
+  let replaySequence = 0;
   let closing = false;
-  const closeAfterSendError = (side: "http" | "stdio", error: unknown) => {
-    console.error(`[shim ${side} send]`, error);
+
+  const methodOf = (message: JSONRPCMessage): string | null => {
+    const method = (message as { method?: unknown }).method;
+    return typeof method === "string" ? method : null;
+  };
+
+  const idOf = (message: JSONRPCMessage): string | number | null => {
+    const id = (message as { id?: unknown }).id;
+    return typeof id === "string" || typeof id === "number" ? id : null;
+  };
+
+  const shutdown = (error?: unknown) => {
+    if (error) console.error("[shim fatal bridge]", error);
     if (closing) return;
     closing = true;
-    void Promise.allSettled([http.close(), stdio.close()]);
+    httpGeneration += 1;
+    const active = http;
+    http = null;
+    void Promise.allSettled([
+      active?.close() ?? Promise.resolve(),
+      stdio.close(),
+    ]);
   };
-  // Message-level transparent forwarding. No MCP semantics interpreted here.
-  // Session id / SSE handling is owned by the HTTP transport.
-  stdio.onmessage = (m) => {
-    void http.send(m).catch((error) => closeAfterSendError("http", error));
+
+  const connectHttp = async (reinitialize: boolean): Promise<void> => {
+    const generation = ++httpGeneration;
+    const next = new StreamableHTTPClientTransport(new URL(MCP_URL), {
+      requestInit: { headers: hostHeaders() },
+    });
+
+    next.onmessage = (message) => {
+      if (closing || generation !== httpGeneration) return;
+      if (replayResponseId !== null && idOf(message) === replayResponseId) return;
+      void stdio.send(message).catch((error) => shutdown(error));
+    };
+    next.onerror = (error) => {
+      if (generation === httpGeneration && !closing) {
+        console.error("[shim http]", error);
+      }
+    };
+    next.onclose = () => {
+      if (closing || generation !== httpGeneration) return;
+      http = null;
+      void reconnect("http transport closed");
+    };
+
+    try {
+      await next.start();
+      if (closing || generation !== httpGeneration) {
+        next.onclose = undefined;
+        await next.close();
+        throw new Error("stale HTTP transport generation");
+      }
+      http = next;
+
+      // A daemon restart destroys only the ephemeral MCP transport session. Replay the
+      // original handshake with a private request id to create a fresh session against the
+      // same global graph. Its response is swallowed because the stdio client initialized once.
+      if (reinitialize && initializeRequest) {
+        replayResponseId = `keymem-reconnect-${++replaySequence}`;
+        const replay = {
+          ...(initializeRequest as Record<string, unknown>),
+          id: replayResponseId,
+        } as JSONRPCMessage;
+        await next.send(replay);
+        replayResponseId = null;
+        if (initializedNotification) await next.send(initializedNotification);
+      }
+    } catch (error) {
+      replayResponseId = null;
+      if (http === next) http = null;
+      if (generation === httpGeneration) httpGeneration += 1;
+      next.onclose = undefined;
+      await next.close().catch(() => undefined);
+      throw error;
+    }
   };
-  http.onmessage = (m) => {
-    void stdio.send(m).catch((error) => closeAfterSendError("stdio", error));
+
+  const reconnect = (reason: string): Promise<void> => {
+    if (closing) return Promise.reject(new Error("shim is closing"));
+    if (reconnecting) return reconnecting;
+
+    const task = (async () => {
+      console.error(`[shim reconnect] ${reason}`);
+      const stale = http;
+      http = null;
+      httpGeneration += 1;
+      if (stale) {
+        stale.onclose = undefined;
+        await stale.close().catch(() => undefined);
+      }
+
+      let delayMs = 100;
+      while (!closing) {
+        const available = await ensureDaemon(MCP_URL, {
+          timeoutMs: 8_000,
+          spawnDaemon: DAEMON_AUTOSTART,
+        });
+        if (available) {
+          try {
+            await connectHttp(initializeRequest !== null);
+            console.error("[shim reconnect] restored");
+            return;
+          } catch (error) {
+            console.error("[shim reconnect] handshake failed", error);
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        delayMs = Math.min(delayMs * 2, 1_000);
+      }
+      throw new Error("shim closed while reconnecting");
+    })();
+
+    reconnecting = task;
+    task.then(
+      () => {
+        if (reconnecting === task) reconnecting = null;
+      },
+      () => {
+        if (reconnecting === task) reconnecting = null;
+      }
+    );
+    return task;
+  };
+
+  const sendWithReconnect = async (message: JSONRPCMessage): Promise<void> => {
+    while (!closing) {
+      if (!http) await reconnect("no active HTTP transport");
+      const active = http;
+      if (!active) continue;
+      try {
+        await active.send(message);
+        return;
+      } catch (error) {
+        if (closing) return;
+        if (http === active) {
+          await reconnect(`send failed: ${error instanceof Error ? error.message : String(error)}`);
+        } else if (reconnecting) {
+          await reconnecting;
+        }
+      }
+    }
+  };
+
+  // Preserve ordering across reconnects. The handshake messages are retained only to recreate
+  // an ephemeral MCP session; memories remain in the daemon's single shared graph.
+  stdio.onmessage = (message) => {
+    const method = methodOf(message);
+    if (method === "initialize" && idOf(message) !== null) initializeRequest = message;
+    if (method === "notifications/initialized") initializedNotification = message;
+    outbound = outbound.then(() => sendWithReconnect(message));
+    void outbound.catch((error) => {
+      if (!closing) console.error("[shim outbound]", error);
+    });
   };
   stdio.onclose = () => {
     if (closing) return;
     closing = true;
-    void http.close().catch((error) => console.error("[shim http close]", error));
+    httpGeneration += 1;
+    const active = http;
+    http = null;
+    void active?.close().catch((error) => console.error("[shim http close]", error));
   };
-  http.onclose = () => {
-    if (closing) return;
-    closing = true;
-    void stdio.close().catch((error) => console.error("[shim stdio close]", error));
-  };
-  http.onerror = (e) => console.error("[shim http]", e);
-  await http.start();
+
+  await connectHttp(false);
   await stdio.start();
 }
 
 async function main(): Promise<void> {
-  const ok = await ensureDaemon(MCP_URL);
+  const ok = await ensureDaemon(MCP_URL, { spawnDaemon: DAEMON_AUTOSTART });
   if (ok) return runProxy();
   console.error("[shim] daemon unavailable; falling back to in-process server");
   return runInProcess();
