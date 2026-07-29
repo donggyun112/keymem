@@ -199,7 +199,10 @@ keymem is this agent's associative long-term memory (a key-graph, not a vector s
 Recall first: before your first reply — and whenever the topic shifts — call recall(query) \
 with the active namespace to check what is already known about the user, project, or topic. Use short noun keywords, \
 not full sentences (recall("거주지") not recall("어디 살아")), and split multi-fact questions \
-into several recall calls. recall returns matching keys only; complete read_key(key_id, query, namespace) \
+into several recall calls. ALSO pass the raw user utterance as context — keys match keywords, content \
+matches sentences, and the two cues are routed to different paths. On {status:"no_match"}, retry with a \
+nearest_keys concept or browse_keys(namespace) before giving up. recall returns matching keys only; \
+complete read_key(key_id, query, namespace) \
 then read_memory(memory_id, via_key_id, namespace) to read a fact and reinforce the traversed path. \
 inject:true is an unconfirmed passive preview, not a substitute for this core lookup flow.
 
@@ -207,8 +210,9 @@ Remember durable facts — the write-side twin of recall first: recall opens the
 closes it. Before you finish EVERY reply you MUST check whether this turn revealed anything \
 durable; when the user shares a name, preference, decision, correction, project fact, or goal, \
 you MUST save it silently in the same turn with remember(content, keys) using 3-6 diverse search \
-keys. Recall the topic first and reuse canonical concept-level keys; include colloquial and \
-cross-lingual variants. Do not defer it to "later". A turn that \
+keys. Recall the topic first and reuse canonical concept-level keys; keys MUST span both Korean and \
+English (single-language keys measurably fall below the cross-lingual recall gate), plus colloquial \
+variants. Act on any hints in the remember response. Do not defer it to "later". A turn that \
 surfaced a durable fact but saved nothing is a bug. Use correct() when a fact changes — never \
 remember() for updates.
 
@@ -224,7 +228,7 @@ const TRANSCRIPT_TOOLS = new Set(["get_conversation", "list_sessions"]);
 
 export function createMcpServer(): Server {
   const server = new Server(
-    { name: "keymem", version: "0.18.0" },
+    { name: "keymem", version: "0.19.0" },
     {
       capabilities: { tools: {}, prompts: {} },
       instructions: SERVER_INSTRUCTIONS,

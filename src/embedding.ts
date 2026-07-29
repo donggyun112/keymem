@@ -129,7 +129,10 @@ export interface ThresholdProfile {
   // related min 0.386 / p25 0.472 / med 0.523; unrelated p95 0.452 / max 0.508 — the 0.55
   // contentRecall gate cut 8/12 RELATED pairs. 0.46 sits above unrelated p95 and below
   // related p25 (admits 9/12, ~4% per-pair noise, ranked below real hits by fusion).
-  // 0 = disabled (short queries use contentRecall unchanged).
+  // Not-found cost, measured on the live store (~1.3k memories): 1/5 absent-topic probes
+  // returned a single low-scored junk key (~0.48) that 0.55 would have blanked; accepted —
+  // hiding a real memory is the costlier failure, and nearest_keys/no_match signaling
+  // gives the agent the retry loop either way. 0 = disabled (short queries use contentRecall).
   contentRecallShort: number;
 }
 

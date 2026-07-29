@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-07-29
+
+### Added
+
+- `recall` returns `{status:"no_match", nearest_keys}` (closest ungated concepts)
+  instead of a bare empty array, so a miss is a retry hint rather than a dead end.
+- Optional `context` on `recall`: the raw utterance drives content matching while
+  the keyword query keeps driving key matching (dual-path cues; sentence-shaped
+  cues measure ~0.1-0.2 cosine higher against sentence content on bge-m3).
+- `contentRecallShort` threshold (bgem3 0.46, `KEYMEM_CONTENT_RECALL_SHORT`):
+  calibrated content gate for short keyword queries, which embed systematically
+  lower against sentence content (the 0.55 gate cut 8/12 measured related pairs).
+- `remember` response `hints`: near-neighbor existing concepts the new keys nearly
+  duplicate, and a single-language key warning.
+- `bench/real-eval.ts` (real-workload hit-rate eval) and
+  `bench/quarantine-bench-data.ts` (moves HotpotQA/wiki pollution to a `bench`
+  namespace).
+
 ## [0.18.0] - 2026-07-29
 
 ### Changed
