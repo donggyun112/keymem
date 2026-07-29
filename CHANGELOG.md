@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-07-29
+
+### Fixed
+
+- **correct()/supersede key-inheritance regression**: the drift-drop bar compared
+  key-to-CONTENT cosine against keyRecall (0.62), but same-topic short keys measure
+  0.477-0.643 against sentence content, so a typical no-keys correction dropped every
+  inherited key and left the new version an unreachable keyless orphan (recall miss,
+  explain:true misreporting empty_namespace). The bar now uses the content-calibrated
+  gate (contentRecallShort), and a zero-key result keeps the old keys outright — a
+  correction can never orphan a memory. Existing orphans repaired.
+
+### Added
+
+- Hook push cwd -> namespace scoping: `<data-dir>/namespaces.json` maps path prefixes
+  to allowed namespace lists ("default" always allowed). Kills cross-project injection
+  pollution that relevance floors cannot separate (measured: wrong 0.63-0.68 vs right
+  0.61-0.70 fully overlap). Unmapped cwd keeps global behavior.
+- Hook skips prompts shorter than KEYMEM_HOOK_MIN_CHARS (default 6) — acknowledgments
+  are not recall cues and should not pay the ~0.5 s round trip.
+
 ## [0.21.1] - 2026-07-29
 
 ### Fixed

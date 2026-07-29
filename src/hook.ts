@@ -16,6 +16,9 @@ const PORT = Number(process.env.KEYMEM_DAEMON_PORT ?? 8765);
 const TIMEOUT_MS = Number(process.env.KEYMEM_HOOK_TIMEOUT_MS ?? 800);
 const TOP_K = Number(process.env.KEYMEM_HOOK_TOP_K ?? 2);
 const MAX_CHARS = 400; // per-memory preview budget in the injected context
+// Acknowledgments ("ㄱㄱ", "ok") carry no recall cue — skip them and save the
+// ~0.5 s round trip the hook adds to every prompt.
+const MIN_CHARS = Number(process.env.KEYMEM_HOOK_MIN_CHARS ?? 6);
 
 async function readStdin(): Promise<string> {
   let data = "";
@@ -31,15 +34,16 @@ type InjectMemory = {
 };
 
 async function main(): Promise<void> {
-  const input = JSON.parse(await readStdin()) as { prompt?: unknown };
+  const input = JSON.parse(await readStdin()) as { prompt?: unknown; cwd?: unknown };
   const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
-  // Skip empties and slash commands — they are harness directives, not recall cues.
-  if (!prompt || prompt.startsWith("/")) return;
+  // Skip empties, acknowledgments, and slash commands — not recall cues.
+  if (!prompt || prompt.length < MIN_CHARS || prompt.startsWith("/")) return;
+  const cwd = typeof input.cwd === "string" ? input.cwd : undefined;
 
   const res = await fetch(`http://127.0.0.1:${PORT}/inject`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ prompt, top_k: TOP_K }),
+    body: JSON.stringify({ prompt, top_k: TOP_K, cwd }),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   if (!res.ok) return;

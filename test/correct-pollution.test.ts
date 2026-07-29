@@ -37,13 +37,18 @@ async function freshGraph(t: { after: (fn: () => unknown) => void }) {
 
 test("off-topic correction without keys drops the now-irrelevant topic tag", async (t) => {
   const g = await freshGraph(t);
-  const [mid] = await g.add("the user loves strawberries", ["strawberry", "딸기"], {});
+  // "allergy note" tracks the corrected content's topic and must survive; the stale
+  // "strawberry" tag must drop. (When dropping would leave ZERO keys, supersede keeps
+  // the old keys instead — a stale tag is recoverable, a keyless orphan is not; that
+  // anti-orphan guard is covered by correct-key-inheritance.test.ts.)
+  const [mid] = await g.add("the user loves strawberries", ["strawberry", "allergy note"], {});
   const nid = await g.supersede(mid, "the user is allergic to peanuts", {});
   const keys: string[] = g.getKeysForMemory(nid);
   assert.ok(
     !keys.includes("strawberry") && !keys.includes("딸기"),
     `off-topic memory should drop the stale topic, got: [${keys.join(", ")}]`
   );
+  assert.ok(keys.includes("allergy note"), `still-relevant key must survive, got: [${keys.join(", ")}]`);
 });
 
 test("same-topic correction without keys keeps the still-relevant key", async (t) => {

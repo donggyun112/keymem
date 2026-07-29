@@ -1,12 +1,16 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { dataDir } from "./env.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { graph, createMcpServer } from "./server.js";
 
 const DEFAULT_PORT = Number(process.env.KEYMEM_DAEMON_PORT ?? 8765);
+const dataDirPath = dataDir();
 const DEFAULT_IDLE_MS = Number(process.env.KEYMEM_DAEMON_IDLE_MS ?? 10 * 60_000);
 const DEFAULT_SESSION_REAP_GRACE_MS = Number(process.env.KEYMEM_SESSION_REAP_GRACE_MS ?? 15_000);
 
@@ -89,7 +93,7 @@ export async function startDaemon(
     if (url.pathname === "/inject") {
       if (req.method !== "POST") { res.writeHead(405).end(); return; }
       const body = (await readBody(req)) as
-        | { prompt?: unknown; namespace?: unknown; top_k?: unknown }
+        | { prompt?: unknown; namespace?: unknown; top_k?: unknown; cwd?: unknown }
         | undefined;
       const prompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
       if (!prompt) {
@@ -116,11 +120,30 @@ export async function startDaemon(
         // keeps unprompted injection high-precision; the deliberate pull path is
         // unaffected. Tunable via KEYMEM_HOOK_MIN_REL.
         const minRel = Number(process.env.KEYMEM_HOOK_MIN_REL ?? 0.6);
+        // cwd → namespace affinity: measured on a 40-prompt replay, 3-4 of 14 injections
+        // were cross-project pollution whose relevance scores (0.63-0.68) fully overlap
+        // with genuine hits (0.61-0.70) — no floor separates them, but project context
+        // does. <data-dir>/namespaces.json maps path prefixes to allowed namespace lists
+        // ("default" is always allowed); an unmapped cwd keeps the global behavior.
+        const cwd = typeof body?.cwd === "string" ? body.cwd.toLowerCase() : null;
+        let allowedNs: Set<string> | null = null;
+        if (cwd) {
+          try {
+            const raw = await readFile(join(dataDirPath, "namespaces.json"), "utf-8");
+            const map = JSON.parse(raw) as Record<string, string[]>;
+            let bestPrefix = "";
+            for (const prefix of Object.keys(map)) {
+              const p = prefix.toLowerCase();
+              if (cwd.startsWith(p) && p.length > bestPrefix.length) bestPrefix = prefix;
+            }
+            if (bestPrefix) allowedNs = new Set([...map[bestPrefix], "default"]);
+          } catch { /* no mapping file → global behavior */ }
+        }
         const filtered = {
           ...result,
-          memories: (result.memories as Array<{ relevance_score?: number }>).filter(
-            (m) => (m.relevance_score ?? 0) >= minRel
-          ),
+          memories: (result.memories as Array<{ relevance_score?: number; namespace?: string }>)
+            .filter((m) => (m.relevance_score ?? 0) >= minRel)
+            .filter((m) => !allowedNs || allowedNs.has(m.namespace ?? "default")),
         };
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify(filtered));

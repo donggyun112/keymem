@@ -1216,17 +1216,33 @@ export class MemoryGraph {
         // remain tagged "strawberry" and pollute that key's recall. Exact-match anchors
         // (name/proper_noun) are always kept — they only match literal queries, so they
         // cannot pollute semantic recall. (snapshot to avoid mutation during iteration)
+        //
+        // Drift bar: key↔CONTENT cosine, so it must use the content-calibrated gate
+        // (CONTENT_RECALL_SHORT, bgem3 0.46), NOT keyRecall (0.62). Short keys sit at
+        // 0.477–0.643 against SAME-topic sentence content (measured 2026-07-29), so the
+        // 0.62 bar dropped every inherited key on a typical correction and the new
+        // version became an unreachable keyless orphan (recall miss + explain:true
+        // misreporting empty_namespace — live-confirmed regression).
+        const inherited: Array<[string, number]> = [];
         for (const [kid, w] of [...(this._memToKeys[oldId] ?? new Map())]) {
           const key = this.keys[kid];
           if (
             key &&
             key.key_type === "concept" &&
-            cosineSim(newEmbedding, key.embedding) < KEY_RECALL_THRESHOLD
+            cosineSim(newEmbedding, key.embedding) < CONTENT_RECALL_SHORT
           ) {
             continue; // stale topic key — drop it so the off-topic memory is not mis-tagged
           }
-          this._link(kid, mid, w);
+          inherited.push([kid, w]);
         }
+        if (inherited.length === 0) {
+          // Invariant: a correction must NEVER produce a keyless orphan — an occasionally
+          // stale tag is recoverable, an unreachable memory is not. Keep everything.
+          for (const [kid, w] of [...(this._memToKeys[oldId] ?? new Map())]) {
+            inherited.push([kid, w]);
+          }
+        }
+        for (const [kid, w] of inherited) this._link(kid, mid, w);
       }
 
       this._autoLinkKeys(mid, newEmbedding);
