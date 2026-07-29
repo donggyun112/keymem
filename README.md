@@ -192,7 +192,7 @@ Every memory has a depth score `0.0 → 1.0`:
 | Medium | `0.3–0.7` | Confirmed multiple times. Stable. |
 | Deep | `> 0.7` | Well-established fact. Resists correction. |
 
-Depth increases `+0.05` each recall. Deep memories decay slower over time. If you try to correct a deep memory, it resists — its depth stays higher even after supersede.
+Depth increases `+0.05` only when the agent confirms a fact with `read_memory()`. Key search, `read_key()`, and passive `inject:true` previews do not deepen memories. Deep memories decay slower over time. If you try to correct a deep memory, it resists — its depth stays higher even after supersede.
 
 ### Key Types
 
@@ -234,7 +234,7 @@ The default MCP API keeps Key Space and Value Space separate:
 3. `read_memory(memory_id, via_key_id)` returns the full memory plus every connected key cluster. Only this full read increases memory depth/access count; only the traversed `via_key_id` edge receives Hebbian reinforcement.
 4. The agent follows any returned key with another `read_key()` call, producing an explicit **Key → Memory → Key** graph walk.
 
-Semantically merged keys are preserved as aliases on one canonical key cluster (for example `Python` + `파이썬`). A key linked to at least three active memories is surfaced as a hub with `is_hub`, `memory_count`, and `specificity` metadata rather than being hidden by IDF. Override the threshold with `KEYMEM_KEY_HUB_MIN_LINKS`.
+Semantically merged keys are preserved as aliases on one canonical key cluster (for example `Python` + `파이썬`). The recommended `bge-m3` profile enables conservative short-key merging by default; override or disable it with `KEYMEM_SHORT_KEY_MERGE`. A key linked to at least three active memories is surfaced as a hub with `is_hub`, `memory_count`, and `specificity` metadata rather than being hidden by IDF. Override the hub threshold with `KEYMEM_KEY_HUB_MIN_LINKS`.
 
 ### Direct Hybrid Retrieval (optional compatibility mode)
 
@@ -348,12 +348,14 @@ An uncalibrated `LOCAL_EMBEDDING_MODEL` falls back to the BGE profile **and logs
 
 ## MCP Tools
 
-The memory system exposes 12 tools by default:
+The full trusted-local tool set contains 14 tools by default. Plain untrusted
+servers hide the two transcript tools (`list_sessions`, `get_conversation`):
 
 | Tool | Description |
 | --- | --- |
-| `recall(query, top_k?, namespace?)` | Search Key Space only. Returns canonical keys, aliases, scores, and hub metadata; never memory content. |
-| `read_key(key_id, namespace?, limit?, offset?)` | List ranked memory IDs and metadata connected to one key. Never returns content; supports pagination for hubs. |
+| `recall(query, top_k?, namespace?, explain?)` | Search Key Space only. Returns canonical keys, aliases, scores, and hub metadata; never memory content. `explain:true` distinguishes `found`, `no_match`, and `empty_namespace`. |
+| `browse_keys(namespace, hubs_only?, limit?, offset?)` | Browse a namespace's active key vocabulary, hubs first, when recall has no entry hit. |
+| `read_key(key_id, query?, namespace?, limit?, offset?)` | List ranked memory IDs and metadata connected to one key. Pass the original query for relevance ordering; supports pagination for hubs. |
 | `read_memory(memory_id, via_key_id?, namespace?)` | Read full memory content and connected keys. Increases depth/access and reinforces the traversed edge. |
 | `remember(content, keys, key_types?, namespace?, ttl_seconds?, related_to?)` | Save memory with key concepts and optional type annotations |
 | `correct(memory_id, content, keys?, key_types?, related_to?)` | Versioned update — old memory preserved but weakened |
@@ -366,7 +368,9 @@ The memory system exposes 12 tools by default:
 | `cleanup_expired()` | Delete memories whose TTL has expired |
 | `memory_stats()` | Get current key/memory/link counts |
 
-Set `KEYMEM_DIRECT_RECALL=true` to expose a thirteenth compatibility tool, `recall_memories(...)`, with BM25+dense+RRF multi-hop behavior.
+Scores carry `score_kind`. Key recall exposes cosine-like `key_relevance`; `read_key` exposes `content_relevance` plus a within-key rank score; injected/direct memories expose `relevance_score` separately from their small RRF `rank_score`. Compare thresholds only within the same score kind.
+
+Set `KEYMEM_DIRECT_RECALL=true` to expose a fifteenth compatibility tool, `recall_memories(...)`, with BM25+dense+RRF multi-hop behavior.
 
 A system prompt template is also available via the `memory_system_prompt` MCP prompt — include it to instruct the agent to recall silently, use diverse keys, and never mention the memory system to users.
 

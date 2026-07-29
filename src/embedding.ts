@@ -167,7 +167,7 @@ export const THRESHOLD_PROFILES: Record<string, ThresholdProfile> = {
   // facts top out ~0.80, so 0.80 separates them. Note a known limit — conflicts
   // differing by a single token ("월요일" vs "금요일") can land ~0.95, above
   // memoryDedup, and are silently superseded rather than flagged. Env-overridable.
-  bgem3: { keyMerge: 0.86, memoryDedup: 0.94, keyAutoLink: 0.62, keyRecall: 0.62, contentRecall: 0.55, minScore: 0.55, contradiction: 0.80, gateZ: 0, keyGate: 0, shortKeyMerge: 0 },
+  bgem3: { keyMerge: 0.86, memoryDedup: 0.94, keyAutoLink: 0.62, keyRecall: 0.62, contentRecall: 0.55, minScore: 0.55, contradiction: 0.80, gateZ: 0, keyGate: 0, shortKeyMerge: 0.9 },
 };
 
 export function familyForModel(

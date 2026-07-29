@@ -5,7 +5,12 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { MemoryGraph, loadConversation, sanitizeKeys } from "./memoryGraph.js";
+import {
+  MemoryGraph,
+  classifyRecallStatus,
+  loadConversation,
+  sanitizeKeys,
+} from "./memoryGraph.js";
 import {
   loadNativeConversation,
   loadNativeAuto,
@@ -100,8 +105,8 @@ You are a helpful assistant. You have long-term memory — use it silently and p
 
 ## MANDATORY: First turn behavior
 **Before your very first response, you MUST navigate memory.** Run in parallel:
-- recall("이름"), recall("최근 대화"), recall("관심사")
-- For useful returned keys: read_key(key_id), then read_memory(memory_id, via_key_id).
+- recall("이름", namespace), recall("최근 대화", namespace), recall("관심사", namespace)
+- For useful returned keys: read_key(key_id, query, namespace), then read_memory(memory_id, via_key_id, namespace).
 No exceptions. Even if recall returns no keys, you must try.
 
 ## MANDATORY: Before ending EVERY turn
@@ -122,21 +127,25 @@ Stats: {stats}
 ## Rules
 
 ### Recall (PROACTIVE — do it often)
-1. **MUST recall before your first reply.** Recall returns key clusters, not memory content.
-2. For relevant keys, call \`read_key\`; call \`read_memory\` before using a fact.
+1. **MUST recall before your first reply.** Recall returns key clusters, not memory content. Always pass the active project/context \`namespace\` when one is known.
+2. For relevant keys, complete \`read_key(key_id, query, namespace)\` → \`read_memory(memory_id, via_key_id, namespace)\` before using a fact. The full read is what grows depth, access count, traversed-edge weight, and learned aliases.
+2a. \`inject:true\` returns an unconfirmed passive preview. Do not use it for core lookups or as a substitute for the full traversal; if a preview matters, confirm it with \`read_memory\`.
 3. Recall again whenever the topic shifts. Never say "I don't know" without navigating first.
 4. **Query = short noun/keyword, NOT a full sentence.**
    - ❌ recall("어디 살아"), recall("뭐 마셔") — 구어체 문장은 매칭 안 됨
    - ✅ recall("거주지"), recall("음료") — 명사 키워드로 검색
    - ✅ recall("이름"), recall("직업"), recall("취향") — specific, multiple
    - 복합 개념이면 키워드 여러 개로 분리: recall("운동"), recall("취미"), recall("건강")
-5. \`read_key\` returns handles and metadata only. You must call \`read_memory\` to inspect content.
+5. \`read_key\` returns handles and metadata only. Pass the original focused query so hub memories are relevance-ranked, then call \`read_memory\` to inspect content.
 5a. If a \`read_memory\` result is too compressed for the question and includes a \`trace\` field, call that tool with those exact args (\`get_conversation\`) to read the original conversation it came from. Use only when the summary genuinely lacks the detail you need — otherwise the recalled fact is enough.
 
 ### Remember (PROACTIVE — capture what matters)
 6. **You MUST save durable info the moment the user shares it — silently, in the same turn.** Do not defer to "later"; later never comes. Mandatory, not optional (see the "Before ending EVERY turn" gate above). No exceptions.
 7. What to save: name, preferences, decisions, corrections, project context, goals.
 8. Keys = what searches should find this. **Think like a search engine — include every form someone might use to ask about this.**
+   - Before writing, recall the topic and reuse an existing canonical key or alias when available.
+   - Emit concept-level keys, not memory-specific phrases (✅ "Nexora", "portfolio"; ❌ "Nexora portfolio").
+   - Add Korean↔English forms together when both may be queried (for example "포트폴리오", "portfolio").
    - **Topic noun**: what category is this? (거주지, 음료, 반려동물, 언어)
    - **Specific noun**: the actual value (성수동, 아메리카노, 고양이, TypeScript)
    - **Action/verb noun**: what would someone ask? (사는곳, 마시는것, 키우는것, 쓰는언어)
@@ -188,17 +197,18 @@ const SERVER_INSTRUCTIONS = `\
 keymem is this agent's associative long-term memory (a key-graph, not a vector store).
 
 Recall first: before your first reply — and whenever the topic shifts — call recall(query) \
-to check what is already known about the user, project, or topic. Use short noun keywords, \
+with the active namespace to check what is already known about the user, project, or topic. Use short noun keywords, \
 not full sentences (recall("거주지") not recall("어디 살아")), and split multi-fact questions \
-into several recall calls. recall returns matching keys only; follow with read_key(key_id) then \
-read_memory(memory_id, via_key_id) to read a fact, or pass inject:true to recall for a one-shot \
-content fetch.
+into several recall calls. recall returns matching keys only; complete read_key(key_id, query, namespace) \
+then read_memory(memory_id, via_key_id, namespace) to read a fact and reinforce the traversed path. \
+inject:true is an unconfirmed passive preview, not a substitute for this core lookup flow.
 
 Remember durable facts — the write-side twin of recall first: recall opens the turn, remember \
 closes it. Before you finish EVERY reply you MUST check whether this turn revealed anything \
 durable; when the user shares a name, preference, decision, correction, project fact, or goal, \
 you MUST save it silently in the same turn with remember(content, keys) using 3-6 diverse search \
-keys (include colloquial and cross-lingual variants). Do not defer it to "later". A turn that \
+keys. Recall the topic first and reuse canonical concept-level keys; include colloquial and \
+cross-lingual variants. Do not defer it to "later". A turn that \
 surfaced a durable fact but saved nothing is a bug. Use correct() when a fact changes — never \
 remember() for updates.
 
@@ -214,7 +224,7 @@ const TRANSCRIPT_TOOLS = new Set(["get_conversation", "list_sessions"]);
 
 export function createMcpServer(): Server {
   const server = new Server(
-    { name: "keymem", version: "0.17.1" },
+    { name: "keymem", version: "0.18.0" },
     {
       capabilities: { tools: {}, prompts: {} },
       instructions: SERVER_INSTRUCTIONS,
@@ -227,13 +237,18 @@ export function createMcpServer(): Server {
       {
         name: "recall",
         description:
-          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Returns matching key clusters only (not memory content): canonical concept, aliases, key type, match score, linked-memory count, hub status, and specificity. Follow up with read_key(key_id) then read_memory(memory_id, via_key_id) to read a stored fact. Use short focused noun queries and decompose multi-fact questions into several recall calls. Set inject:true to ALSO get the best connected memory preview in one call (skips manual read_key/read_memory) — returns {keys, memories}. inject_top_k defaults to 1; inject_max_chars defaults to 2000 and marks truncated previews so read_memory can fetch the full content. Injection defaults to a precision gate; set inject_min_rel_score to 0 only for explicit associative exploration. inject_prefer_depth favors confirmed memories; inject_explore_shallow reserves one slot for a weak/recent memory.",
+          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. Returns matching key clusters only (not memory content): canonical concept, aliases, key type, match score, linked-memory count, hub status, and specificity. For a core lookup, complete read_key(key_id, original_query, namespace) then read_memory(memory_id, via_key_id, namespace): only the full read grows depth/access, reinforces the traversed edge, and learns aliases. Use short focused noun queries and decompose multi-fact questions into several recall calls. inject:true is only an unconfirmed passive preview and must not replace that traversal; injected memories are not reinforced. inject_top_k defaults to 1; inject_max_chars defaults to 2000 and marks truncated previews.",
         inputSchema: {
           type: "object",
           properties: {
             query: { type: "string" },
             top_k: { type: "number" },
             namespace: { type: "string" },
+            explain: {
+              type: "boolean",
+              description:
+                "When true, return {status, keys, namespace_memory_count}; status distinguishes found, no_match, and empty_namespace.",
+            },
             inject: { type: "boolean" },
             inject_top_k: { type: "number" },
             inject_max_chars: { type: "number" },
@@ -245,9 +260,24 @@ export function createMcpServer(): Server {
         },
       },
       {
+        name: "browse_keys",
+        description:
+          "Browse the vocabulary of one namespace when recall has no hit or you need an entry point. Returns active key clusters with hubs first, then by linked-memory count. This is index metadata only; continue with read_key(key_id, query, namespace) and read_memory(memory_id, via_key_id, namespace).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            namespace: { type: "string" },
+            hubs_only: { type: "boolean" },
+            limit: { type: "number" },
+            offset: { type: "number" },
+          },
+          required: ["namespace"],
+        },
+      },
+      {
         name: "read_key",
         description:
-          "List the memories stored under one key (concept), ranked. Returns the canonical key, its aliases, and hub metadata plus ranked memory IDs and metadata — never memory content. Call read_memory on promising handles. Use limit/offset to page through hub keys without flooding context. Pass the original query: handles are then ranked by content relevance to it, which is essential for hub keys so the target memory surfaces first instead of being buried.",
+          "List the memories stored under one key (concept), ranked. Returns the canonical key, its aliases, and hub metadata plus ranked memory IDs and metadata — never memory content. Always pass the original focused query and active namespace when known: handles are then ranked by content relevance, which is essential for hubs. Call read_memory(memory_id, via_key_id=key_id, namespace) on the selected handle to confirm the fact and reinforce the path. Use limit/offset to page without flooding context.",
         inputSchema: {
           type: "object",
           properties: {
@@ -302,7 +332,7 @@ export function createMcpServer(): Server {
       {
         name: "remember",
         description:
-          "MANDATORY END-OF-TURN GATE: before replying, save every durable fact newly revealed this turn (names, preferences, decisions, corrections, project facts, goals). A durable fact left unsaved is a bug; save silently in the same turn. Save nothing only after consciously confirming that nothing durable appeared. Keys are search terms — think 'what would I search to find this later?' Use 3-6 diverse keys. Before coining new keys, recall() the topic and reuse returned canonical concepts or aliases. Semantically merged synonyms become aliases in one key cluster; shared broad keys become navigable hubs. CROSS-LINGUAL: add keys in both languages. namespace groups memories by project/context; ttl_seconds sets expiry; related_to adds explicit memory links; source attaches provenance and is auto-stamped with the server session, a timestamp, and — when a host agent (Claude Code, Codex) transcript is active — host_session/host_agent/host_turn so the memory can be traced back to its original conversation via get_conversation.",
+          "MANDATORY END-OF-TURN GATE: before replying, save every durable fact newly revealed this turn (names, preferences, decisions, corrections, project facts, goals). A durable fact left unsaved is a bug; save silently in the same turn. Save nothing only after consciously confirming that nothing durable appeared. Before writing, recall() the topic in the same namespace and reuse returned canonical concepts or aliases. Use 3-6 diverse concept-level search keys, not memory-specific phrases (use 'Nexora' and 'portfolio', not 'Nexora portfolio'). CROSS-LINGUAL: register both language forms together (for example '포트폴리오' and 'portfolio'). Shared broad keys become navigable hubs. namespace groups memories by project/context; ttl_seconds sets expiry; related_to adds explicit memory links; source attaches provenance and is auto-stamped with the server session, a timestamp, and — when a host agent (Claude Code, Codex) transcript is active — host_session/host_agent/host_turn so the memory can be traced back to its original conversation via get_conversation.",
         inputSchema: {
           type: "object",
           properties: {
@@ -426,7 +456,7 @@ export function createMcpServer(): Server {
       {
         name: "remember_batch",
         description:
-          "MANDATORY END-OF-TURN GATE: when a turn reveals multiple durable facts, save them silently before replying. A durable fact left unsaved is a bug. Each item: {content, keys, key_types?, namespace?, ttl_seconds?, related_to?}. Returns saved IDs and is more efficient than multiple remember() calls.",
+          "MANDATORY END-OF-TURN GATE: when a turn reveals multiple durable facts, save them silently before replying. A durable fact left unsaved is a bug. Recall each topic first, reuse canonical concept-level keys, and register cross-lingual forms together. Each item: {content, keys, key_types?, namespace?, ttl_seconds?, related_to?}. Returns saved IDs and is more efficient than multiple remember() calls.",
         inputSchema: {
           type: "object",
           properties: {
@@ -490,11 +520,12 @@ export function createMcpServer(): Server {
     try {
       switch (name) {
         case "recall": {
+          const namespace = typeof a.namespace === "string" ? a.namespace : null;
           if (a.inject === true) {
             const injected = await graph.recallInject(
               a.query as string,
               typeof a.inject_top_k === "number" ? a.inject_top_k : 1,
-              typeof a.namespace === "string" ? a.namespace : null,
+              namespace,
               {
                 preferDepth: a.inject_prefer_depth === true,
                 exploreShallow: a.inject_explore_shallow === true,
@@ -511,9 +542,31 @@ export function createMcpServer(): Server {
           const results = await graph.searchKeys(
             a.query as string,
             typeof a.top_k === "number" ? a.top_k : 8,
-            typeof a.namespace === "string" ? a.namespace : null
+            namespace
           );
+          if (a.explain === true) {
+            const overview = await graph.browseKeys(namespace, { limit: 1 }) as {
+              memory_count: number;
+            };
+            const explained = {
+              status: classifyRecallStatus(results.length, overview.memory_count),
+              query: a.query,
+              namespace,
+              namespace_memory_count: overview.memory_count,
+              keys: results,
+            };
+            return { content: [{ type: "text", text: JSON.stringify(explained) }] };
+          }
           return { content: [{ type: "text", text: JSON.stringify(results, null, 0) }] };
+        }
+
+        case "browse_keys": {
+          const result = await graph.browseKeys(a.namespace as string, {
+            hubsOnly: a.hubs_only === true,
+            limit: typeof a.limit === "number" ? a.limit : 20,
+            offset: typeof a.offset === "number" ? a.offset : 0,
+          });
+          return { content: [{ type: "text", text: JSON.stringify(result) }] };
         }
 
         case "read_key": {

@@ -122,6 +122,24 @@ function meaningfulQueryTokens(query: string): string[] {
     .filter((token) => token.length >= 2 && !QUERY_FILLER.has(token));
 }
 
+// Protect sibling entity labels such as "Agent A" / "Agent B" from semantic
+// short-key merging even when an embedder places them almost on top of each other.
+function hasConflictingShortQualifier(a: string, b: string): boolean {
+  const tokenize = (value: string) =>
+    value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const left = tokenize(a);
+  const right = tokenize(b);
+  if (left.length < 2 || left.length !== right.length) return false;
+  if (!left.slice(0, -1).every((token, i) => token === right[i])) return false;
+  const leftQualifier = left.at(-1) ?? "";
+  const rightQualifier = right.at(-1) ?? "";
+  return (
+    leftQualifier !== rightQualifier &&
+    /^[a-z0-9]$/i.test(leftQualifier) &&
+    /^[a-z0-9]$/i.test(rightQualifier)
+  );
+}
+
 function hasLexicalQueryCoverage(
   query: string,
   memory: { content?: string; keys?: Array<string | { concept?: string }> }
@@ -184,6 +202,14 @@ function batchCosineSim(query: number[], matrix: number[][]): number[] {
 // — unlike fused scores. minScore = 0 disables the gate.
 export function passesAbsoluteGate(rawSim: number, minScore: number): boolean {
   return minScore <= 0 || rawSim >= minScore;
+}
+
+export function classifyRecallStatus(
+  matchCount: number,
+  namespaceMemoryCount: number
+): "found" | "no_match" | "empty_namespace" {
+  if (matchCount > 0) return "found";
+  return namespaceMemoryCount > 0 ? "no_match" : "empty_namespace";
 }
 
 // Median of a numeric array (sorted copy; average of middle two for even length).
@@ -861,7 +887,10 @@ export class MemoryGraph {
           const sims = batchCosineSim(emb, conceptKeys.map(([, k]) => k.embedding));
           let bestIdx = 0, bestSim = -Infinity;
           for (let i = 0; i < sims.length; i++) if (sims[i] > bestSim) { bestSim = sims[i]; bestIdx = i; }
-          if (bestSim >= SHORT_KEY_MERGE_THRESHOLD) {
+          if (
+            bestSim >= SHORT_KEY_MERGE_THRESHOLD &&
+            !hasConflictingShortQualifier(concept, conceptKeys[bestIdx][1].concept)
+          ) {
             const existingId = conceptKeys[bestIdx][0];
             this._recordKeyAlias(existingId, concept);
             return existingId;
@@ -1179,6 +1208,7 @@ export class MemoryGraph {
         aliases: string[];
         key_type: Key["key_type"];
         score: number;
+        score_kind: "key_relevance";
         match_type: "concept" | "alias" | "semantic" | "content";
         memory_count: number;
         is_hub: boolean;
@@ -1243,6 +1273,7 @@ export class MemoryGraph {
           aliases,
           key_type: key.key_type,
           score: Math.round(relevance * 1000) / 1000,
+          score_kind: "key_relevance",
           match_type: matchedAlias ? "alias" : conceptLiteral ? "concept" : contentSim > keySim ? "content" : "semantic",
           memory_count: memoryCount,
           is_hub: memoryCount >= KEY_HUB_MIN_LINKS,
@@ -1307,11 +1338,11 @@ export class MemoryGraph {
         const linkWeight = this._getLinkWeight(keyId, mid);
         const rel = qEmb ? cosineSim(qEmb, mem.embedding) : 1;
         const score = rel * linkWeight * (0.9 + mem.depth * 0.1) * this._timeFactor(mem);
-        return { mid, mem, linkWeight, score };
+        return { mid, mem, linkWeight, relevance: rel, score };
       })
       .sort((a, b) => b.score - a.score || b.mem.created_at - a.mem.created_at);
 
-    const page = ranked.slice(offset, offset + limit).map(({ mid, mem, linkWeight, score }) => ({
+    const page = ranked.slice(offset, offset + limit).map(({ mid, mem, linkWeight, relevance, score }) => ({
       memory_id: mid,
       evidence: "unread" as const,
       suggested_tool: "read_memory" as const,
@@ -1319,6 +1350,8 @@ export class MemoryGraph {
       created_at: mem.created_at,
       namespace: mem.namespace,
       link_weight: Math.round(linkWeight * 1000) / 1000,
+      content_relevance: qEmb ? Math.round(relevance * 1000) / 1000 : null,
+      score_kind: qEmb ? "within_key_rank" as const : "link_rank" as const,
       score: Math.round(score * 1000) / 1000,
     }));
 
@@ -1327,7 +1360,59 @@ export class MemoryGraph {
       memories: page,
       total: ranked.length,
       next_offset: offset + limit < ranked.length ? offset + limit : null,
+      scoring: {
+        content_relevance: qEmb
+          ? "cosine similarity; comparable to recall key relevance"
+          : "not computed because query was omitted",
+        score: qEmb
+          ? "content_relevance × link_weight × depth_factor × time_factor; compare only within this key"
+          : "link_weight × depth_factor × time_factor; compare only within this key",
+      },
     };
+  }
+
+  async browseKeys(
+    namespace: string | null,
+    options: { limit?: number; offset?: number; hubsOnly?: boolean } = {}
+  ): Promise<object> {
+    return this._lock.runExclusive(async () => {
+      const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 20)));
+      const offset = Math.max(0, Math.floor(options.offset ?? 0));
+      const hubsOnly = options.hubsOnly === true;
+      const activeMemoryIds = new Set<string>();
+      const views = Object.keys(this.keys)
+        .map((keyId) => {
+          const ids = this._activeMemoryIdsForKey(keyId, namespace);
+          for (const id of ids) activeMemoryIds.add(id);
+          return this._keyView(keyId, namespace) as {
+            key_id: string;
+            concept: string;
+            aliases: string[];
+            learned_aliases: string[];
+            key_type: Key["key_type"];
+            memory_count: number;
+            is_hub: boolean;
+            specificity: number;
+          };
+        })
+        .filter((key) => key.memory_count > 0)
+        .filter((key) => !hubsOnly || key.is_hub)
+        .sort(
+          (a, b) =>
+            Number(b.is_hub) - Number(a.is_hub) ||
+            b.memory_count - a.memory_count ||
+            a.concept.localeCompare(b.concept)
+        );
+      const page = views.slice(offset, offset + limit);
+      return {
+        status: activeMemoryIds.size > 0 ? "ok" : "empty_namespace",
+        namespace: namespace ?? null,
+        memory_count: activeMemoryIds.size,
+        key_count: views.length,
+        keys: page,
+        next_offset: offset + limit < views.length ? offset + limit : null,
+      };
+    });
   }
 
   // Auto-key self-healing: a memory was just confirmed (read) via viaKeyId. If that key
@@ -1567,6 +1652,7 @@ export class MemoryGraph {
     const queryLower = query.toLowerCase().trim();
     const memMatchedKeys: Record<string, string[]> = {};
     const memHop: Record<string, number> = {};
+    const memRawSim: Record<string, number> = {};
     let keyScores: [number, string][] = [];
 
     // Hoisted to method scope so Phase 3 (a separate locked section) can reuse it.
@@ -1588,7 +1674,6 @@ export class MemoryGraph {
     // inside this section, so the lock is held only for fast in-memory work, never
     // across model inference or disk I/O.
     await this._lock.runExclusive(async () => {
-      const memRawSim: Record<string, number> = {};
       const allContentSims: number[] = [];
       const bumpRaw = (mid: string, sim: number) => {
         if (sim > (memRawSim[mid] ?? -Infinity)) memRawSim[mid] = sim;
@@ -1893,6 +1978,9 @@ export class MemoryGraph {
           matched_via: [...new Set(memMatchedKeys[mid] ?? [])],
           hop: memHop[mid] ?? 1,
           score: Math.round(score * 1000) / 1000,
+          rank_score: Math.round(score * 1000) / 1000,
+          relevance_score: Math.round((memRawSim[mid] ?? 0) * 1000) / 1000,
+          score_kind: "rrf_fused_rank",
           depth: Math.round(mem.depth * 1000) / 1000,
           access_count: mem.access_count,
           source: mem.source,

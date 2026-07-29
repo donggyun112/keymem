@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-07-29
+
+### Changed
+
+- Make the agent guidance use namespace-scoped `recall` and complete
+  `read_key(query) → read_memory(via_key_id)` for core facts; passive injection is
+  no longer presented as an equivalent path.
+- Enable conservative short-key semantic merging by default for calibrated
+  `bge-m3`, while protecting sibling labels such as `Agent A` / `Agent B`.
+- Add namespace-scoped `browse_keys`, optional explained recall statuses, and
+  explicit score-kind metadata so empty results and incompatible score scales are
+  distinguishable.
+
 ## [0.17.1] - 2026-07-26
 
 ### Fixed
