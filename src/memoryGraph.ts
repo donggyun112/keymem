@@ -1177,13 +1177,21 @@ export class MemoryGraph {
   async searchKeys(
     query: string,
     topK = 8,
-    namespace?: string | null
+    namespace?: string | null,
+    contextText?: string | null
   ): Promise<object[]> {
     const cleanQuery = query.trim();
     if (!cleanQuery || Object.keys(this.keys).length === 0) return [];
 
     const qEmb = await embedTextAsync(cleanQuery, "query");
     this._checkDim(qEmb);
+    // Dual-path cue: the caller's raw utterance/sentence, when provided, drives the
+    // CONTENT signal (sentence↔sentence cosine runs ~0.1–0.2 higher than keyword↔sentence
+    // on bge-m3 — measured 2026-07-29), while the short keyword query keeps driving the
+    // key/lexical signals it is optimal for. Omitted → byte-identical to before.
+    const ctx = contextText?.trim();
+    const cEmb = ctx ? await embedTextAsync(ctx, "query") : qEmb;
+    if (ctx) this._checkDim(cEmb);
     topK = Math.max(1, Math.min(20, Math.floor(topK)));
 
     // Content signal: max cosine of a key's member memories to the query. Lets a key whose
@@ -1192,7 +1200,7 @@ export class MemoryGraph {
     // cosine over a synchronous snapshot) to keep the lock hold short, matching the rerank/flush
     // off-lock design. A memory added after this snapshot simply scores 0 for this query.
     const memIds = Object.keys(this.memories);
-    const memSimArr = batchCosineSim(qEmb, memIds.map((mid) => this.memories[mid].embedding));
+    const memSimArr = batchCosineSim(cEmb, memIds.map((mid) => this.memories[mid].embedding));
     const memSim = new Map<string, number>();
     for (let j = 0; j < memIds.length; j++) memSim.set(memIds[j], memSimArr[j]);
 
@@ -1618,7 +1626,8 @@ export class MemoryGraph {
       exploreShallow?: boolean;
       maxChars?: number;
       minRelScore?: number;
-    } = {}
+    } = {},
+    contextText: string | null = null
   ): Promise<{ keys: object[]; memories: object[] }> {
     // Navigation keys (so the agent can still steer) + selected top-N expanded memories. Keep the
     // default absolute anchor gate (minScore = MIN_SCORE_THRESHOLD). The gate is ANCHOR-based, not
@@ -1627,7 +1636,7 @@ export class MemoryGraph {
     // SOMETHING before we inject. Passing minScore=0 disabled it, so a query with no real match
     // (e.g. a cross-lingual miss) filled every slot with coincidental BM25 hits — pure junk. Pull a
     // wider candidate pool, then let selectInject pick by relevance / depth / exploration.
-    const keys = await this.searchKeys(query, 8, namespace);
+    const keys = await this.searchKeys(query, 8, namespace, contextText);
     const minRelScore = Number.isFinite(opts.minRelScore)
       ? Math.max(0, Math.min(0.9, opts.minRelScore as number))
       : INJECT_MIN_REL_SCORE;
@@ -1643,7 +1652,8 @@ export class MemoryGraph {
     };
     const pool = (await this.recall(
       query, Math.max(topK * 3, 15), namespace, true, 2, 0, MIN_SCORE_THRESHOLD,
-      GATE_Z_THRESHOLD, KEY_GATE_THRESHOLD, 0, false // reinforce=false: injection is passive
+      GATE_Z_THRESHOLD, KEY_GATE_THRESHOLD, 0, false, // reinforce=false: injection is passive
+      contextText
     )) as InjectMemory[];
     // Inject is associative/semantic expansion, so only memories with DENSE or GRAPH support belong
     // in it: a content/key cosine match, or a (via)/(linked) hop from a genuine anchor. Once any
@@ -1687,7 +1697,10 @@ export class MemoryGraph {
     // When false, recall is a pure read: no depth/access bump, no Hebbian reinforce/decay.
     // recallInject uses this so passively-surfaced (and the wider internal candidate) memories
     // aren't reinforced — only a real read_memory should strengthen the graph.
-    reinforce = true
+    reinforce = true,
+    // Dual-path cue: raw utterance/sentence driving the CONTENT similarity path (Dense
+    // Path B) while `query` keeps driving keys/BM25/literal matching. See searchKeys.
+    contextText: string | null = null
   ): Promise<object[]> {
     if (Object.keys(this.memories).length === 0) return [];
 
@@ -1706,6 +1719,9 @@ export class MemoryGraph {
     minKeyGate = Math.max(0, Math.min(1, minKeyGate));
     const qEmb = await embedTextAsync(query, "query"); // outside lock
     this._checkDim(qEmb);
+    const recallCtx = contextText?.trim();
+    const cEmb = recallCtx ? await embedTextAsync(recallCtx, "query") : qEmb; // outside lock
+    if (recallCtx) this._checkDim(cEmb);
 
     const results: object[] = [];
     const queryLower = query.toLowerCase().trim();
@@ -1799,7 +1815,7 @@ export class MemoryGraph {
       const memIds = Object.keys(this.memories);
       if (memIds.length > 0) {
         const contentSims = batchCosineSim(
-          qEmb,
+          cEmb,
           memIds.map((mid) => this.memories[mid].embedding)
         );
         for (let i = 0; i < memIds.length; i++) {

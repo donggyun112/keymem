@@ -244,6 +244,11 @@ export function createMcpServer(): Server {
             query: { type: "string" },
             top_k: { type: "number" },
             namespace: { type: "string" },
+            context: {
+              type: "string",
+              description:
+                "The raw user utterance or sentence this lookup serves. Keep query as short noun keywords; pass the sentence here — it drives content matching, which measures higher on sentence-shaped cues.",
+            },
             explain: {
               type: "boolean",
               description:
@@ -521,6 +526,7 @@ export function createMcpServer(): Server {
       switch (name) {
         case "recall": {
           const namespace = typeof a.namespace === "string" ? a.namespace : null;
+          const context = typeof a.context === "string" ? a.context : null;
           if (a.inject === true) {
             const injected = await graph.recallInject(
               a.query as string,
@@ -535,14 +541,16 @@ export function createMcpServer(): Server {
                   typeof a.inject_min_rel_score === "number"
                     ? a.inject_min_rel_score
                     : undefined,
-              }
+              },
+              context
             );
             return { content: [{ type: "text", text: JSON.stringify(injected, null, 0) }] };
           }
           const results = await graph.searchKeys(
             a.query as string,
             typeof a.top_k === "number" ? a.top_k : 8,
-            namespace
+            namespace,
+            context
           );
           if (a.explain === true) {
             const overview = await graph.browseKeys(namespace, { limit: 1 }) as {
