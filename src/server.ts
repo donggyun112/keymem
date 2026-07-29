@@ -237,7 +237,7 @@ export function createMcpServer(): Server {
       {
         name: "recall",
         description:
-          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. Returns matching key clusters only (not memory content): canonical concept, aliases, key type, match score, linked-memory count, hub status, and specificity. For a core lookup, complete read_key(key_id, original_query, namespace) then read_memory(memory_id, via_key_id, namespace): only the full read grows depth/access, reinforces the traversed edge, and learns aliases. Use short focused noun queries and decompose multi-fact questions into several recall calls. inject:true is only an unconfirmed passive preview and must not replace that traversal; injected memories are not reinforced. inject_top_k defaults to 1; inject_max_chars defaults to 2000 and marks truncated previews.",
+          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. Returns matching key clusters only (not memory content): canonical concept, aliases, key type, match score, linked-memory count, hub status, and specificity. For a core lookup, complete read_key(key_id, original_query, namespace) then read_memory(memory_id, via_key_id, namespace): only the full read grows depth/access, reinforces the traversed edge, and learns aliases. Use short focused noun queries and decompose multi-fact questions into several recall calls. inject:true is only an unconfirmed passive preview and must not replace that traversal; injected memories are not reinforced. inject_top_k defaults to 1; inject_max_chars defaults to 2000 and marks truncated previews. An empty result returns {status:'no_match', nearest_keys} — the closest stored concepts below the gate; retry with one of those concepts when relevant.",
         inputSchema: {
           type: "object",
           properties: {
@@ -556,6 +556,15 @@ export function createMcpServer(): Server {
               keys: results,
             };
             return { content: [{ type: "text", text: JSON.stringify(explained) }] };
+          }
+          if (results.length === 0) {
+            const nearest = await graph.nearestKeys(a.query as string, namespace, 5);
+            const empty = {
+              status: "no_match",
+              nearest_keys: nearest,
+              note: "No key cleared the recall gate. If a nearest_keys concept matches the topic, retry recall with that concept (or read_key it directly); otherwise browse_keys(namespace) to see the vocabulary.",
+            };
+            return { content: [{ type: "text", text: JSON.stringify(empty) }] };
           }
           return { content: [{ type: "text", text: JSON.stringify(results, null, 0) }] };
         }

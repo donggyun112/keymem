@@ -1316,6 +1316,65 @@ export class MemoryGraph {
     });
   }
 
+  // Hint path for an empty recall: the best keys that FAILED the gate, so the agent
+  // can retry with the store's actual vocabulary instead of dead-ending. Index
+  // metadata only — same shape philosophy as searchKeys, no memory content. Read-only:
+  // no reinforcement, no autokey buffering.
+  async nearestKeys(
+    query: string,
+    namespace?: string | null,
+    limit = 5
+  ): Promise<
+    Array<{
+      key_id: string;
+      concept: string;
+      aliases: string[];
+      key_type: Key["key_type"];
+      score: number;
+      memory_count: number;
+    }>
+  > {
+    const cleanQuery = query.trim();
+    if (!cleanQuery || Object.keys(this.keys).length === 0) return [];
+    const qEmb = await embedTextAsync(cleanQuery, "query");
+    this._checkDim(qEmb);
+    // Content signal computed OUTSIDE the lock over a synchronous snapshot,
+    // mirroring searchKeys' off-lock design.
+    const memIds = Object.keys(this.memories);
+    const memSimArr = batchCosineSim(qEmb, memIds.map((mid) => this.memories[mid].embedding));
+    const memSim = new Map<string, number>();
+    for (let j = 0; j < memIds.length; j++) memSim.set(memIds[j], memSimArr[j]);
+    return this._lock.runExclusive(async () => {
+      const keyIds = Object.keys(this.keys);
+      const sims = batchCosineSim(qEmb, keyIds.map((kid) => this.keys[kid].embedding));
+      const out: Array<{
+        key_id: string;
+        concept: string;
+        aliases: string[];
+        key_type: Key["key_type"];
+        score: number;
+        memory_count: number;
+      }> = [];
+      for (let i = 0; i < keyIds.length; i++) {
+        const kid = keyIds[i];
+        const key = this.keys[kid];
+        const activeIds = this._activeMemoryIdsForKey(kid, namespace);
+        if (activeIds.length === 0) continue;
+        let contentSim = 0;
+        for (const mid of activeIds) contentSim = Math.max(contentSim, memSim.get(mid) ?? 0);
+        out.push({
+          key_id: kid,
+          concept: key.concept,
+          aliases: key.aliases ?? [],
+          key_type: key.key_type,
+          score: Math.round(Math.max(sims[i], contentSim) * 1000) / 1000,
+          memory_count: activeIds.length,
+        });
+      }
+      return out.sort((a, b) => b.score - a.score).slice(0, Math.max(1, Math.min(10, limit)));
+    });
+  }
+
   async readKey(
     keyId: string,
     options: { namespace?: string | null; limit?: number; offset?: number; query?: string | null } = {}
