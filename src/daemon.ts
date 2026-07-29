@@ -110,8 +110,20 @@ export async function startDaemon(
           { minRelScore: 0 },
           prompt // the utterance IS the content-path cue (dual-path recall)
         );
+        // Push must be conservative: once ANY candidate anchors, recall keeps the whole
+        // fused set, so low-relevance tail memories (~0.47 raw sim, right at the noise
+        // band) ride in beside real hits (0.75+ measured). An absolute relevance floor
+        // keeps unprompted injection high-precision; the deliberate pull path is
+        // unaffected. Tunable via KEYMEM_HOOK_MIN_REL.
+        const minRel = Number(process.env.KEYMEM_HOOK_MIN_REL ?? 0.6);
+        const filtered = {
+          ...result,
+          memories: (result.memories as Array<{ relevance_score?: number }>).filter(
+            (m) => (m.relevance_score ?? 0) >= minRel
+          ),
+        };
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(result));
+        res.end(JSON.stringify(filtered));
       } catch (err) {
         res.writeHead(500, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));

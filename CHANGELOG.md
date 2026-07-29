@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.1] - 2026-07-29
+
+### Fixed
+
+- Hook client: await the stdout write callback before process.exit — exiting first
+  raced the pipe flush and silently dropped the injected context.
+- `/inject` applies an absolute relevance floor (`KEYMEM_HOOK_MIN_REL`, default 0.6):
+  once any candidate anchors, recall keeps the whole fused set, so ~0.47-relevance
+  tail memories leaked into unprompted injection (measured: real hits 0.75+).
+
 ## [0.21.0] - 2026-07-29
 
 ### Added

@@ -57,11 +57,12 @@ async function main(): Promise<void> {
     `verify with read_memory(id) before asserting; ignore if irrelevant):\n` +
     `${lines.join("\n")}\n</keymem-surfaced>`;
 
-  process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext },
-    })
-  );
+  const payload = JSON.stringify({
+    hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext },
+  });
+  // Await the write callback: process.exit() below does NOT drain piped stdout, so
+  // exiting before the callback races the flush and the hook output is silently lost.
+  await new Promise<void>((resolve) => process.stdout.write(payload, () => resolve()));
 }
 
 main().catch(() => {}).finally(() => process.exit(0));
