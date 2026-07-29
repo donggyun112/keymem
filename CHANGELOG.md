@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.1] - 2026-07-29
+
+### Added
+
+- `remember` hints flag phrase keys (3+ words) as `hints.phrase_keys`: measured on
+  the live store, 3+-word keys are 91% singleton (unreachable, no hubs) vs 69% for
+  single words, so keys must be atomic 1-2 word concepts. Guidance hardened to match.
+
 ## [0.19.0] - 2026-07-29
 
 ### Added

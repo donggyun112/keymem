@@ -53,3 +53,31 @@ test("remember surfaces near-neighbor keys and single-language warning", async (
   const hints2 = await graph.writeHints(mid2, ["orthogonal topic", "직교 주제"]);
   assert.equal(hints2, null);
 });
+
+test("phrase keys (3+ tokens) are flagged for atomic decomposition", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "keymem-phrase-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  process.env.KEYMEM_DATA_DIR = dir;
+  process.env.KEYMEM_SHORT_KEY_MERGE = "0";
+  t.after(() => delete process.env.KEYMEM_SHORT_KEY_MERGE);
+  process.env.EMBEDDING_BACKEND = "local";
+  process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
+
+  const embedding = await import("../src/embedding.ts");
+  embedding.__setTestEmbedder((text: string) => vec(text));
+  t.after(() => embedding.__clearTestEmbedder());
+
+  const { MemoryGraph } = await import(`../src/memoryGraph.ts?hints=${n++}`);
+  const graph = new MemoryGraph();
+  await graph.load();
+  const [mid] = await graph.add("새내용 어쩌고", ["recall 적중률 개선 release", "orthogonal topic"], {
+    namespace: "default",
+  });
+
+  const hints = await graph.writeHints(mid, ["recall 적중률 개선 release", "orthogonal topic"]);
+  assert.ok(hints);
+  assert.deepEqual(hints!.phrase_keys, ["recall 적중률 개선 release"]);
+  assert.match(hints!.phrase_note ?? "", /atomic/i);
+  // 2-token keys are NOT flagged
+  assert.ok(!(hints!.phrase_keys ?? []).includes("orthogonal topic"));
+});

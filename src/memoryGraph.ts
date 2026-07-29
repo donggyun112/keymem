@@ -1406,6 +1406,8 @@ export class MemoryGraph {
   ): Promise<{
     near_keys: Array<{ your_key: string; existing_concept: string; key_id: string; similarity: number }>;
     language_note?: string;
+    phrase_keys?: string[];
+    phrase_note?: string;
   } | null> {
     return this._lock.runExclusive(async () => {
       if (!(memoryId in this.memories)) return null;
@@ -1439,8 +1441,21 @@ export class MemoryGraph {
         allHangul || noneHangul
           ? "All keys are single-language. Recall queries arrive in both Korean and English — include cross-lingual variants (single-language keys measurably fall below the cross-lingual recall gate)."
           : undefined;
-      if (nearKeys.length === 0 && !languageNote) return null;
-      return { near_keys: nearKeys, ...(languageNote ? { language_note: languageNote } : {}) };
+      // Phrase keys (3+ whitespace tokens) are memory-specific labels, not reusable
+      // concepts: measured on this store 2026-07-29, 3+-token keys are 91% singleton
+      // (never reused → no hubs, no associative traversal) vs 69% for single words.
+      // Flag them so the agent decomposes into atomic concepts on future saves.
+      const phraseKeys = providedKeys.filter((k) => k.trim().split(/\s+/).length >= 3);
+      const phraseNote =
+        phraseKeys.length > 0
+          ? "These keys are phrases, not atomic concepts. Use 1-2 word concept keys and reuse them across memories ('recall', '적중률' — not 'recall 적중률 개선'); 3+-word keys are 91% singleton in this store and build no graph."
+          : undefined;
+      if (nearKeys.length === 0 && !languageNote && !phraseNote) return null;
+      return {
+        near_keys: nearKeys,
+        ...(languageNote ? { language_note: languageNote } : {}),
+        ...(phraseNote ? { phrase_keys: phraseKeys, phrase_note: phraseNote } : {}),
+      };
     });
   }
 
