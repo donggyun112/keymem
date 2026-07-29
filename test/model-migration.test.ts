@@ -68,7 +68,11 @@ test("re-embeds when the embedding model changes at the same dimension", async (
     persisted.meta?.embeddingFingerprint, "local:bge-m3",
     "persisted fingerprint must reflect the new model"
   );
-  assert.deepEqual(persisted.memories.m1.embedding, [0, 1], "migration persisted to disk");
+  // v0.20+: vectors persist in the binary sidecar, graph.json stores embedding: [].
+  assert.deepEqual(persisted.memories.m1.embedding, [], "graph.json must not carry vectors");
+  const { readVectors } = await import("../src/vectorStore.ts");
+  const sidecar = await readVectors(dataDir);
+  assert.deepEqual(sidecar?.get("m:m1")?.[0], [0, 1], "migration persisted to disk (sidecar)");
 });
 
 test("SUPER_MEMORY_FORCE_REEMBED re-embeds a legacy graph (no fingerprint, same dim)", async (t) => {

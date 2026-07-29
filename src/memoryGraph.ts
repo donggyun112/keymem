@@ -7,6 +7,7 @@ import { selectInject } from "./inject.js";
 import MiniSearch from "minisearch";
 import { embedTextAsync, EMBEDDING_BACKEND, embeddingFingerprint, getThresholdProfile, isShortConcept, inContradictionBand } from "./embedding.js";
 import { rerankEnabled, rerankScores } from "./reranker.js";
+import { writeVectors, readVectors } from "./vectorStore.js";
 import type { Key, Memory, GraphData } from "./types.js";
 import {
   RecallBuffer, decidePromotion,
@@ -314,6 +315,9 @@ export class MemoryGraph {
   // (recall flush); nothing acquires _saveLock then _lock, so no deadlock.
   private _saveLock = new Mutex();
   private _saveSeq = 0;
+  // Per-sentence vectors for multi-fact memories (max-sim content scoring).
+  // Persisted in the vector sidecar under "s:<mid>"; absent for single-fact memories.
+  _sentVecs: Record<string, number[][]> = {};
   private _dirty = false;
   private _bm25: MiniSearch;
   private _recallBuffer = new RecallBuffer({
@@ -707,6 +711,12 @@ export class MemoryGraph {
 
     this._storedFingerprint = raw.meta?.embeddingFingerprint ?? null;
 
+    // Hydrate vectors from the binary sidecar (v0.20+). Legacy stores carry them
+    // inline in graph.json; loading those still works and the presence of any inline
+    // vector marks the graph dirty so the next flush migrates to the sidecar.
+    const sidecar = await readVectors(DATA_DIR);
+    let sawInlineVectors = false;
+
     for (const [kid, k] of Object.entries(raw.keys ?? {})) {
       const seen = new Set<string>();
       const aliases = (Array.isArray(k.aliases) ? k.aliases : []).filter((alias) => {
@@ -739,7 +749,13 @@ export class MemoryGraph {
               !!l && typeof l.alias === "string" && typeof l.addedAt === "number" && typeof l.hits === "number"
           )
         : undefined;
-      this.keys[kid] = { ...k, aliases, aliasCandidates, learnedAliases };
+      const key = { ...k, aliases, aliasCandidates, learnedAliases };
+      if (key.embedding && key.embedding.length > 0) sawInlineVectors = true;
+      else key.embedding = sidecar?.get(`k:${kid}`)?.[0] ?? [];
+      if (!key.embedding || key.embedding.length === 0) {
+        key.embedding = await embedTextAsync(key.concept);
+      }
+      this.keys[kid] = key;
     }
 
     for (const [mid, m] of Object.entries(raw.memories ?? {})) {
@@ -761,11 +777,16 @@ export class MemoryGraph {
       mem.contradicts = Array.isArray(mem.contradicts)
         ? mem.contradicts.filter((id): id is string => typeof id === "string" && id in (raw.memories ?? {}))
         : [];
+      if (mem.embedding && mem.embedding.length > 0) sawInlineVectors = true;
+      else mem.embedding = sidecar?.get(`m:${mid}`)?.[0] ?? [];
       if (!mem.embedding || mem.embedding.length === 0) {
         mem.embedding = await embedTextAsync(mem.content);
       }
+      const sent = sidecar?.get(`s:${mid}`);
+      if (sent && sent.length > 0) this._sentVecs[mid] = sent;
       this.memories[mid] = mem;
     }
+    if (sawInlineVectors) this.markDirty(); // legacy store → migrate on next flush
 
     if (Object.keys(this.memories).length > 0) {
       const firstMem = Object.values(this.memories)[0];
@@ -811,19 +832,37 @@ export class MemoryGraph {
     // is detected on load. Keep _storedFingerprint in sync for in-process reloads.
     const fingerprint = embeddingFingerprint();
     this._storedFingerprint = fingerprint;
+    // Vectors go to the binary sidecar; graph.json stores embedding: [] (floats as
+    // JSON text bloated a 1.3k-memory store to ~93 MB and made save O(graph)-slow).
+    const vecs = new Map<string, number[][]>();
+    const strippedKeys: Record<string, Key> = {};
+    for (const [kid, k] of Object.entries(this.keys)) {
+      if (k.embedding.length > 0) vecs.set(`k:${kid}`, [k.embedding]);
+      strippedKeys[kid] = { ...k, embedding: [] };
+    }
+    const strippedMems: Record<string, Memory> = {};
+    for (const [mid, m] of Object.entries(this.memories)) {
+      if (m.embedding.length > 0) vecs.set(`m:${mid}`, [m.embedding]);
+      strippedMems[mid] = { ...m, embedding: [] };
+    }
+    for (const [mid, list] of Object.entries(this._sentVecs)) {
+      if (mid in this.memories && list.length > 0) vecs.set(`s:${mid}`, list);
+    }
     const data: GraphData = {
-      keys: this.keys,
-      memories: this.memories,
+      keys: strippedKeys,
+      memories: strippedMems,
       links,
       meta: { embeddingFingerprint: fingerprint },
     };
     // Snapshot is built synchronously above (callers mutate under _lock without
     // awaiting mid-mutation, so this read is consistent). Serialize the actual I/O
     // so concurrent saves can't collide: a per-write unique temp name + single-flight
-    // _saveLock together guarantee one clean writeFile→rename at a time.
+    // _saveLock together guarantee one clean writeFile→rename at a time. The sidecar
+    // is written first so graph.json (embedding: []) never lands without its vectors.
     const json = JSON.stringify(data, null, 2);
     await this._saveLock.runExclusive(async () => {
       await mkdir(DATA_DIR, { recursive: true });
+      await writeVectors(DATA_DIR, vecs);
       const tmp = `${GRAPH_FILE}.${process.pid}.${++this._saveSeq}.tmp`;
       await writeFile(tmp, json, "utf-8");
       await rename(tmp, GRAPH_FILE);
