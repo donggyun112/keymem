@@ -90,13 +90,18 @@ test("repeated weak-confirmed reads promote the query (new key) and heal recall"
 
 test("a gated near-miss query (recall []) is recorded and heals after repeated confirmation", async () => {
   const emb = await import("../src/embedding.ts");
-  // Key "거주지" and the memory content both embed to [1,0]. The query "사는데" embeds to
-  // [0.5, 0.8660254] → cosine 0.5 vs the key AND vs the content. Below CONTENT_RECALL (0.55)
-  // and KEY_RECALL (0.62), so searchKeys GATES it out (returns no key for the query) — this
-  // is exactly the paraphrase-[] case. But 0.5 is within the confirmFloor band [0.45, 0.62),
-  // so repeated confirmation should fold the query in as a learned alias and heal recall.
+  // Key "거주지" embeds to [1,0,0]; the query "사는데" to [0.5, 0.866, 0] → key cosine 0.5:
+  // below KEY_RECALL (0.62) but within the confirmFloor band [0.45, 0.62). The memory
+  // content embeds to [0.9, -0.436, 0] → content cosine ≈ 0.072 to the query: below BOTH
+  // content gates (0.55 sentence / 0.46 short-keyword), so searchKeys GATES the query out —
+  // exactly the paraphrase-[] case. Repeated confirmation should then fold the query in as
+  // a learned alias and heal recall.
   emb.__setTestEmbedder((text) =>
-    text === "거주지" || text.includes("성수") ? [1, 0] : [0.5, 0.8660254]
+    text === "거주지"
+      ? [1, 0, 0]
+      : text.includes("성수")
+        ? [0.9, -0.436, 0]
+        : [0.5, 0.8660254, 0]
   );
   try {
     const { MemoryGraph } = await import("../src/memoryGraph.ts");

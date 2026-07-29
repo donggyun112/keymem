@@ -27,6 +27,9 @@ const MEMORY_DEDUP_THRESHOLD = _THRESHOLDS.memoryDedup;
 const KEY_AUTO_LINK_THRESHOLD = _THRESHOLDS.keyAutoLink;
 const KEY_RECALL_THRESHOLD = _THRESHOLDS.keyRecall;
 const CONTENT_RECALL_THRESHOLD = _THRESHOLDS.contentRecall;
+// Calibrated lower content gate for SHORT keyword queries (see embedding.ts profile
+// comment for the measured bands). 0/unset in a profile → falls back to contentRecall.
+const CONTENT_RECALL_SHORT = _THRESHOLDS.contentRecallShort || _THRESHOLDS.contentRecall;
 const MIN_SCORE_THRESHOLD = _THRESHOLDS.minScore;
 const GATE_Z_THRESHOLD = _THRESHOLDS.gateZ;
 const GATE_MIN_POPULATION = 8;
@@ -1207,6 +1210,7 @@ export class MemoryGraph {
     return this._lock.runExclusive(async () => {
       const queryLower = cleanQuery.toLowerCase();
       const isShortQuery = isShortConcept(cleanQuery);
+      const contentGate = this._contentGateFor(cleanQuery);
       const nearMiss = new Map<string, number>(); // gate-dropped keys in the confirmation band
       const keyIds = Object.keys(this.keys);
       const sims = batchCosineSim(qEmb, keyIds.map((kid) => this.keys[kid].embedding));
@@ -1252,7 +1256,7 @@ export class MemoryGraph {
         if (
           (key.key_type === "name" || key.key_type === "proper_noun")
             ? !literal
-            : !literal && keySim < KEY_RECALL_THRESHOLD && contentSim < CONTENT_RECALL_THRESHOLD
+            : !literal && keySim < KEY_RECALL_THRESHOLD && contentSim < contentGate
         ) {
           // Gate-dropped, but a concept key whose embedding sits just below the recall gate
           // (in the confirmation band) is a learning signal: if the agent later confirms the
@@ -1322,6 +1326,13 @@ export class MemoryGraph {
       }
       return result;
     });
+  }
+
+  // Short keyword queries (a couple of nouns) embed systematically lower against
+  // sentence-shaped content than sentence queries do; use the calibrated short gate
+  // for them. See the contentRecallShort profile comment in embedding.ts.
+  private _contentGateFor(query: string): number {
+    return isShortConcept(query) ? CONTENT_RECALL_SHORT : CONTENT_RECALL_THRESHOLD;
   }
 
   // Hint path for an empty recall: the best keys that FAILED the gate, so the agent
@@ -1714,6 +1725,13 @@ export class MemoryGraph {
     minRelScore = Math.max(0, Math.min(0.9, minRelScore));
     // Absolute cosine floor in [0,1]. 0 disables the gate.
     minScore = Math.max(0, Math.min(1, minScore));
+    // Short keyword queries get the calibrated lower content gate; when the caller left
+    // minScore at the profile default, lower the absolute anchor gate alongside so it
+    // does not silently re-drop what the content gate admitted. Explicit overrides win.
+    const contentGate = this._contentGateFor(query);
+    if (contentGate < CONTENT_RECALL_THRESHOLD && minScore === MIN_SCORE_THRESHOLD) {
+      minScore = Math.min(minScore, contentGate);
+    }
     minZ = Math.max(0, minZ);
     // Key-proximity gate floor in [0,1]. 0 disables it.
     minKeyGate = Math.max(0, Math.min(1, minKeyGate));
@@ -1823,7 +1841,7 @@ export class MemoryGraph {
           if (skip(mid)) continue;
           const cSim = contentSims[i];
           allContentSims.push(cSim);
-          if (cSim >= CONTENT_RECALL_THRESHOLD) {
+          if (cSim >= contentGate) {
             bumpRaw(mid, cSim);
             const contentScore = cSim * 0.8;
             if (mid in denseScores) {

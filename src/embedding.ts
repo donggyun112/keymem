@@ -123,11 +123,19 @@ export interface ThresholdProfile {
   // state-blind key choices an LLM makes at remember() time. Model-specific (e5 packs
   // cosines higher than bge-m3, so it needs a higher value). 0 = exact-match-only (off).
   shortKeyMerge: number;
+  // Content gate for SHORT keyword queries (isShortConcept). Retrieval models are trained
+  // on sentence-shaped queries, so keyword↔content cosines run systematically lower than
+  // sentence↔content. bge-m3 measured 2026-07-29 (12 real-style KO pairs × 132 cross):
+  // related min 0.386 / p25 0.472 / med 0.523; unrelated p95 0.452 / max 0.508 — the 0.55
+  // contentRecall gate cut 8/12 RELATED pairs. 0.46 sits above unrelated p95 and below
+  // related p25 (admits 9/12, ~4% per-pair noise, ranked below real hits by fusion).
+  // 0 = disabled (short queries use contentRecall unchanged).
+  contentRecallShort: number;
 }
 
 export const THRESHOLD_PROFILES: Record<string, ThresholdProfile> = {
-  openai: { keyMerge: 0.85, memoryDedup: 0.9, keyAutoLink: 0.5, keyRecall: 0.28, contentRecall: 0.28, minScore: 0.28, contradiction: 0.85, gateZ: 0, keyGate: 0, shortKeyMerge: 0 },
-  bge: { keyMerge: 0.85, memoryDedup: 0.9, keyAutoLink: 0.6, keyRecall: 0.6, contentRecall: 0.5, minScore: 0.5, contradiction: 0.85, gateZ: 0, keyGate: 0, shortKeyMerge: 0 },
+  openai: { keyMerge: 0.85, memoryDedup: 0.9, keyAutoLink: 0.5, keyRecall: 0.28, contentRecall: 0.28, minScore: 0.28, contradiction: 0.85, gateZ: 0, keyGate: 0, shortKeyMerge: 0, contentRecallShort: 0 },
+  bge: { keyMerge: 0.85, memoryDedup: 0.9, keyAutoLink: 0.6, keyRecall: 0.6, contentRecall: 0.5, minScore: 0.5, contradiction: 0.85, gateZ: 0, keyGate: 0, shortKeyMerge: 0, contentRecallShort: 0 },
   // e5: query↔key is asymmetric (query/passage prefixes) and separates well —
   // exact-term matches land ~0.886+, distinct words ≤0.82, so keyRecall 0.85
   // catches real key hits. But key↔key and content↔key are both passage-embedded
@@ -158,8 +166,8 @@ export const THRESHOLD_PROFILES: Record<string, ThresholdProfile> = {
   // env-opt-in (KEYMEM_GATE_Z / _KEY_GATE) for users who accept the precision/recall
   // tradeoff; for RELIABLE not-found detection use bge-m3, which separates cleanly via the
   // absolute minScore gate (verified found→hit / not-found→[] end-to-end).
-  e5: { keyMerge: 0.97, memoryDedup: 0.985, keyAutoLink: 0.93, keyRecall: 0.85, contentRecall: 0.8, minScore: 0.8, contradiction: 0.95, gateZ: 0, keyGate: 0, shortKeyMerge: 0 },
-  minilm: { keyMerge: 0.85, memoryDedup: 0.9, keyAutoLink: 0.6, keyRecall: 0.5, contentRecall: 0.45, minScore: 0.45, contradiction: 0.85, gateZ: 0, keyGate: 0, shortKeyMerge: 0 },
+  e5: { keyMerge: 0.97, memoryDedup: 0.985, keyAutoLink: 0.93, keyRecall: 0.85, contentRecall: 0.8, minScore: 0.8, contradiction: 0.95, gateZ: 0, keyGate: 0, shortKeyMerge: 0, contentRecallShort: 0 },
+  minilm: { keyMerge: 0.85, memoryDedup: 0.9, keyAutoLink: 0.6, keyRecall: 0.5, contentRecall: 0.45, minScore: 0.45, contradiction: 0.85, gateZ: 0, keyGate: 0, shortKeyMerge: 0, contentRecallShort: 0 },
   // bge-m3: multilingual, 1024-dim, well-separated (closer to bge than e5).
   // dedup lowered to 0.94 so real duplicates are caught without fragmenting.
   // contradiction 0.80 calibrated against real bge-m3: same-subject conflicting
@@ -167,7 +175,7 @@ export const THRESHOLD_PROFILES: Record<string, ThresholdProfile> = {
   // facts top out ~0.80, so 0.80 separates them. Note a known limit — conflicts
   // differing by a single token ("월요일" vs "금요일") can land ~0.95, above
   // memoryDedup, and are silently superseded rather than flagged. Env-overridable.
-  bgem3: { keyMerge: 0.86, memoryDedup: 0.94, keyAutoLink: 0.62, keyRecall: 0.62, contentRecall: 0.55, minScore: 0.55, contradiction: 0.80, gateZ: 0, keyGate: 0, shortKeyMerge: 0.9 },
+  bgem3: { keyMerge: 0.86, memoryDedup: 0.94, keyAutoLink: 0.62, keyRecall: 0.62, contentRecall: 0.55, minScore: 0.55, contradiction: 0.80, gateZ: 0, keyGate: 0, shortKeyMerge: 0.9, contentRecallShort: 0.46 },
 };
 
 export function familyForModel(
@@ -308,6 +316,7 @@ export function getThresholdProfile(): ThresholdProfile {
     gateZ: envNonNegative("GATE_Z") ?? base.gateZ,
     keyGate: envThreshold("KEY_GATE") ?? base.keyGate,
     shortKeyMerge: envThreshold("SHORT_KEY_MERGE") ?? base.shortKeyMerge,
+    contentRecallShort: envThreshold("CONTENT_RECALL_SHORT") ?? base.contentRecallShort,
   };
 }
 
