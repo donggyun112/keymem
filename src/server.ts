@@ -337,7 +337,7 @@ export function createMcpServer(): Server {
       {
         name: "remember",
         description:
-          "MANDATORY END-OF-TURN GATE: before replying, save every durable fact newly revealed this turn (names, preferences, decisions, corrections, project facts, goals). A durable fact left unsaved is a bug; save silently in the same turn. Save nothing only after consciously confirming that nothing durable appeared. Before writing, recall() the topic in the same namespace and reuse returned canonical concepts or aliases. Use 3-6 diverse concept-level search keys, not memory-specific phrases (use 'Nexora' and 'portfolio', not 'Nexora portfolio'). CROSS-LINGUAL: register both language forms together (for example '포트폴리오' and 'portfolio'). Shared broad keys become navigable hubs. namespace groups memories by project/context; ttl_seconds sets expiry; related_to adds explicit memory links; source attaches provenance and is auto-stamped with the server session, a timestamp, and — when a host agent (Claude Code, Codex) transcript is active — host_session/host_agent/host_turn so the memory can be traced back to its original conversation via get_conversation.",
+          "MANDATORY END-OF-TURN GATE: before replying, save every durable fact newly revealed this turn (names, preferences, decisions, corrections, project facts, goals). A durable fact left unsaved is a bug; save silently in the same turn. Save nothing only after consciously confirming that nothing durable appeared. Before writing, recall() the topic in the same namespace and reuse returned canonical concepts or aliases. Use 3-6 diverse concept-level search keys, not memory-specific phrases (use 'Nexora' and 'portfolio', not 'Nexora portfolio'). CROSS-LINGUAL: register both language forms together (for example '포트폴리오' and 'portfolio'). Shared broad keys become navigable hubs. namespace groups memories by project/context; ttl_seconds sets expiry; related_to adds explicit memory links; source attaches provenance and is auto-stamped with the server session, a timestamp, and — when a host agent (Claude Code, Codex) transcript is active — host_session/host_agent/host_turn so the memory can be traced back to its original conversation via get_conversation. The response may include hints.near_keys (existing concepts your keys nearly duplicate — prefer reusing those concepts) and hints.language_note (add the missing-language variants).",
         inputSchema: {
           type: "object",
           properties: {
@@ -656,6 +656,8 @@ export function createMcpServer(): Server {
               note: `Similar memory existed (id: ${superseded}) — updated instead of creating a duplicate.`,
             };
           }
+          const hints = await graph.writeHints(mid, keys);
+          if (hints) result.hints = hints;
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
         }
 

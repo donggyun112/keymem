@@ -1394,6 +1394,56 @@ export class MemoryGraph {
     });
   }
 
+  // Write-time confrontation: after a remember(), tell the agent which EXISTING keys
+  // its freshly-coined keys nearly duplicate (reuse/alias candidates the auto-merge was
+  // rightly too conservative to fold), and whether the key set is single-language
+  // (measured 2026-07-29: single-language keys lose up to 0.28 cosine cross-lingually
+  // and can fall below the recall gate). Judgment stays with the calling LLM; this only
+  // forces the question. Read-only — no graph mutation.
+  async writeHints(
+    memoryId: string,
+    providedKeys: string[]
+  ): Promise<{
+    near_keys: Array<{ your_key: string; existing_concept: string; key_id: string; similarity: number }>;
+    language_note?: string;
+  } | null> {
+    return this._lock.runExclusive(async () => {
+      if (!(memoryId in this.memories)) return null;
+      const ownKeyIds = new Set(this._memToKeys[memoryId]?.keys() ?? []);
+      const nearKeys: Array<{ your_key: string; existing_concept: string; key_id: string; similarity: number }> = [];
+      for (const kid of ownKeyIds) {
+        const key = this.keys[kid];
+        if (!key) continue;
+        if (!providedKeys.some((p) => p.toLowerCase() === key.concept.toLowerCase())) continue;
+        let best: { kid: string; sim: number } | null = null;
+        for (const [otherId, other] of Object.entries(this.keys)) {
+          if (ownKeyIds.has(otherId)) continue;
+          if (other.key_type === "name" || other.key_type === "proper_noun") continue;
+          const sim = cosineSim(key.embedding, other.embedding);
+          if (sim >= KEY_RECALL_THRESHOLD && sim < KEY_MERGE_THRESHOLD && (!best || sim > best.sim)) {
+            best = { kid: otherId, sim };
+          }
+        }
+        if (best) {
+          nearKeys.push({
+            your_key: key.concept,
+            existing_concept: this.keys[best.kid].concept,
+            key_id: best.kid,
+            similarity: Math.round(best.sim * 1000) / 1000,
+          });
+        }
+      }
+      const allHangul = providedKeys.length > 0 && providedKeys.every((k) => hasHangul(k));
+      const noneHangul = providedKeys.length > 0 && providedKeys.every((k) => !hasHangul(k));
+      const languageNote =
+        allHangul || noneHangul
+          ? "All keys are single-language. Recall queries arrive in both Korean and English — include cross-lingual variants (single-language keys measurably fall below the cross-lingual recall gate)."
+          : undefined;
+      if (nearKeys.length === 0 && !languageNote) return null;
+      return { near_keys: nearKeys, ...(languageNote ? { language_note: languageNote } : {}) };
+    });
+  }
+
   async readKey(
     keyId: string,
     options: { namespace?: string | null; limit?: number; offset?: number; query?: string | null } = {}
