@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-07-29
+
+### Added
+
+- Binary vector sidecar (`vectors.bin` + `vectors.idx.json`): embeddings no longer
+  live in graph.json as JSON floats (93 MB -> ~2 MB graph + 15 MB binary on the
+  reference store). Legacy inline stores load unchanged and migrate on next save.
+- Per-sentence vectors for multi-fact memories with max-sim content scoring in
+  recall/searchKeys/nearestKeys. Measured motivation: sub-fact queries score
+  +0.07~0.19 cosine higher against the best sentence than the whole-note centroid,
+  which often sits below the content gate. `KEYMEM_SENTENCE_VECTORS=0` disables.
+- `bench/backfill-sentence-vectors.ts` migration/backfill script.
+
 ## [0.19.1] - 2026-07-29
 
 ### Added

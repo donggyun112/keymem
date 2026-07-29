@@ -20,6 +20,10 @@ const CASES: Case[] = [
   { query: "사용자가 어떤 임베딩 백엔드를 쓰는지", expect: "bge-m3" },
   { query: "recall 적중률이 낮은 이유", expect: "오염", ns: "keymem" },
   { query: "Nexora 원자적 resume 커밋", expect: "fcad585", ns: "Nexora" },
+  // Sub-fact queries against a multi-fact release-note memory: the whole-content
+  // vector dilutes below the gate; only sentence-level max-sim can reach these.
+  { query: "단일언어 경고", expect: "writeHints", ns: "keymem" },
+  { query: "no_match 힌트", expect: "nearest_keys", ns: "keymem" },
 ];
 
 async function main() {
