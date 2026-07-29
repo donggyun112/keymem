@@ -1277,10 +1277,7 @@ export class MemoryGraph {
     // the query — the cure for key-coining dependence. Computed OUTSIDE the lock (read-only
     // cosine over a synchronous snapshot) to keep the lock hold short, matching the rerank/flush
     // off-lock design. A memory added after this snapshot simply scores 0 for this query.
-    const memIds = Object.keys(this.memories);
-    const memSimArr = batchCosineSim(cEmb, memIds.map((mid) => this.memories[mid].embedding));
-    const memSim = new Map<string, number>();
-    for (let j = 0; j < memIds.length; j++) memSim.set(memIds[j], memSimArr[j]);
+    const memSim = this._bestContentSims(cEmb);
 
     return this._lock.runExclusive(async () => {
       const queryLower = cleanQuery.toLowerCase();
@@ -1403,6 +1400,26 @@ export class MemoryGraph {
     });
   }
 
+  // Best content similarity per memory: max(whole-content vector, best sentence vector).
+  // Multi-fact notes' whole vectors are diluted centroids; the sentence pack (when
+  // present) lets a sub-fact query reach the memory. Synchronous — safe inside a lock.
+  private _bestContentSims(qVec: number[]): Map<string, number> {
+    const memIds = Object.keys(this.memories);
+    const sims = batchCosineSim(qVec, memIds.map((mid) => this.memories[mid].embedding));
+    const out = new Map<string, number>();
+    for (let i = 0; i < memIds.length; i++) out.set(memIds[i], sims[i]);
+    for (const [mid, list] of Object.entries(this._sentVecs)) {
+      let best = out.get(mid);
+      if (best === undefined) continue;
+      for (const v of list) {
+        const s = cosineSim(qVec, v);
+        if (s > best) best = s;
+      }
+      out.set(mid, best);
+    }
+    return out;
+  }
+
   // Short keyword queries (a couple of nouns) embed systematically lower against
   // sentence-shaped content than sentence queries do; use the calibrated short gate
   // for them. See the contentRecallShort profile comment in embedding.ts.
@@ -1434,10 +1451,7 @@ export class MemoryGraph {
     this._checkDim(qEmb);
     // Content signal computed OUTSIDE the lock over a synchronous snapshot,
     // mirroring searchKeys' off-lock design.
-    const memIds = Object.keys(this.memories);
-    const memSimArr = batchCosineSim(qEmb, memIds.map((mid) => this.memories[mid].embedding));
-    const memSim = new Map<string, number>();
-    for (let j = 0; j < memIds.length; j++) memSim.set(memIds[j], memSimArr[j]);
+    const memSim = this._bestContentSims(qEmb);
     return this._lock.runExclusive(async () => {
       const keyIds = Object.keys(this.keys);
       const sims = batchCosineSim(qEmb, keyIds.map((kid) => this.keys[kid].embedding));
@@ -1970,16 +1984,15 @@ export class MemoryGraph {
       }
 
       // ── Dense Path B: Content batch direct matching ──
+      // max-sim: a multi-fact memory is reachable via its best sentence, not only
+      // its (diluted) whole-content centroid.
       const memIds = Object.keys(this.memories);
       if (memIds.length > 0) {
-        const contentSims = batchCosineSim(
-          cEmb,
-          memIds.map((mid) => this.memories[mid].embedding)
-        );
+        const contentSims = this._bestContentSims(cEmb);
         for (let i = 0; i < memIds.length; i++) {
           const mid = memIds[i];
           if (skip(mid)) continue;
-          const cSim = contentSims[i];
+          const cSim = contentSims.get(mid) ?? 0;
           allContentSims.push(cSim);
           if (cSim >= contentGate) {
             bumpRaw(mid, cSim);
