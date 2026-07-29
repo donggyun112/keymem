@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] - 2026-07-29
+
+### Added
+
+- Daemon `/inject` endpoint: harness hooks POST the raw user utterance and get
+  passively-relevant memories back in one localhost round trip (no MCP session).
+  Precision comes from the dense anchor gate + no-bm25-only provenance filter;
+  the keyword-oriented lexical-coverage filter is bypassed (Korean particles
+  defeat its string-includes matching on natural sentences).
+- `dist/hook.js`: Claude Code UserPromptSubmit hook client — the push half of
+  keymem. Injects at most KEYMEM_HOOK_TOP_K (default 2) unconfirmed memories as
+  additionalContext; never blocks (KEYMEM_HOOK_TIMEOUT_MS, default 800 ms) and
+  never wakes the daemon.
+- recall/searchKeys reuse the query embedding when context === query (halves
+  embed calls on the hook path: ~815 ms → ~450 ms warm).
+
 ## [0.20.0] - 2026-07-29
 
 ### Added

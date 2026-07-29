@@ -230,7 +230,7 @@ const TRANSCRIPT_TOOLS = new Set(["get_conversation", "list_sessions"]);
 
 export function createMcpServer(): Server {
   const server = new Server(
-    { name: "keymem", version: "0.20.0" },
+    { name: "keymem", version: "0.21.0" },
     {
       capabilities: { tools: {}, prompts: {} },
       instructions: SERVER_INSTRUCTIONS,

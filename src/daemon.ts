@@ -82,6 +82,42 @@ export async function startDaemon(
       res.end(JSON.stringify({ ok: true }));
       return;
     }
+    // Push path for harness hooks (e.g. Claude Code UserPromptSubmit): the hook client
+    // POSTs the raw user utterance and gets passively-relevant memories back — no MCP
+    // session handshake, so a per-prompt hook stays a single localhost round trip.
+    // Same passive semantics as recall(inject:true): precision-gated, NOT reinforced.
+    if (url.pathname === "/inject") {
+      if (req.method !== "POST") { res.writeHead(405).end(); return; }
+      const body = (await readBody(req)) as
+        | { prompt?: unknown; namespace?: unknown; top_k?: unknown }
+        | undefined;
+      const prompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
+      if (!prompt) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "prompt required" }));
+        return;
+      }
+      try {
+        // minRelScore 0: inject's lexical-coverage filter expects keyword queries and
+        // string-includes matching, which Korean particles defeat on natural utterances
+        // ("음료는" never `includes`-matches the key "음료"). The push path's cue is a
+        // full sentence, so precision comes from the dense anchor gate + the
+        // no-bm25-only provenance filter instead.
+        const result = await graph.recallInject(
+          prompt,
+          typeof body?.top_k === "number" ? body.top_k : 2,
+          typeof body?.namespace === "string" ? body.namespace : null,
+          { minRelScore: 0 },
+          prompt // the utterance IS the content-path cue (dual-path recall)
+        );
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(result));
+      } catch (err) {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+      }
+      return;
+    }
     if (url.pathname !== "/mcp") {
       res.writeHead(404).end();
       return;

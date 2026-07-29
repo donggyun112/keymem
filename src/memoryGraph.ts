@@ -1268,7 +1268,9 @@ export class MemoryGraph {
     // on bge-m3 — measured 2026-07-29), while the short keyword query keeps driving the
     // key/lexical signals it is optimal for. Omitted → byte-identical to before.
     const ctx = contextText?.trim();
-    const cEmb = ctx ? await embedTextAsync(ctx, "query") : qEmb;
+    // Reuse qEmb when the context IS the query (the hook push path sends the utterance
+    // as both) — each bge-m3 embed costs ~200 ms on CPU, and this halves the calls.
+    const cEmb = ctx && ctx !== cleanQuery ? await embedTextAsync(ctx, "query") : qEmb;
     if (ctx) this._checkDim(cEmb);
     topK = Math.max(1, Math.min(20, Math.floor(topK)));
 
@@ -1892,7 +1894,10 @@ export class MemoryGraph {
     const qEmb = await embedTextAsync(query, "query"); // outside lock
     this._checkDim(qEmb);
     const recallCtx = contextText?.trim();
-    const cEmb = recallCtx ? await embedTextAsync(recallCtx, "query") : qEmb; // outside lock
+    const cEmb =
+      recallCtx && recallCtx !== query.trim()
+        ? await embedTextAsync(recallCtx, "query") // outside lock
+        : qEmb;
     if (recallCtx) this._checkDim(cEmb);
 
     const results: object[] = [];
