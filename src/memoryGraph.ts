@@ -296,6 +296,12 @@ export function splitSentences(content: string): string[] {
   return pieces.slice(0, SENTENCE_MAX);
 }
 
+// A single Hangul/Han/kana character is a whole concept (집, 돈, 팀, 말, 車), so the
+// >= 2 bar below — a latin-script assumption — silently discarded legitimate keys.
+// A key silently discarded is a memory silently orphaned, so CJK is exempted from it.
+const CJK_SINGLE_CHAR =
+  /^[\p{Script=Hangul}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]$/u;
+
 export function sanitizeKeys(keys: unknown): string[] {
   let arr: unknown[];
   if (typeof keys === "string") {
@@ -310,7 +316,11 @@ export function sanitizeKeys(keys: unknown): string[] {
     return [];
   }
   return arr
-    .filter((k): k is string => typeof k === "string" && k.trim().length >= 2)
+    .filter(
+      (k): k is string =>
+        typeof k === "string" &&
+        (k.trim().length >= 2 || CJK_SINGLE_CHAR.test(k.trim()))
+    )
     .map((k) => k.trim());
 }
 
@@ -1016,6 +1026,16 @@ export class MemoryGraph {
       relatedTo?: string[] | null;
     } = {}
   ): Promise<[string, boolean, string | null, boolean]> {
+    // Zero-key writes are refused before anything is embedded or inserted. A memory
+    // with no keys is unreachable by traversal for the rest of its life while still
+    // counting in list/stats, so failing loudly beats storing something the caller
+    // can never get back. supersede() enforces the same invariant via its inherit
+    // fallback; remember_batch already pre-checked this, remember did not.
+    if (sanitizeKeys(keyConcepts).length === 0) {
+      throw new Error(
+        "remember requires at least one usable key (1+ CJK character, or 2+ characters otherwise) — a keyless memory can never be recalled."
+      );
+    }
     const embedding = await embedTextAsync(content); // outside lock
     const sentVecs = await this._embedSentences(content); // outside lock
 
@@ -1197,9 +1217,14 @@ export class MemoryGraph {
       }
       try { this._bm25.discard(oldId); } catch { /* already removed */ }
 
-      const keyConcepts = options.keyConcepts;
-      if (keyConcepts && keyConcepts.length > 0) {
-        const sanitized = sanitizeKeys(keyConcepts);
+      // Branch on the SANITIZED keys, not the raw array. Sanitizing drops entries
+      // silently (non-strings, sub-2-char latin), so a non-empty array can sanitize
+      // to nothing — and branching on the raw length took the explicit-key path,
+      // linked nothing, and skipped the inherit fallback below along with its
+      // zero-key guard. The result was a keyless orphan whose predecessor had just
+      // been superseded: the fact vanished from recall entirely.
+      const sanitized = sanitizeKeys(options.keyConcepts);
+      if (sanitized.length > 0) {
         const keyTypes = options.keyTypes ?? {};
         for (const concept of sanitized) {
           const kt = ((keyTypes[concept] ?? "concept") as

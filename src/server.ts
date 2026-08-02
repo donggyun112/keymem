@@ -630,6 +630,22 @@ export function createMcpServer(): Server {
 
         case "remember": {
           const keys = sanitizeKeys(a.keys);
+          // Same guard remember_batch has always had. Reported as a result rather
+          // than thrown so the caller sees which keys were unusable and can retry.
+          if (keys.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    error:
+                      "keys required: no usable key survived sanitizing (need 1+ CJK character, or 2+ characters otherwise). Nothing was saved — a keyless memory can never be recalled.",
+                    provided_keys: a.keys ?? null,
+                  }),
+                },
+              ],
+            };
+          }
           const hostLink = await resolveHostLink(headers);
           const [mid, wasDedup, superseded, conflict] = await graph.add(
             a.content as string,
