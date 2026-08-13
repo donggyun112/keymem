@@ -108,7 +108,29 @@ Add to `claude_desktop_config.json`:
 
 > `bge-m3` (multilingual, recommended) **auto-downloads ~570MB on first run**, then caches. Omit `LOCAL_EMBEDDING_MODEL` for the lighter default (`fast-multilingual-e5-large`). Add `"KEYMEM_RERANK": "true"` to enable cross-encoder reranking (downloads a second model on first use).
 
-### Claude Code
+### Plugin (recommended — Claude Code & Codex)
+
+The repo is also a plugin marketplace, so one install wires up everything: the MCP server
+(daemon-backed shim), the `UserPromptSubmit` hook that passively surfaces related memories on every
+prompt, and the `keymem` skill carrying the recall/remember protocol.
+
+**Claude Code:**
+```
+/plugin marketplace add donggyun112/keymem
+/plugin install keymem@keymem
+```
+
+**Codex CLI:**
+```bash
+codex plugin marketplace add donggyun112/keymem
+codex plugin add keymem@keymem
+```
+
+Codex prompts once to trust the hook; approve it or the push path stays silent. The plugin defaults
+to local `bge-m3` embeddings (auto-downloads ~570MB on first run, no API key). For OpenAI
+embeddings, use the manual setup below instead — plugin MCP servers only see the env they declare.
+
+### Claude Code (manual)
 
 ```bash
 # OpenAI embeddings
@@ -117,6 +139,30 @@ claude mcp add keymem -e OPENAI_API_KEY=your-key -- npx -y keymem
 # Local embeddings (no API key required) — bge-m3 recommended (auto-downloads ~570MB on first run)
 claude mcp add keymem -e EMBEDDING_BACKEND=local -e LOCAL_EMBEDDING_MODEL=bge-m3 -- npx -y keymem
 ```
+
+### Codex CLI (manual)
+
+```bash
+# OpenAI embeddings
+codex mcp add keymem --env OPENAI_API_KEY=your-key -- npx -y -p keymem keymem-shim
+
+# Local embeddings (no API key required)
+codex mcp add keymem --env EMBEDDING_BACKEND=local --env LOCAL_EMBEDDING_MODEL=bge-m3 -- npx -y -p keymem keymem-shim
+```
+
+Use the `keymem-shim` entry point (not bare `keymem`): it runs the shared daemon the push-path hook
+talks to. For the hook, add to `~/.codex/config.toml`:
+
+```toml
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "node /absolute/path/to/keymem/hooks/keymem-hook.mjs"
+timeout = 5
+```
+
+Codex only forwards the env vars declared in its MCP entry, so pass every `KEYMEM_*` /
+`SUPER_MEMORY_*` override with `--env`.
 
 That's it — recall and remember work immediately. The agent calls `recall` before its first reply, navigates with `read_key`/`read_memory`, and saves with `remember`.
 
@@ -131,6 +177,9 @@ For reliable proactive saving in Claude Code, add the following to `~/.claude/CL
 - Use `correct` when existing information changes. Save nothing only when the turn revealed nothing durable.
 - Never mention memory lookup or saving to the user.
 ```
+
+In Codex, put the same block in `~/.codex/AGENTS.md`. (The plugin install ships this as the `keymem`
+skill instead, so you can skip it there.)
 
 For other MCP clients, include the `memory_system_prompt` MCP prompt in the agent's persistent system instructions.
 

@@ -1,0 +1,12 @@
+{
+  "name": "keymem",
+  "owner": { "name": "donggyun112", "url": "https://github.com/donggyun112" },
+  "description": "keymem — associative long-term memory for Claude Code.",
+  "plugins": [
+    {
+      "name": "keymem",
+      "source": "./",
+      "description": "Associative long-term memory (MCP server + push-path memory surfacing hook)."
+    }
+  ]
+}
