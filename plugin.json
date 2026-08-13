@@ -2,11 +2,19 @@
   "name": "keymem",
   "description": "Associative long-term memory — recall by key-graph association, plus passive memory surfacing on every prompt.",
   "version": "0.22.0",
-  "author": { "name": "donggyun112", "url": "https://github.com/donggyun112" },
+  "author": {
+    "name": "donggyun112",
+    "url": "https://github.com/donggyun112"
+  },
   "homepage": "https://github.com/donggyun112/keymem#readme",
   "repository": "https://github.com/donggyun112/keymem",
   "license": "MIT",
-  "keywords": ["memory", "mcp", "recall", "associative-memory"],
+  "keywords": [
+    "memory",
+    "mcp",
+    "recall",
+    "associative-memory"
+  ],
   "mcpServers": "./mcp/keymem.json",
   "hooks": "./hooks/hooks.json",
   "skills": "./skills/"
