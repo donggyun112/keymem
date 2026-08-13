@@ -1,6 +1,5 @@
 .env
 a.txt
-.mcp.json
 .venv/
 __pycache__/
 data/
