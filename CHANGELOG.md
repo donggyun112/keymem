@@ -8,6 +8,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- BENCHMARKS.md §8 records an embedding-model comparison (bge-m3 vs EmbeddingGemma-300m vs
+  granite-embedding-97m-r2) and why keymem stays on bge-m3: granite loses outright (8% vs 58%
+  recall@1), Gemma ties every retrieval metric and buys no extra separability, and adopting
+  either means replacing fastembed's tokenizer layer — `fastembed@2.1.0` pins
+  `@anush008/tokenizers@^0.0.0`, which cannot parse a modern `tokenizer.json` at all. The
+  comparison ran out of tree through the `__setTestEmbedder` seam; no dependency changed.
+
 - BENCHMARKS.md §7 records an experiment that was **built, measured, and removed**: Hebbian
   key↔key associations learned from queries that reach two keys together. The edges formed and
   recall traversed them, but three independent measurements — the §6 fixture and a train/held-out

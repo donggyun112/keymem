@@ -335,6 +335,55 @@ not a synthetic one) showing those clusters get queried together. Neither exists
 
 ---
 
+## 8. Embedding model comparison — why it is still bge-m3
+
+Asked in 2026-08 whether a newer, smaller multilingual model should replace bge-m3 (568M,
+1024-dim). Answer: no, and the reason is worth writing down because the obvious evidence
+(MTEB rank, parameter count) points the other way.
+
+**First, a constraint that blocks evaluation itself.** `fastembed@2.1.0` — the current
+release — depends on `@anush008/tokenizers@^0.0.0`, which cannot parse a modern
+`tokenizer.json`: merges serialized as `["Ġ","Ġ"]` pairs rather than `"Ġ Ġ"` strings, plus
+`ignore_merges`, both introduced in newer `tokenizers`. Every model tried here fails to load
+through keymem's CUSTOM path with `data did not match any variant of untagged enum
+ModelWrapper`. bge-m3 works only because BAAI's tokenizer is the older Unigram serialization
+(the note in `modelDownload.ts` had already found the edge of this). Rewriting the merges by
+hand makes the model load, but changes tokenization — numbers measured that way are measuring
+the workaround, not the model. The comparison below therefore ran **out of tree**, embedding
+with `@huggingface/transformers` and injecting the vectors through the `__setTestEmbedder`
+seam, so no production code or dependency changed.
+
+**Harness validity.** bge-m3 through that path (CLS pooling, q8) reproduces its native
+fastembed scorecard — 58% / 75% / 0.67 vs 58% / 72% / 0.65, zero embedder cache misses — so
+the seam is measuring what the real pipeline measures. Pooling is per-model on purpose:
+scoring bge-m3 with mean pooling instead of CLS drops a pair's related/unrelated gap from
+0.245 to 0.132. Getting that detail wrong is how model comparisons produce confident nonsense.
+
+### Results (`bench/fixture.json`, 12 answerable + 4 not-found; bge-m3 thresholds throughout)
+
+| model | params / dim | recall@1 | recall@5 | MRR | not-found | dup↔indep margin |
+|---|---|---:|---:|---:|---:|---:|
+| **bge-m3** (current) | 568M / 1024 | **58%** | **75%** | **0.67** | 0/4 | −0.093 |
+| EmbeddingGemma-300m | 300M / 768 | 58% | 75% | 0.67 | 1/4 | −0.095 |
+| granite-embedding-97m-r2 | 97M / 384 | 8% | 33% | 0.19 | 0/4 | — |
+
+### Verdict
+
+- **granite-97m-r2 loses outright** on this workload — 8% recall@1, and 0% on both
+  cross-lingual categories — despite a strong sub-100M retrieval claim. Its ONNX is 93MB
+  quantized and it handles 32K context; none of that helps here. MTEB rank did not predict it.
+- **EmbeddingGemma-300m ties exactly** on every retrieval metric at 300M/768-dim. Its one
+  edge is not-found accuracy (1/4 vs 0/4) — a single query out of four — and its cosine bands
+  sit higher but with the *same* shape: the duplicate↔independent margin stays negative and
+  nearly identical (−0.095 vs −0.093), so it buys no separability, which is the property
+  bge-m3 was chosen for in the first place.
+- **A tie on 12 queries is not a reason to migrate.** Adopting either model means replacing
+  fastembed's tokenizer layer and taking ownership of per-model pooling and prompt
+  conventions. Nothing measured here pays for that. Revisit when there is an eval large
+  enough for a tie to mean something, or a model that wins outright rather than matching.
+
+---
+
 ## Reproduce
 
 ```bash
