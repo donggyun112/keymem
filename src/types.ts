@@ -20,10 +20,6 @@ export interface Key {
   // Persisted with the key; cleared when a candidate is promoted. Optional/absent on
   // legacy graphs and on keys that have never received a weak-confirmed read.
   aliasCandidates?: Record<string, AliasCandidate>;
-  // Hebbian associations: other key id -> number of confirmed co-matches. An entry
-  // becomes a traversable edge at HEBBIAN_PROMOTE_N. Symmetric — both keys carry it.
-  // Absent on legacy graphs and on keys that never co-matched a confirmed recall.
-  assoc?: Record<string, number>;
   // Aliases added by auto-key promotion (not authored at remember() time). Provenance for
   // read_key output and the basis for stale-alias pruning.
   learnedAliases?: LearnedAlias[];

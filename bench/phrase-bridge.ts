@@ -53,6 +53,21 @@ const mk = (): Agg => ({ n: 0, hit5: 0, hit10: 0, mrr: 0, nf_ok: 0, nf_n: 0 });
 // memory; STRUCTURAL instead asks whether the phrase key is a dead-end label (singleton)
 // and the atomic key is a real hub, then links at a deliberately low weight — buying
 // reach at the cost of rank noise. The point of the run is to decide which gate ships.
+function unbridge(g: any, graphJson: string): void {
+  const onDisk = new Set(
+    (JSON.parse(graphJson).links as Array<{ key_id: string; memory_id: string }>).map(
+      (l) => `${l.key_id}|${l.memory_id}`
+    )
+  );
+  for (const [kid, mids] of Object.entries(g._keyToMems) as Array<[string, Map<string, number>]>) {
+    for (const mid of [...mids.keys()]) {
+      if (onDisk.has(`${kid}|${mid}`)) continue;
+      mids.delete(mid);
+      g._memToKeys[mid]?.delete(kid);
+    }
+  }
+}
+
 const STRUCTURAL_WEIGHT = 0.3;
 function bridgeStructural(g: any): number {
   const degree = (kid: string): number => g._keyToMems[kid]?.size ?? 0;
@@ -93,14 +108,15 @@ const bridgedLinks: Record<string, number> = {};
 const perQuery: Array<Record<string, unknown>> = [];
 
 for (const cond of CONDITIONS) {
-  if (cond === "BRIDGE") delete process.env.KEYMEM_PHRASE_BRIDGE;
-  else process.env.KEYMEM_PHRASE_BRIDGE = "false";
-
   // Both conditions load the same on-disk graph; neither flushes, so the bridged
   // links never leak into the other condition's run.
   const g = new MemoryGraph();
   const before = g.linkCount;
   await g.load();
+  // Bridging is core and runs on every load, so NO-BRIDGE is reconstructed here rather
+  // than switched off in production code: graph.json still holds the pre-bridge links
+  // (this bench never flushes), so anything extra is exactly what the heal added.
+  if (cond !== "BRIDGE") unbridge(g, await readFile(join(dir, "graph.json"), "utf-8"));
   if (cond === "STRUCTURAL") bridgeStructural(g);
   bridgedLinks[cond] = g.linkCount - before;
 

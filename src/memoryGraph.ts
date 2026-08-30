@@ -14,7 +14,6 @@ import {
   AUTOKEY_ENABLED, AUTOKEY_BUFFER_CAPACITY, AUTOKEY_BUFFER_TTL_SECONDS,
   AUTOKEY_PROMOTE_N, AUTOKEY_MAX_ALIASES, AUTOKEY_PRUNE_AGE_SECONDS,
   AUTOKEY_CONFIRM_FLOOR,
-  HEBBIAN_ENABLED, HEBBIAN_PROMOTE_N, HEBBIAN_MAX_EDGES, HEBBIAN_DECAY,
 } from "./autokey.js";
 
 const DATA_DIR = dataDir();
@@ -711,47 +710,6 @@ export class MemoryGraph {
     return bridged;
   }
 
-  // Hebbian accrual. A confirmed read is evidence about the whole query, not just the key
-  // that was traversed: every key that co-matched this query is, on this occasion, about the
-  // same thing the user was after. Counting those co-occurrences builds key<->key edges the
-  // bipartite graph cannot derive from data alone — two key clusters that share no memory
-  // are unreachable from each other at any hop count, no matter how related they are.
-  // Symmetric by construction: association is not directional.
-  private _reinforceAssoc(keyId: string): void {
-    const coMatched = this._recallBuffer.peekCoMatched(keyId);
-    if (coMatched.length === 0) return;
-    for (const otherId of coMatched) {
-      if (otherId === keyId) continue;
-      if (!(otherId in this.keys)) continue;
-      this._bumpAssoc(keyId, otherId);
-      this._bumpAssoc(otherId, keyId);
-    }
-    this.markDirty();
-  }
-
-  private _bumpAssoc(fromId: string, toId: string): void {
-    const key = this.keys[fromId];
-    if (!key) return;
-    key.assoc ??= {};
-    key.assoc[toId] = (key.assoc[toId] ?? 0) + 1;
-    const entries = Object.entries(key.assoc);
-    if (entries.length <= HEBBIAN_MAX_EDGES) return;
-    // Over cap: keep the strongest. A hub key co-matches everything, so without this its
-    // association list would grow until traversal reached the whole store.
-    key.assoc = Object.fromEntries(
-      entries.sort((a, b) => b[1] - a[1]).slice(0, HEBBIAN_MAX_EDGES)
-    );
-  }
-
-  // Promoted associations only: below HEBBIAN_PROMOTE_N a co-occurrence is a coincidence.
-  private _assocEdges(keyId: string): string[] {
-    const assoc = this.keys[keyId]?.assoc;
-    if (!assoc) return [];
-    return Object.entries(assoc)
-      .filter(([toId, count]) => count >= HEBBIAN_PROMOTE_N && toId in this.keys)
-      .map(([toId]) => toId);
-  }
-
   private _activeMemoryIdsForKey(keyId: string, namespace?: string | null): string[] {
     const active: string[] = [];
     const ns = normalizeNamespace(namespace);
@@ -910,15 +868,7 @@ export class MemoryGraph {
               !!l && typeof l.alias === "string" && typeof l.addedAt === "number" && typeof l.hits === "number"
           )
         : undefined;
-      const assoc =
-        k.assoc && typeof k.assoc === "object"
-          ? Object.fromEntries(
-              Object.entries(k.assoc).filter(
-                ([, v]) => typeof v === "number" && Number.isFinite(v) && v > 0
-              )
-            )
-          : undefined;
-      const key = { ...k, aliases, aliasCandidates, learnedAliases, assoc };
+      const key = { ...k, aliases, aliasCandidates, learnedAliases };
       if (key.embedding && key.embedding.length > 0) sawInlineVectors = true;
       else key.embedding = sidecar?.get(`k:${kid}`)?.[0] ?? [];
       if (!key.embedding || key.embedding.length === 0) {
@@ -980,8 +930,7 @@ export class MemoryGraph {
     if (healed > 0) console.error(`[graph] healed ${healed} fragmented key(s)`);
 
     // Link legacy phrase keys' memories onto the atomic keys they contain.
-    // KEYMEM_PHRASE_BRIDGE=false opts out (and lets bench/phrase-bridge.ts A/B it).
-    const bridged = cfgRaw("PHRASE_BRIDGE") === "false" ? 0 : this._bridgePhraseKeys();
+    const bridged = this._bridgePhraseKeys();
     if (bridged > 0) console.error(`[graph] bridged ${bridged} phrase-key link(s)`);
 
     for (const [mid, mem] of Object.entries(this.memories)) {
@@ -1566,18 +1515,14 @@ export class MemoryGraph {
         .slice(0, topK)
         .map(({ _literal, _contentMid, ...candidate }) => candidate);
 
-      if (AUTOKEY_ENABLED || HEBBIAN_ENABLED) {
+      if (AUTOKEY_ENABLED) {
         // Surfaced semantic matches (passed the gate) and gate-dropped near-misses (in the
         // confirmation band) are both learning signals: a later confirmed read via any of
         // these keys lets autokey fold the query in.
         const weakKeyScores = new Map<string, number>(nearMiss);
         for (const c of result) if (c.match_type === "semantic") weakKeyScores.set(c.key_id, c.score);
-        // matchedKeyIds carries EVERY key the query reached (literal hits included), which
-        // weakKeyScores deliberately does not — autokey learns from weak matches only, the
-        // Hebbian path needs the whole co-match set.
-        const matchedKeyIds = result.map((c) => c.key_id as string);
-        if (weakKeyScores.size > 0 || matchedKeyIds.length > 1) {
-          this._recallBuffer.push({ queryText: cleanQuery, weakKeyScores, matchedKeyIds });
+        if (weakKeyScores.size > 0) {
+          this._recallBuffer.push({ queryText: cleanQuery, weakKeyScores });
         }
       }
       return result;
@@ -1962,9 +1907,6 @@ export class MemoryGraph {
       if (AUTOKEY_ENABLED && viaKeyId) {
         await this._maybeLearnAlias(viaKeyId, memoryId);
       }
-      if (HEBBIAN_ENABLED && viaKeyId) {
-        this._reinforceAssoc(viaKeyId);
-      }
 
       const connectedKeys = [...(this._memToKeys[memoryId] ?? new Map())]
         .filter(([kid]) => kid in this.keys)
@@ -2228,31 +2170,6 @@ export class MemoryGraph {
           if (!memMatchedKeys[memId]) memMatchedKeys[memId] = [];
           memMatchedKeys[memId].push(this.keys[kid].concept);
           memHop[memId] = 1;
-        }
-      }
-
-      // ── Dense Path A': Hebbian association hop ──
-      // Keys the store learned belong together from being asked about together, even
-      // though no memory joins them (see _reinforceAssoc). This is the only path that
-      // crosses between key clusters with nothing in common, so it is also the only one
-      // that can invent a connection — hence PROMOTE_N confirmations to open an edge,
-      // HEBBIAN_DECAY below HOP_DECAY so an association never outranks a real shared
-      // memory, and expand-gated like every other hop. A memory already reached at hop 1
-      // keeps its stronger score; this only adds what direct matching could not see.
-      if (HEBBIAN_ENABLED && expand) {
-        for (const [keySim, kid] of keyScores.slice(0, 10)) {
-          for (const assocId of this._assocEdges(kid)) {
-            const idf = this._keyIdf(assocId);
-            for (const memId of this._keyToMems[assocId]?.keys() ?? []) {
-              if (skip(memId)) continue;
-              if (memHop[memId] === 1) continue;
-              const lw = this._getLinkWeight(assocId, memId);
-              denseScores[memId] = (denseScores[memId] ?? 0) + keySim * idf * lw * HEBBIAN_DECAY;
-              if (!memMatchedKeys[memId]) memMatchedKeys[memId] = [];
-              memMatchedKeys[memId].push(`${this.keys[assocId].concept} (assoc)`);
-              memHop[memId] = memHop[memId] ?? 2;
-            }
-          }
         }
       }
 

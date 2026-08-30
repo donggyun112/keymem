@@ -1,21 +1,9 @@
 import { isShortConcept } from "./embedding.js";
 import { cfgRaw } from "./env.js";
 
-// How many of a query's matched keys count as co-matched. searchKeys returns up to 8,
-// and pairing all of them accrued 116 pairs / 96 traversable edges from just 12 queries
-// on the 60-memory bench fixture — at that rate every key ends up associated with every
-// other and traversal degenerates into "return the store". The result is score-sorted, so
-// the top few are the ones the query was actually about.
-export const HEBBIAN_MAX_COMATCH = envInt("HEBBIAN_MAX_COMATCH", 3, 1);
-
 export interface RecallBufferEntry {
   queryText: string;
   weakKeyScores: Map<string, number>;
-  // The query's top HEBBIAN_MAX_COMATCH matched keys, literal hits included — a different
-  // cut than weakKeyScores, which is deliberately only the *weak* matches autokey learns
-  // aliases from. Two keys the same query reached are association candidates even when
-  // both matched strongly, which is why this cannot just reuse weakKeyScores.
-  matchedKeyIds: Set<string>;
   ts: number;
 }
 
@@ -34,17 +22,10 @@ export class RecallBuffer {
     this._now = opts.now ?? (() => Date.now() / 1000);
   }
 
-  push(entry: {
-    queryText: string;
-    weakKeyScores: Map<string, number>;
-    matchedKeyIds?: Iterable<string>;
-  }): void {
+  push(entry: { queryText: string; weakKeyScores: Map<string, number> }): void {
     this._entries.push({
       queryText: entry.queryText,
       weakKeyScores: new Map(entry.weakKeyScores),
-      matchedKeyIds: new Set(
-        [...(entry.matchedKeyIds ?? entry.weakKeyScores.keys())].slice(0, HEBBIAN_MAX_COMATCH)
-      ),
       ts: this._now(),
     });
     if (this._entries.length > this._capacity) {
@@ -63,7 +44,6 @@ export class RecallBuffer {
         const result: RecallBufferEntry = {
           queryText: e.queryText,
           weakKeyScores: new Map(e.weakKeyScores),
-          matchedKeyIds: new Set(e.matchedKeyIds),
           ts: e.ts,
         };
         e.weakKeyScores.delete(keyId);
@@ -71,20 +51,6 @@ export class RecallBuffer {
       }
     }
     return null;
-  }
-
-  // Keys that co-matched the most recent fresh query alongside keyId. Read-only —
-  // unlike consumeWeakMatch this leaves the entry intact, because one confirmed read
-  // is evidence about every pairing in that query, not about a single one.
-  peekCoMatched(keyId: string): string[] {
-    const cutoff = this._now() - this._ttl;
-    for (let i = this._entries.length - 1; i >= 0; i--) {
-      const e = this._entries[i];
-      if (e.ts < cutoff) continue;
-      if (!e.matchedKeyIds.has(keyId)) continue;
-      return [...e.matchedKeyIds].filter((k) => k !== keyId);
-    }
-    return [];
   }
 
   size(): number {
@@ -118,27 +84,6 @@ export const AUTOKEY_BUFFER_TTL_SECONDS = 300;
 export const AUTOKEY_PRUNE_AGE_SECONDS = envInt(
   "AUTOKEY_PRUNE_AGE", 30 * 24 * 3600, 0
 );
-
-// ── Hebbian key association ──
-// The graph is bipartite: keys connect only through the memories they share, so two key
-// clusters with no memory in common are unreachable from each other at any hop count. But
-// a user's queries know things the data does not — asking about "배포" and "릴리스" in the
-// same breath, over and over, is evidence the two belong together even when no single
-// memory carries both. This folds that evidence in: keys that co-match a query AND get a
-// confirmed read accrue an association, and recall traverses the strong ones.
-// Default OFF — it trades precision for reach, and §6 showed that trade needs measuring
-// before it ships on. KEYMEM_HEBBIAN=true enables it.
-export const HEBBIAN_ENABLED = cfgRaw("HEBBIAN") === "true";
-// Confirmations before a co-occurrence becomes a traversable edge. Same shape as
-// AUTOKEY_PROMOTE_N: one co-match is a coincidence, three is a habit.
-export const HEBBIAN_PROMOTE_N = envInt("HEBBIAN_PROMOTE_N", 3, 1);
-// Cap per key so a hub cannot accumulate an unbounded association list; the weakest
-// association is dropped when a stronger one arrives.
-export const HEBBIAN_MAX_EDGES = envInt("HEBBIAN_MAX_EDGES", 8, 1);
-// Score multiplier for a memory reached only through an association edge. Below
-// MemoryGraph.HOP_DECAY (0.3): an association is weaker evidence than a shared memory,
-// so it must never outrank the real graph.
-export const HEBBIAN_DECAY = 0.2;
 
 // Pure policy: given accumulated heat and the recall-time query↔key cosine, decide
 // whether to fold the query into the key space and how. Short-concept gate keeps

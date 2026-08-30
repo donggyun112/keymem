@@ -289,50 +289,49 @@ and the fixture had no resolution at all.
 
 ---
 
-## 7. Hebbian key associations (experimental, default OFF)
+## 7. Hebbian key associations — built, measured, removed
 
-**Why.** The graph is bipartite: keys connect only through the memories they share, so two
-key clusters with no memory in common are unreachable from each other at *any* hop count, no
-matter how related they are. But a user's queries know things the data does not — asking about
-`배포` and `릴리스` in the same breath, repeatedly, is evidence they belong together even when
-no single memory carries both. `KEYMEM_HEBBIAN=true` folds that evidence in: keys that co-match
-a query and then get a confirmed read accrue an association, and at `HEBBIAN_PROMOTE_N` (3)
-confirmations it becomes a traversable edge, scored at `HEBBIAN_DECAY` (0.2, below the 0.3
-`HOP_DECAY`) so an association can never outrank a real shared memory.
+Recorded because the negative result is the useful part: it costs a day to rebuild this
+and rediscover the same thing.
 
-**That it works** is covered by `test/hebbian.test.ts`, on a fixture built so the premise
-actually holds: the training query reaches both keys, the test query reaches only one, and the
-hop-1 memory is kept below `KEY_AUTO_LINK` so ordinary 2-hop traversal cannot reach the target
-on its own. The open question for a benchmark is what turning it on **costs** — this is the one
-path that can invent a connection the data never had.
+**The idea.** keymem's graph is bipartite — keys connect only through the memories they
+share, so two key clusters with no memory in common are unreachable from each other at
+*any* hop count, however related they are. A user's queries carry knowledge the data does
+not: asking about `배포` and `릴리스` in the same breath, repeatedly, is evidence they belong
+together even when no single memory carries both. So: keys that co-match a query and then get
+a confirmed read accrue an association, and after three confirmations it becomes a traversable
+edge, scored below `HOP_DECAY` so it can never outrank a real shared memory.
 
-### Results (`bge-m3`, §6 fixture + a training phase of recall→confirmed-read)
+It worked, in the sense that the edges formed and recall traversed them — a unit test on a
+purpose-built fixture confirmed it. **It was removed anyway, because no non-circular
+measurement could show it helping.**
 
-| category | metric | OFF | ON |
-|---|---|---:|---:|
-| bridge (6) | reach@10 / hit@5 / MRR | 100% / 100% / 0.64 | 100% / 100% / 0.64 |
-| direct (4) | reach@10 / hit@5 / MRR | 100% / 100% / 1.00 | 100% / 100% / 1.00 |
-| precision (2) | reach@10 / hit@5 / MRR | 100% / 100% / 1.00 | 100% / 100% / 1.00 |
-| notfound (2) | not-found acc | 2/2 | 2/2 |
-| — | off-topic in top-5 | 0 | 0 |
-| — | associations formed | 0 | 48 pairs / 30 traversable |
+| instrument | OFF | ON | edges formed |
+|---|---|---|---|
+| §6 fixture (60 memories), after a recall→read training phase | bridge/direct/precision/notfound all at ceiling | **identical, every cell** | 30 traversable |
+| Owner's real store (530 memories), real-eval queries, train/held-out split | train 5/6, held-out 6/6 | **train 5/6, held-out 6/6** | 36 traversable |
 
-### What this shows (and doesn't)
+### Why it was removed rather than shipped behind a flag
 
-- ✅ **It is free at this scale.** 30 traversable edges formed and *not one metric moved* —
-  no ranking damage, no not-found regression, no off-topic leakage. For a mechanism whose whole
-  job is adding edges, "changed nothing it shouldn't" is the result worth having.
-- ❌ **The benefit is unmeasured.** Every category already sat at reach@10 100% before training,
-  so this fixture has no query that *needs* an association — it can only detect harm, not help.
-  The reach gain is demonstrated in a unit test, not in a benchmark, and that is a weaker claim.
-  Measuring it needs a fixture with genuinely disjoint key clusters and a usage trace that links
-  them, which is not the §6 fixture.
-- ⚠️ **Associations form promiscuously, and that had to be capped.** Pairing every key a query
-  matched accrued **116 pairs / 96 traversable edges from 12 queries in 3 rounds** — at that rate
-  every key ends up associated with every other and traversal degenerates into "return the
-  store". Capping the co-match set to a query's top 3 keys (`HEBBIAN_MAX_COMATCH`) cut that to
-  48 / 30 with identical metrics. The cap is doing real work, and the growth rate is the reason
-  this ships default-OFF.
+- **Three independent measurements, no movement in either direction.** Not better, not worse.
+  For a mechanism whose entire job is adding edges to a graph, "no effect" is not a neutral
+  result — it means the edges are not load-bearing.
+- **The only place the benefit appeared was a fixture built to show it.** The synthetic
+  training trace hand-writes "the user asked about A and B together" and then checks that A
+  reaches B — that re-proves the implementation, not the idea. The held-out split on the real
+  store was the honest instrument, and it moved nothing. (Its held-out half already sat at 6/6
+  before training, so strictly it could only have detected harm — which is itself a finding:
+  on this store there is no reachability gap for associations to fill.)
+- **Edges formed promiscuously.** Pairing every key a query matched accrued 96 traversable
+  edges from 12 queries in 3 rounds; capping the co-match set to a query's top 3 keys cut it to
+  30 with identical metrics. A mechanism that needs a cap to avoid connecting everything to
+  everything, and that shows no benefit once capped, is carrying risk for nothing.
+- **A default-off flag is not a resolution.** It ships the maintenance cost and the reader's
+  question ("should I turn this on?") without ever answering it.
+
+**What would change the verdict:** a store with a genuine reachability gap — disjoint key
+clusters where the answer is unreachable at any hop — plus a real usage trace (host transcripts,
+not a synthetic one) showing those clusters get queried together. Neither exists here yet.
 
 ---
 
@@ -351,7 +350,6 @@ tsx bench/hotpot.ts 100
 tsx bench/hotpot-agentkeys.ts bench/hotpot-agentkeys.json   # §2 validity check w/ blind agent keys
 tsx bench/inject-sweep.ts                                   # §5 inject top-N value/noise sweep
 tsx bench/phrase-bridge.ts                                  # §6 phrase-key bridging gate ablation
-tsx bench/hebbian.ts                                        # §7 Hebbian OFF (run again with KEYMEM_HEBBIAN=true for ON)
 ```
 
 Sources: [LoCoMo](https://github.com/snap-research/locomo) · [LongMemEval](https://github.com/xiaowu0162/LongMemEval) · [Zep vs Mem0 methodology dispute](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/) · [Mem0 paper](https://arxiv.org/pdf/2504.19413) · [Agentic search replacing RAG (VentureBeat, 2026)](https://venturebeat.com/data/context-architecture-is-replacing-rag-as-agentic-ai-pushes-enterprise-retrieval-to-its-limits)
