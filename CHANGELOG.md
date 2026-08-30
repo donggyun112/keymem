@@ -20,6 +20,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the MCP tool list, the server instructions, and the skill protocol — a feedback tool no agent
   calls is dead code.
 
+- **Hebbian key associations (`KEYMEM_HEBBIAN=true`, default OFF).** The graph is bipartite,
+  so two key clusters with no memory in common are unreachable from each other at any hop
+  count — but a user's queries carry knowledge the data does not, and asking about two keys
+  together, repeatedly, is evidence they belong together. Keys that co-match a query and then
+  get a confirmed read accrue an association; at `HEBBIAN_PROMOTE_N` (3) it becomes a
+  traversable edge, scored at `HEBBIAN_DECAY` (0.2, under the 0.3 `HOP_DECAY`) so it can never
+  outrank a real shared memory, and gated behind `expand` like every other hop. Measured as §7:
+  30 edges formed on the bench fixture and no metric moved in either direction — free, but with
+  its benefit still unmeasured, which is why it ships off. Pairing every matched key accrued 96
+  traversable edges from 12 queries in 3 rounds, so the co-match set is capped to a query's top
+  3 keys (`HEBBIAN_MAX_COMATCH`), cutting that to 30 with identical metrics.
 - `bench/phrase-bridge.ts` + `bench/phrase-fixture.json` — gate ablation for phrase-key
   bridging (NO-BRIDGE vs the shipped cosine gate vs an experimental structural one).
   Documented as §6 of BENCHMARKS.md. The structural gate lost on its own terms: no reach
