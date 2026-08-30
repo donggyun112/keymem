@@ -4,6 +4,36 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Namespaces are case-folded on write, on query, and on load.** They were compared
+  with exact string equality everywhere, so `Nexora` and `nexora` hard-partitioned the
+  same project and a scoped recall silently returned half its memories (live store: 7
+  vs 6 memories under the two spellings). One normalizer now runs on both sides, the
+  loader repairs stored values, and the daemon's `namespaces.json` allowlist folds the
+  same way so a hand-written `Nexora` mapping still matches.
+- MCP handshake version is read from `package.json` at runtime. The hardcoded literal
+  had gone stale twice (`0.14.7`, then `0.22.0` against a `0.22.2` package); hosts key
+  upgrade detection off it.
+
+### Added
+
+- **Legacy phrase keys are bridged onto the atomic keys they contain.** `writeHints`
+  warns about new 3+-token keys, but the ones already stored stayed orphaned: on the
+  live store, 177 of 204 phrase keys were singletons, so their memory hung off a key
+  nothing else ever reached — no hub, no associative traversal, reachable only by
+  repeating the exact phrase. On load, every 1-2 token slice of a phrase key that
+  ALREADY exists as a key is linked to that phrase key's memories (`git push 403` →
+  `git push`, `git`). Requiring the atomic key to exist is the filter: no key is
+  created, invented, or deleted, and the phrase key survives for literal recall.
+  Each bridge is gated on the atomic key's own cosine to the memory against
+  `contentRecallShort` — a shared token is not a shared topic, and ungated, half the
+  bridges landed on generic hubs (`사용자`, `프로젝트`) that would dilute every later
+  recall on them. Live store: 143 links added across 73 memories, bench unchanged.
+  Idempotent.
+
 ## [0.22.2] - 2026-08-30
 
 ### Fixed

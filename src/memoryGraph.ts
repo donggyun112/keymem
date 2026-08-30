@@ -302,6 +302,17 @@ export function splitSentences(content: string): string[] {
 const CJK_SINGLE_CHAR =
   /^[\p{Script=Hangul}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]$/u;
 
+// Namespaces are compared with exact string equality everywhere, so "Nexora" and
+// "nexora" hard-partition the same project and a scoped recall silently misses half
+// its memories. One normalizer on both the write and the compare side keeps them one
+// namespace; the loader repairs stored values so listings agree too. Returns null for
+// "no namespace filter" — callers that need a stored value default to "default".
+export function normalizeNamespace(ns: unknown): string | null {
+  if (typeof ns !== "string") return null;
+  const trimmed = ns.trim().toLowerCase();
+  return trimmed === "" ? null : trimmed;
+}
+
 export function sanitizeKeys(keys: unknown): string[] {
   let arr: unknown[];
   if (typeof keys === "string") {
@@ -634,12 +645,72 @@ export class MemoryGraph {
     return merged;
   }
 
+  // Legacy phrase keys (3+ whitespace tokens) are memory-specific labels: measured on
+  // this store, 87% are singletons, so the memory behind them hangs off a key nothing
+  // else ever reaches — no hub, no associative traversal, reachable only by repeating
+  // the exact phrase. writeHints warns about new ones; this heals the ones already
+  // stored. For each phrase key, every 1-2 token slice that ALREADY exists as a key
+  // gets linked to the phrase key's memories ("git push 403" -> "git push", "git").
+  // Requiring the atomic key to exist is the whole filter: no new keys, no invented
+  // concepts, nothing deleted — only links onto hubs the store already built. The
+  // phrase key itself stays, so literal recall still works. Idempotent.
+  private _bridgePhraseKeys(): number {
+    const byConcept = new Map<string, string>();
+    for (const [kid, key] of Object.entries(this.keys)) {
+      const surfaces = [key.concept, ...(key.aliases ?? [])];
+      for (const surface of surfaces) {
+        const norm = surface.trim().toLowerCase();
+        // Most-linked key wins a shared surface, so bridges land on the real hub.
+        const prev = byConcept.get(norm);
+        if (!prev || (this._keyToMems[kid]?.size ?? 0) > (this._keyToMems[prev]?.size ?? 0)) {
+          byConcept.set(norm, kid);
+        }
+      }
+    }
+
+    let bridged = 0;
+    for (const [phraseId, key] of Object.entries(this.keys)) {
+      const tokens = key.concept.trim().split(/\s+/);
+      if (tokens.length < 3) continue;
+      const mids = [...(this._keyToMems[phraseId]?.keys() ?? [])];
+      if (mids.length === 0) continue;
+      const subs = new Set<string>();
+      for (const n of [1, 2]) {
+        for (let i = 0; i + n <= tokens.length; i++) {
+          subs.add(tokens.slice(i, i + n).join(" ").toLowerCase());
+        }
+      }
+      for (const sub of subs) {
+        const atomicId = byConcept.get(sub);
+        if (!atomicId || atomicId === phraseId) continue;
+        const atomic = this.keys[atomicId];
+        for (const mid of mids) {
+          if (this._hasLink(atomicId, mid)) continue;
+          const mem = this.memories[mid];
+          if (!mem) continue;
+          // Gate on the atomic key's OWN similarity to the memory, not the phrase link's
+          // weight. A shared token is not a shared topic: unfiltered, half the bridges
+          // landed on generic hubs ("사용자", "프로젝트") that would dilute every later
+          // recall on them. CONTENT_RECALL_SHORT is the bar this store measured for exactly
+          // this comparison — short key vs sentence content, above unrelated p95 (0.452).
+          const sim = cosineSim(atomic.embedding, mem.embedding);
+          if (sim < CONTENT_RECALL_SHORT) continue;
+          this._link(atomicId, mid, sim);
+          bridged++;
+        }
+      }
+    }
+    if (bridged > 0) this.markDirty();
+    return bridged;
+  }
+
   private _activeMemoryIdsForKey(keyId: string, namespace?: string | null): string[] {
     const active: string[] = [];
+    const ns = normalizeNamespace(namespace);
     for (const mid of this._keyToMems[keyId]?.keys() ?? []) {
       const mem = this.memories[mid];
       if (!mem || this._isExpired(mem) || mid in this._supersededBy) continue;
-      if (namespace && mem.namespace !== namespace) continue;
+      if (ns && mem.namespace !== ns) continue;
       active.push(mid);
     }
     return active;
@@ -813,6 +884,11 @@ export class MemoryGraph {
         supersedes: null,
       };
       const mem: Memory = { ...defaults, ...m };
+      const normalizedNs = normalizeNamespace(mem.namespace) ?? "default";
+      if (normalizedNs !== mem.namespace) {
+        mem.namespace = normalizedNs;
+        this.markDirty(); // case-variant namespace repaired; persist on next flush
+      }
       mem.links = Array.isArray(mem.links)
         ? mem.links.filter((linkedId): linkedId is string => typeof linkedId === "string")
         : [];
@@ -846,6 +922,10 @@ export class MemoryGraph {
     // Heal keys fragmented across key_types in stores written before cross-type reconciliation.
     const healed = this._healFragmentedKeys();
     if (healed > 0) console.error(`[graph] healed ${healed} fragmented key(s)`);
+
+    // Link legacy phrase keys' memories onto the atomic keys they contain.
+    const bridged = this._bridgePhraseKeys();
+    if (bridged > 0) console.error(`[graph] bridged ${bridged} phrase-key link(s)`);
 
     for (const [mid, mem] of Object.entries(this.memories)) {
       if (mem.supersedes) {
@@ -1067,7 +1147,7 @@ export class MemoryGraph {
         depth: 0.0,
         access_count: 0,
         last_accessed: now,
-        namespace: options.namespace ?? "default",
+        namespace: normalizeNamespace(options.namespace) ?? "default",
         ttl: expiresAt,
         links: validLinks,
         contradicts: [],
@@ -1179,7 +1259,7 @@ export class MemoryGraph {
       const mid = uid();
       resultMid = mid;
       const now = Date.now() / 1000;
-      const ns = options.namespace ?? old.namespace;
+      const ns = normalizeNamespace(options.namespace) ?? old.namespace;
       const nextLinks = options.relatedTo === undefined ? old.links : options.relatedTo;
       const validLinks = this._validMemoryLinks(nextLinks ?? [], mid);
 
@@ -1742,7 +1822,8 @@ export class MemoryGraph {
     return this._lock.runExclusive(async () => {
       const mem = this.memories[memoryId];
       if (!mem || this._isExpired(mem)) throw new Error(`Memory ${memoryId} not found`);
-      if (namespace && mem.namespace !== namespace) throw new Error(`Memory ${memoryId} not found`);
+      const nsFilter = normalizeNamespace(namespace);
+      if (nsFilter && mem.namespace !== nsFilter) throw new Error(`Memory ${memoryId} not found`);
       if (memoryId in this._supersededBy) {
         throw new Error(`Memory ${memoryId} was superseded by ${this._supersededBy[memoryId]}`);
       }
@@ -1949,11 +2030,12 @@ export class MemoryGraph {
     let keyScores: [number, string][] = [];
 
     // Hoisted to method scope so Phase 3 (a separate locked section) can reuse it.
+    const nsFilter = normalizeNamespace(namespace);
     const skip = (mid: string): boolean => {
       if (!(mid in this.memories)) return true;
       const mem = this.memories[mid];
       if (this._isExpired(mem)) return true;
-      if (namespace && mem.namespace !== namespace) return true;
+      if (nsFilter && mem.namespace !== nsFilter) return true;
       if (mid in this._supersededBy) return true;
       return false;
     };
@@ -2442,11 +2524,12 @@ export class MemoryGraph {
   // ── List all ──
 
   listAll(namespace?: string | null): object[] {
+    const nsFilter = normalizeNamespace(namespace);
     return Object.entries(this.memories)
       .filter(([mid, mem]) => {
         if (this._isExpired(mem)) return false;
         if (mid in this._supersededBy) return false;
-        if (namespace && mem.namespace !== namespace) return false;
+        if (nsFilter && mem.namespace !== nsFilter) return false;
         return true;
       })
       .map(([mid, mem]) => ({

@@ -23,6 +23,11 @@ import {
 } from "./nativeTranscripts.js";
 import { cfgRaw } from "./env.js";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
+
+// Read from package.json at runtime — a hardcoded literal here has already gone
+// stale twice (0.14.7, then 0.22.0) while package.json moved on.
+const VERSION: string = createRequire(import.meta.url)("../package.json").version;
 import { buildRetagNote } from "./retag.js";
 
 function parseArray(v: unknown): unknown[] | null {
@@ -230,7 +235,7 @@ const TRANSCRIPT_TOOLS = new Set(["get_conversation", "list_sessions"]);
 
 export function createMcpServer(): Server {
   const server = new Server(
-    { name: "keymem", version: "0.22.0" },
+    { name: "keymem", version: VERSION },
     {
       capabilities: { tools: {}, prompts: {} },
       instructions: SERVER_INSTRUCTIONS,

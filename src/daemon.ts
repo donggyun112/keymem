@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { dataDir } from "./env.js";
+import { normalizeNamespace } from "./memoryGraph.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { graph, createMcpServer } from "./server.js";
@@ -136,14 +137,20 @@ export async function startDaemon(
               const p = prefix.toLowerCase();
               if (cwd.startsWith(p) && p.length > bestPrefix.length) bestPrefix = prefix;
             }
-            if (bestPrefix) allowedNs = new Set([...map[bestPrefix], "default"]);
+            // Stored namespaces are normalized, so a hand-written "Nexora" here must
+            // fold the same way or the mapping silently allows nothing.
+            if (bestPrefix) {
+              allowedNs = new Set(
+                [...map[bestPrefix], "default"].map((ns) => normalizeNamespace(ns) ?? "default")
+              );
+            }
           } catch { /* no mapping file → global behavior */ }
         }
         const filtered = {
           ...result,
           memories: (result.memories as Array<{ relevance_score?: number; namespace?: string }>)
             .filter((m) => (m.relevance_score ?? 0) >= minRel)
-            .filter((m) => !allowedNs || allowedNs.has(m.namespace ?? "default")),
+            .filter((m) => !allowedNs || allowedNs.has(normalizeNamespace(m.namespace) ?? "default")),
         };
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify(filtered));
