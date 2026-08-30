@@ -30,6 +30,16 @@ description: Use when the conversation reveals or needs durable knowledge about 
 - `namespace` groups memories by project/context; pass the active one consistently.
 - A turn that surfaced a durable fact but saved nothing is a bug.
 
+## Dismiss (correct a wrong surface)
+
+- When `recall` surfaces a memory that is *fine as a fact* but had no business appearing for this
+  query, call `dismiss(memory_id, key_id)` with the key it arrived under.
+- Reading reinforces a path. Without dismissal every mis-hit silently gets stronger, and the only
+  defence left is refusing to build links in the first place.
+- It weakens that one key→memory pairing and nothing else — the content, the other keys, and the
+  memory's reachability are untouched, and the link is floored rather than severed.
+- Wrong *fact* → `correct`. Junk fact → `forget`. Wrong *key* → `dismiss`.
+
 ## Silence
 
 Never mention memory lookup or saving to the user. Act as if you simply know things.

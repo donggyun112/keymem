@@ -178,6 +178,12 @@ const LINK_WEIGHT_DEFAULT = 1.0;
 const LINK_WEIGHT_MIN = 0.1;
 const LINK_WEIGHT_MAX = 3.0;
 const LINK_REINFORCE_AMOUNT = 0.1;
+// Dismissal costs 3x what a read pays back. A read is weak evidence — agents read to
+// check, including to check something they suspect is wrong — while a dismissal is an
+// explicit "this key should not have surfaced this". 3:1 means three later confirmations
+// undo one mistaken dismissal. LINK_WEIGHT_MIN floors the result, so no amount of
+// dismissing can sever a link and orphan the memory behind it.
+const LINK_DISMISS_AMOUNT = 0.3;
 const LINK_DECAY_RATE = 0.005;
 
 // ── Vector math ──
@@ -1813,6 +1819,62 @@ export class MemoryGraph {
       this._link(newKid, memoryId);
       delete key.aliasCandidates[norm];
     }
+  }
+
+  // Negative counterpart of readMemory's reinforcement. Every signal the graph carries is
+  // positive — a read deepens a memory and strengthens the link it traversed, a weak match
+  // accrues heat toward becoming an alias — so a wrong surface costs nothing and the only
+  // defence against a bad link is refusing to create it (which is why the phrase-bridge gate
+  // has to be conservative; see BENCHMARKS.md §6). dismiss supplies the missing sign: it
+  // weakens the key->memory link that produced the false surface and cancels the alias heat
+  // that recall accrued for it. It never touches the memory — "this key should not have
+  // pulled this up" is a claim about the link, not about whether the fact is true; use
+  // correct() or forget() for the fact itself.
+  async dismiss(memoryId: string, keyId: string, namespace?: string | null): Promise<object> {
+    return this._lock.runExclusive(async () => {
+      const mem = this.memories[memoryId];
+      if (!mem || this._isExpired(mem)) throw new Error(`Memory ${memoryId} not found`);
+      const nsFilter = normalizeNamespace(namespace);
+      if (nsFilter && mem.namespace !== nsFilter) throw new Error(`Memory ${memoryId} not found`);
+      if (!this._hasLink(keyId, memoryId)) {
+        throw new Error(`Key ${keyId} is not linked to memory ${memoryId}`);
+      }
+
+      const before = this._getLinkWeight(keyId, memoryId);
+      this._setLinkWeight(keyId, memoryId, before - LINK_DISMISS_AMOUNT);
+      const after = this._getLinkWeight(keyId, memoryId);
+
+      // If this key was accruing alias heat from the recall that just surfaced the memory,
+      // spend that pending confirmation here instead: the query is evidence against the
+      // key, not for it. Heat from earlier confirmations decays by one.
+      let aliasHeatCleared: string | null = null;
+      const key = this.keys[keyId];
+      const entry = this._recallBuffer.consumeWeakMatch(keyId);
+      if (key && entry) {
+        const norm = entry.queryText.trim().toLowerCase();
+        const candidate = key.aliasCandidates?.[norm];
+        if (candidate) {
+          if (candidate.count <= 1) delete key.aliasCandidates![norm];
+          else candidate.count -= 1;
+        }
+        aliasHeatCleared = entry.queryText;
+      }
+
+      this.markDirty(); // soft signal; same deferred-flush path as reinforcement
+      return {
+        memory_id: memoryId,
+        key_id: keyId,
+        concept: key?.concept ?? null,
+        link_weight: Math.round(after * 1000) / 1000,
+        previous_link_weight: Math.round(before * 1000) / 1000,
+        floored: after <= LINK_WEIGHT_MIN,
+        alias_candidate_cleared: aliasHeatCleared,
+        note:
+          after <= LINK_WEIGHT_MIN
+            ? "Link is at its floor — it ranks last under this key but is never severed, so the memory keeps a path back. Use forget() if the fact itself is wrong."
+            : "Link weakened. The memory is unchanged and still reachable by its other keys.",
+      };
+    });
   }
 
   async readMemory(

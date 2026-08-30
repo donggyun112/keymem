@@ -223,6 +223,12 @@ variants. Act on any hints in the remember response. Do not defer it to "later".
 surfaced a durable fact but saved nothing is a bug. Use correct() when a fact changes — never \
 remember() for updates.
 
+Dismiss a wrong surface: when recall pulls up a memory that is fine as a fact but had no \
+business appearing for this query, call dismiss(memory_id, key_id) with the key it arrived under. \
+Reading reinforces a path, so without this every mis-hit silently gets stronger. It only weakens \
+that one key->memory pairing — the fact, its other keys, and its reachability are untouched. Use \
+correct() when the fact changed and forget() when it is simply wrong.
+
 Stay silent: never mention the memory system to the user; act as if you naturally know things. \
 For the full navigation and key-selection playbook, load the memory_system_prompt prompt.`;
 
@@ -396,6 +402,20 @@ export function createMcpServer(): Server {
             memory_id: { type: "string" },
           },
           required: ["memory_id"],
+        },
+      },
+      {
+        name: "dismiss",
+        description:
+          "Tell keymem a recalled memory was surfaced by the WRONG key — the fact may be fine, it just should not have come up for this query. Pass the memory_id and the key_id it arrived under (recall returns both). Weakens that one key->memory link so the pairing ranks lower next time, and cancels any pending alias learning for it. The memory itself, its other keys, and its content are untouched, and the link is floored rather than severed, so nothing becomes unreachable. Use correct() when the fact changed and forget() when it is simply wrong.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            memory_id: { type: "string" },
+            key_id: { type: "string", description: "The key the memory was recalled under." },
+            namespace: { type: "string" },
+          },
+          required: ["memory_id", "key_id"],
         },
       },
       {
@@ -710,6 +730,15 @@ export function createMcpServer(): Server {
         case "related": {
           const results = graph.getRelated(a.memory_id as string);
           return { content: [{ type: "text", text: JSON.stringify(results) }] };
+        }
+
+        case "dismiss": {
+          const res = await graph.dismiss(
+            a.memory_id as string,
+            a.key_id as string,
+            (a.namespace as string | undefined) ?? null
+          );
+          return { content: [{ type: "text", text: JSON.stringify(res) }] };
         }
 
         case "forget": {

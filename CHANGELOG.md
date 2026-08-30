@@ -8,6 +8,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`dismiss(memory_id, key_id)` — the graph's first negative signal.** Every signal it carried
+  was positive: a read deepens a memory and strengthens the edge it traversed, a weak match
+  accrues heat toward becoming an alias. So a wrong surface cost nothing, every mis-hit silently
+  got *stronger*, and the only defence against a bad edge was refusing to build it — which is why
+  the phrase-bridge gate has to be as conservative as §6 shows. dismiss weakens the one
+  key→memory edge that produced the false surface (3x what a read pays back) and spends the
+  pending alias confirmation against the key instead of for it. It never touches the memory:
+  "this key should not have pulled this up" is a claim about the edge, not the fact. `LINK_WEIGHT_MIN`
+  floors the weight, so no amount of dismissing can sever an edge and orphan a memory. Wired into
+  the MCP tool list, the server instructions, and the skill protocol — a feedback tool no agent
+  calls is dead code.
+
 - `bench/phrase-bridge.ts` + `bench/phrase-fixture.json` — gate ablation for phrase-key
   bridging (NO-BRIDGE vs the shipped cosine gate vs an experimental structural one).
   Documented as §6 of BENCHMARKS.md. The structural gate lost on its own terms: no reach
