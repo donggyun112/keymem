@@ -1,7 +1,7 @@
 {
   "name": "keymem",
   "description": "Associative long-term memory — recall by key-graph association, plus passive memory surfacing on every prompt.",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "author": {
     "name": "donggyun112",
     "url": "https://github.com/donggyun112"
