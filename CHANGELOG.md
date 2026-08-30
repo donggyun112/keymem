@@ -4,6 +4,38 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.2] - 2026-08-30
+
+### Fixed
+
+- Plugin MCP config ships as plugin-root `.mcp.json`. Claude Code only discovers a
+  plugin's MCP servers from that file — a `mcpServers` field in `plugin.json` is
+  ignored, whether it holds a path or an inline object (both gave "MCP servers (0)").
+  Codex picks the same file up via default discovery, so one file replaces
+  `mcp/keymem.json` plus the manifest field in both manifests. `.mcp.json` is no
+  longer gitignored: it is a shipped plugin component, and it also gives anyone
+  opening this repo keymem as a project-scoped server.
+
+## [0.22.1] - 2026-08-13
+
+### Added
+
+- keymem ships as a plugin for Claude Code and Codex. One install wires up all three
+  halves instead of three manual steps (`mcp add` + hook in settings + protocol in
+  CLAUDE.md): `.claude-plugin/marketplace.json`, `.claude-plugin/plugin.json` (Claude)
+  and `plugin.json` (Codex) over shared components, `hooks/hooks.json`
+  (UserPromptSubmit, one hook file for both hosts), and `skills/keymem/SKILL.md` —
+  the recall/remember protocol that until now only lived in the user's CLAUDE.md.
+  `hooks/keymem-hook.mjs` is committed as a build artifact because plugin installs
+  do not run a build.
+
+### Fixed
+
+- Close the three routes that could write a keyless memory.
+- Build syncs the plugin manifest version from `package.json`. Both hosts key plugin
+  upgrade detection off the manifest version, so a manifest left behind meant
+  installed users never saw the release.
+
 ## [0.22.0] - 2026-07-29
 
 ### Fixed
