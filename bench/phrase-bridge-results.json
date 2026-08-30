@@ -1,0 +1,413 @@
+{
+  "model": "bge-m3",
+  "conditions": [
+    "NO-BRIDGE",
+    "BRIDGE",
+    "STRUCTURAL"
+  ],
+  "topK": 10,
+  "aggregates": {
+    "NO-BRIDGE": {
+      "bridge": {
+        "n": 6,
+        "hit5": 5,
+        "hit10": 6,
+        "mrr": 2,
+        "nf_ok": 0,
+        "nf_n": 0
+      },
+      "direct": {
+        "n": 4,
+        "hit5": 4,
+        "hit10": 4,
+        "mrr": 3.5,
+        "nf_ok": 0,
+        "nf_n": 0
+      },
+      "precision": {
+        "n": 2,
+        "hit5": 2,
+        "hit10": 2,
+        "mrr": 2,
+        "nf_ok": 0,
+        "nf_n": 0
+      },
+      "notfound": {
+        "n": 0,
+        "hit5": 0,
+        "hit10": 0,
+        "mrr": 0,
+        "nf_ok": 2,
+        "nf_n": 2
+      }
+    },
+    "BRIDGE": {
+      "bridge": {
+        "n": 6,
+        "hit5": 6,
+        "hit10": 6,
+        "mrr": 2.25,
+        "nf_ok": 0,
+        "nf_n": 0
+      },
+      "direct": {
+        "n": 4,
+        "hit5": 4,
+        "hit10": 4,
+        "mrr": 3.5,
+        "nf_ok": 0,
+        "nf_n": 0
+      },
+      "precision": {
+        "n": 2,
+        "hit5": 2,
+        "hit10": 2,
+        "mrr": 2,
+        "nf_ok": 0,
+        "nf_n": 0
+      },
+      "notfound": {
+        "n": 0,
+        "hit5": 0,
+        "hit10": 0,
+        "mrr": 0,
+        "nf_ok": 2,
+        "nf_n": 2
+      }
+    },
+    "STRUCTURAL": {
+      "bridge": {
+        "n": 6,
+        "hit5": 6,
+        "hit10": 6,
+        "mrr": 2.1666666666666665,
+        "nf_ok": 0,
+        "nf_n": 0
+      },
+      "direct": {
+        "n": 4,
+        "hit5": 4,
+        "hit10": 4,
+        "mrr": 3,
+        "nf_ok": 0,
+        "nf_n": 0
+      },
+      "precision": {
+        "n": 2,
+        "hit5": 2,
+        "hit10": 2,
+        "mrr": 2,
+        "nf_ok": 0,
+        "nf_n": 0
+      },
+      "notfound": {
+        "n": 0,
+        "hit5": 0,
+        "hit10": 0,
+        "mrr": 0,
+        "nf_ok": 2,
+        "nf_n": 2
+      }
+    }
+  },
+  "pollution": {
+    "NO-BRIDGE": 0,
+    "BRIDGE": 0,
+    "STRUCTURAL": 2
+  },
+  "bridgedLinks": {
+    "NO-BRIDGE": 114,
+    "BRIDGE": 118,
+    "STRUCTURAL": 119
+  },
+  "perQuery": [
+    {
+      "q": "배포 규칙",
+      "category": "bridge",
+      "condition": "NO-BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 3
+    },
+    {
+      "q": "배포 되돌리기",
+      "category": "bridge",
+      "condition": "NO-BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 3
+    },
+    {
+      "q": "임베딩 캐시",
+      "category": "bridge",
+      "condition": "NO-BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 3
+    },
+    {
+      "q": "임베딩 배치",
+      "category": "bridge",
+      "condition": "NO-BRIDGE",
+      "hit5": false,
+      "hit10": true,
+      "rank": 6
+    },
+    {
+      "q": "리뷰 크기",
+      "category": "bridge",
+      "condition": "NO-BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 3
+    },
+    {
+      "q": "테스트 실패",
+      "category": "bridge",
+      "condition": "NO-BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 2
+    },
+    {
+      "q": "배포 순서",
+      "category": "direct",
+      "condition": "NO-BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "임베딩 기본 모델",
+      "category": "direct",
+      "condition": "NO-BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 2
+    },
+    {
+      "q": "코드 리뷰 순서",
+      "category": "direct",
+      "condition": "NO-BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "테스트 러너",
+      "category": "direct",
+      "condition": "NO-BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "예산",
+      "category": "precision",
+      "condition": "NO-BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "채용",
+      "category": "precision",
+      "condition": "NO-BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "배포 규칙",
+      "category": "bridge",
+      "condition": "BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 3
+    },
+    {
+      "q": "배포 되돌리기",
+      "category": "bridge",
+      "condition": "BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 2
+    },
+    {
+      "q": "임베딩 캐시",
+      "category": "bridge",
+      "condition": "BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 3
+    },
+    {
+      "q": "임베딩 배치",
+      "category": "bridge",
+      "condition": "BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 4
+    },
+    {
+      "q": "리뷰 크기",
+      "category": "bridge",
+      "condition": "BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 3
+    },
+    {
+      "q": "테스트 실패",
+      "category": "bridge",
+      "condition": "BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 2
+    },
+    {
+      "q": "배포 순서",
+      "category": "direct",
+      "condition": "BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "임베딩 기본 모델",
+      "category": "direct",
+      "condition": "BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 2
+    },
+    {
+      "q": "코드 리뷰 순서",
+      "category": "direct",
+      "condition": "BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "테스트 러너",
+      "category": "direct",
+      "condition": "BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "예산",
+      "category": "precision",
+      "condition": "BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "채용",
+      "category": "precision",
+      "condition": "BRIDGE",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "배포 규칙",
+      "category": "bridge",
+      "condition": "STRUCTURAL",
+      "hit5": true,
+      "hit10": true,
+      "rank": 3
+    },
+    {
+      "q": "배포 되돌리기",
+      "category": "bridge",
+      "condition": "STRUCTURAL",
+      "hit5": true,
+      "hit10": true,
+      "rank": 2
+    },
+    {
+      "q": "임베딩 캐시",
+      "category": "bridge",
+      "condition": "STRUCTURAL",
+      "hit5": true,
+      "hit10": true,
+      "rank": 3
+    },
+    {
+      "q": "임베딩 배치",
+      "category": "bridge",
+      "condition": "STRUCTURAL",
+      "hit5": true,
+      "hit10": true,
+      "rank": 4
+    },
+    {
+      "q": "리뷰 크기",
+      "category": "bridge",
+      "condition": "STRUCTURAL",
+      "hit5": true,
+      "hit10": true,
+      "rank": 4
+    },
+    {
+      "q": "테스트 실패",
+      "category": "bridge",
+      "condition": "STRUCTURAL",
+      "hit5": true,
+      "hit10": true,
+      "rank": 2
+    },
+    {
+      "q": "배포 순서",
+      "category": "direct",
+      "condition": "STRUCTURAL",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "임베딩 기본 모델",
+      "category": "direct",
+      "condition": "STRUCTURAL",
+      "hit5": true,
+      "hit10": true,
+      "rank": 2
+    },
+    {
+      "q": "코드 리뷰 순서",
+      "category": "direct",
+      "condition": "STRUCTURAL",
+      "hit5": true,
+      "hit10": true,
+      "rank": 2
+    },
+    {
+      "q": "테스트 러너",
+      "category": "direct",
+      "condition": "STRUCTURAL",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "예산",
+      "category": "precision",
+      "condition": "STRUCTURAL",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    },
+    {
+      "q": "채용",
+      "category": "precision",
+      "condition": "STRUCTURAL",
+      "hit5": true,
+      "hit10": true,
+      "rank": 1
+    }
+  ]
+}

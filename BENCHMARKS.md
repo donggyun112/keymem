@@ -237,6 +237,58 @@ logic is verified. Defaults are off; the deliberate-navigation flow is unchanged
 
 ---
 
+## 6. Phrase-key bridging: choosing the gate
+
+**Why.** §1 found the graph's gain is in *reach*, not rank — 2-hop hits land at ranks 9-11 and
+`hit@5` shows no gain. Bridging a legacy phrase key onto the atomic keys it contains turns a
+2-hop path into a 1-hop link, so the hypothesis was that it moves those hits *into* the top 5.
+The design question was which gate decides that a bridge is warranted.
+
+**Design** (`bench/phrase-fixture.json`, 60 memories / 14 queries): six memories filed under a
+phrase key only — the pathology measured on the owner's live store, where 177 of 204 3+-token
+keys were singletons — in a store that already has an atomic hub for the same concept. `bridge`
+queries ask with the atomic concept. `direct` queries are controls. Two memories carry a phrase
+key that shares a *token* with a hub but is off-topic for it (`예산 리뷰 회의 결과` vs the review
+hub); their appearance in a topical query's top 5 is the precision cost. 44 of the 60 memories
+are distractors so the top-10 window is selective — at 16 memories every condition scored 100%
+and the fixture had no resolution at all.
+
+| Condition | gate |
+|---|---|
+| **NO-BRIDGE** | `KEYMEM_PHRASE_BRIDGE=false` — phrase keys stay orphaned |
+| **COSINE** | ships: bridge only if the atomic key's own cosine to the memory clears `contentRecallShort` (0.46) |
+| **STRUCTURAL** | experimental: bridge if the phrase key is a singleton *and* the atomic key is a hub, at a fixed low weight (0.3) |
+
+### Results (`bge-m3`)
+
+| category | metric | NO-BRIDGE | COSINE | STRUCTURAL |
+|---|---|---:|---:|---:|
+| **bridge** (6) | reach@10 | 100% | 100% | 100% |
+| | **hit@5** | 83% | **100%** | 100% |
+| | MRR | 0.33 | **0.38** | 0.36 |
+| direct (4) | hit@5 | 100% | 100% | 100% |
+| | MRR | 0.88 | 0.88 | **0.75** |
+| notfound (2) | not-found acc | 2/2 | 2/2 | 2/2 |
+| — | off-topic in top-5 | 0 | **0** | **2** |
+
+### What this shows (and doesn't)
+
+- ✅ **The cosine gate ships; the structural one loses on its own terms.** STRUCTURAL was meant to
+  buy reach that the cosine gate refuses. It bought none (reach@10 identical at 100%), ranked
+  worse on the bridge queries it was built for (MRR 0.36 vs 0.38), degraded the `direct` control
+  (0.88 → 0.75), and pulled both off-topic memories into a topical top 5. A shared token really
+  is not a shared topic, and the store's own calibrated bar is the better judge.
+- ⚠️ **The gain is small and n is small.** Six bridge queries; `hit@5` 83% → 100% is one query
+  moving, and per-query ranks improved in only 2 of 6 (3→2 and 6→4), stayed put in 4. Read this
+  as "no regression anywhere, a nudge where it fires", not as a headline number.
+- ⚠️ **The gate confines bridging to memories that were already reachable.** Measured
+  key↔content cosines for the six orphans: 0.488 / 0.480 / 0.474 / 0.469 (bridged) vs 0.390 /
+  0.293 (refused). Every firing sits in a narrow band just above the 0.46 bar — so bridging is a
+  *rank-level* fix, not the reach-level fix §1 asks for. Whatever closes that gap will not be
+  another link-time heuristic on the same signal.
+
+---
+
 ## Reproduce
 
 ```bash
@@ -251,6 +303,7 @@ curl -s "https://datasets-server.huggingface.co/rows?dataset=hotpotqa/hotpot_qa&
 tsx bench/hotpot.ts 100
 tsx bench/hotpot-agentkeys.ts bench/hotpot-agentkeys.json   # §2 validity check w/ blind agent keys
 tsx bench/inject-sweep.ts                                   # §5 inject top-N value/noise sweep
+tsx bench/phrase-bridge.ts                                  # §6 phrase-key bridging gate ablation
 ```
 
 Sources: [LoCoMo](https://github.com/snap-research/locomo) · [LongMemEval](https://github.com/xiaowu0162/LongMemEval) · [Zep vs Mem0 methodology dispute](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/) · [Mem0 paper](https://arxiv.org/pdf/2504.19413) · [Agentic search replacing RAG (VentureBeat, 2026)](https://venturebeat.com/data/context-architecture-is-replacing-rag-as-agentic-ai-pushes-enterprise-retrieval-to-its-limits)

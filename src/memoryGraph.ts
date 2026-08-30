@@ -924,7 +924,8 @@ export class MemoryGraph {
     if (healed > 0) console.error(`[graph] healed ${healed} fragmented key(s)`);
 
     // Link legacy phrase keys' memories onto the atomic keys they contain.
-    const bridged = this._bridgePhraseKeys();
+    // KEYMEM_PHRASE_BRIDGE=false opts out (and lets bench/phrase-bridge.ts A/B it).
+    const bridged = cfgRaw("PHRASE_BRIDGE") === "false" ? 0 : this._bridgePhraseKeys();
     if (bridged > 0) console.error(`[graph] bridged ${bridged} phrase-key link(s)`);
 
     for (const [mid, mem] of Object.entries(this.memories)) {

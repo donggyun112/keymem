@@ -1,0 +1,575 @@
+{
+  "_doc": "Phrase-key bridging fixture. Mirrors the pathology measured on the live store (177 of 204 3+-token keys were singletons): a memory whose ONLY key is a memory-specific phrase, in a store where an atomic hub for the same concept already exists. Each 'bridge' query asks with the ATOMIC concept and expects the orphan memory — reachable pre-bridge only by repeating the phrase verbatim. Contents are deliberately worded away from the query so 1-hop content similarity cannot carry them (same design as assoc-fixture's assoc2). 'direct' queries are controls that must not regress. 'precision' queries name a concept whose atomic key shares a TOKEN with an off-topic phrase key — bridging must NOT drag that memory in. 'notfound' must return nothing. Ground truth = expect[] of memory ids. The d-* memories are distractors: ordinary project facts on atomic keys, none of them any query's answer. They exist so top-10 is selective (60 memories) — at 16 the window covered most of the store and every condition scored 100%.",
+  "memories": [
+    {
+      "id": "deploy-order",
+      "content": "릴리스는 npm publish를 먼저 하고 그 다음에 태그와 GitHub Release를 끊는 순서로 간다",
+      "keys": [
+        "배포",
+        "릴리스",
+        "순서"
+      ]
+    },
+    {
+      "id": "deploy-token",
+      "content": "npm 2FA가 걸린 계정은 granular token에 bypass를 켜야 자동화가 돌아간다",
+      "keys": [
+        "배포",
+        "npm",
+        "토큰"
+      ]
+    },
+    {
+      "id": "embed-default",
+      "content": "임베딩 백엔드는 로컬 bge-m3를 기본값으로 쓴다",
+      "keys": [
+        "임베딩",
+        "bge-m3"
+      ]
+    },
+    {
+      "id": "embed-migrate",
+      "content": "저장된 벡터 차원이 현재 백엔드와 다르면 로드 시 전체 재임베딩이 한 번 돈다",
+      "keys": [
+        "임베딩",
+        "마이그레이션"
+      ]
+    },
+    {
+      "id": "review-order",
+      "content": "코드 리뷰는 정확성, 보안, 성능, 유지보수 순서로 본다",
+      "keys": [
+        "리뷰",
+        "코드품질"
+      ]
+    },
+    {
+      "id": "test-runner",
+      "content": "테스트는 node:test로만 돌리고 러너를 따로 얹지 않는다",
+      "keys": [
+        "테스트",
+        "러너"
+      ]
+    },
+    {
+      "id": "orphan-deploy-registry",
+      "content": "사내 레지스트리로 나가는 패키지는 scope를 붙이고 access를 restricted로 둔다",
+      "keys": [
+        "사내 레지스트리 배포 규칙"
+      ]
+    },
+    {
+      "id": "orphan-deploy-rollback",
+      "content": "잘못 나간 버전은 unpublish 대신 다음 패치를 즉시 올려서 덮는다",
+      "keys": [
+        "잘못된 배포 되돌리기"
+      ]
+    },
+    {
+      "id": "orphan-embed-cache",
+      "content": "모델 가중치는 홈 디렉터리 아래에 캐시되고 데이터 디렉터리와 분리된다",
+      "keys": [
+        "임베딩 모델 캐시 위치"
+      ]
+    },
+    {
+      "id": "orphan-embed-batch",
+      "content": "한 번에 넣는 문장 수가 많아지면 지연이 선형이 아니라 계단식으로 늘어난다",
+      "keys": [
+        "임베딩 배치 크기 영향"
+      ]
+    },
+    {
+      "id": "orphan-review-scope",
+      "content": "한 번에 보는 diff가 400줄을 넘으면 놓치는 결함이 급격히 늘어난다",
+      "keys": [
+        "리뷰 단위 크기 상한"
+      ]
+    },
+    {
+      "id": "orphan-test-flake",
+      "content": "타이머에 의존하는 단언은 CI에서만 간헐적으로 깨진다",
+      "keys": [
+        "테스트 간헐 실패 원인"
+      ]
+    },
+    {
+      "id": "far-budget",
+      "content": "3분기 인프라 비용은 전 분기 대비 12% 줄었다",
+      "keys": [
+        "예산 리뷰 회의 결과"
+      ]
+    },
+    {
+      "id": "far-hiring",
+      "content": "채용 공고는 다음 달 첫 주에 다시 연다",
+      "keys": [
+        "채용 일정 배포 공지"
+      ]
+    },
+    {
+      "id": "noise-editor",
+      "content": "에디터 폰트는 JetBrains Mono 14pt를 쓴다",
+      "keys": [
+        "에디터",
+        "폰트"
+      ]
+    },
+    {
+      "id": "noise-shell",
+      "content": "기본 셸은 zsh이고 프롬프트는 starship을 쓴다",
+      "keys": [
+        "셸",
+        "zsh"
+      ]
+    },
+    {
+      "id": "d-ci-cache",
+      "content": "CI는 pnpm 스토어를 주간 단위로 캐시한다",
+      "keys": [
+        "CI",
+        "캐시"
+      ]
+    },
+    {
+      "id": "d-ci-matrix",
+      "content": "CI 매트릭스는 Node 20과 22 두 버전만 돈다",
+      "keys": [
+        "CI",
+        "Node"
+      ]
+    },
+    {
+      "id": "d-lint",
+      "content": "린트는 저장 시 자동 적용되고 커밋 훅에서는 검사만 한다",
+      "keys": [
+        "린트",
+        "훅"
+      ]
+    },
+    {
+      "id": "d-format",
+      "content": "포매터 설정은 저장소 루트 하나만 두고 하위에서 덮지 않는다",
+      "keys": [
+        "포매터",
+        "설정"
+      ]
+    },
+    {
+      "id": "d-branch",
+      "content": "브랜치 이름은 타입/짧은설명 형태로 짓는다",
+      "keys": [
+        "브랜치",
+        "네이밍"
+      ]
+    },
+    {
+      "id": "d-commit",
+      "content": "커밋 메시지 본문은 왜 바꿨는지를 적고 무엇을은 diff에 맡긴다",
+      "keys": [
+        "커밋",
+        "메시지"
+      ]
+    },
+    {
+      "id": "d-pr-size",
+      "content": "PR은 하나의 관심사만 담고 리뷰어를 한 명 지정한다",
+      "keys": [
+        "PR",
+        "리뷰어"
+      ]
+    },
+    {
+      "id": "d-changelog",
+      "content": "CHANGELOG는 Keep a Changelog 형식을 따른다",
+      "keys": [
+        "CHANGELOG",
+        "형식"
+      ]
+    },
+    {
+      "id": "d-semver",
+      "content": "0.x 구간에서도 기능 추가는 minor로 올린다",
+      "keys": [
+        "semver",
+        "버전"
+      ]
+    },
+    {
+      "id": "d-license",
+      "content": "라이선스는 MIT를 쓴다",
+      "keys": [
+        "라이선스",
+        "MIT"
+      ]
+    },
+    {
+      "id": "d-node-ver",
+      "content": "최소 Node 버전은 20이다",
+      "keys": [
+        "Node",
+        "최소버전"
+      ]
+    },
+    {
+      "id": "d-pkg-mgr",
+      "content": "패키지 매니저는 pnpm을 쓰고 lock 파일을 커밋한다",
+      "keys": [
+        "pnpm",
+        "락파일"
+      ]
+    },
+    {
+      "id": "d-ts-strict",
+      "content": "TypeScript는 strict 모드로 두고 any를 금지한다",
+      "keys": [
+        "TypeScript",
+        "strict"
+      ]
+    },
+    {
+      "id": "d-esm",
+      "content": "모듈 시스템은 ESM만 쓰고 CJS 빌드를 내지 않는다",
+      "keys": [
+        "ESM",
+        "모듈"
+      ]
+    },
+    {
+      "id": "d-build",
+      "content": "빌드는 tsc 하나로 끝내고 번들러를 두지 않는다",
+      "keys": [
+        "빌드",
+        "tsc"
+      ]
+    },
+    {
+      "id": "d-dist",
+      "content": "dist는 커밋하지 않지만 훅 산출물 하나는 예외로 커밋한다",
+      "keys": [
+        "dist",
+        "산출물"
+      ]
+    },
+    {
+      "id": "d-env-prefix",
+      "content": "설정 환경변수 접두사는 KEYMEM_이고 옛 접두사도 폴백으로 읽는다",
+      "keys": [
+        "환경변수",
+        "접두사"
+      ]
+    },
+    {
+      "id": "d-data-dir",
+      "content": "데이터 디렉터리는 홈 아래 기본값을 쓰고 환경변수로 덮는다",
+      "keys": [
+        "데이터디렉터리",
+        "기본값"
+      ]
+    },
+    {
+      "id": "d-sidecar",
+      "content": "벡터는 별도 바이너리 사이드카에 저장하고 JSON에는 빈 배열을 남긴다",
+      "keys": [
+        "사이드카",
+        "벡터"
+      ]
+    },
+    {
+      "id": "d-atomic-save",
+      "content": "저장은 임시 파일에 쓰고 rename으로 원자적으로 교체한다",
+      "keys": [
+        "저장",
+        "원자성"
+      ]
+    },
+    {
+      "id": "d-lock",
+      "content": "동시 저장은 단일 플라이트 락으로 직렬화한다",
+      "keys": [
+        "락",
+        "동시성"
+      ]
+    },
+    {
+      "id": "d-bm25",
+      "content": "렉시컬 검색은 MiniSearch로 붙인다",
+      "keys": [
+        "BM25",
+        "렉시컬"
+      ]
+    },
+    {
+      "id": "d-rerank",
+      "content": "리랭커는 선택적으로 켜고 최소 점수 아래는 버린다",
+      "keys": [
+        "리랭커",
+        "점수"
+      ]
+    },
+    {
+      "id": "d-hop-decay",
+      "content": "홉이 늘어날수록 점수를 감쇠시킨다",
+      "keys": [
+        "홉",
+        "감쇠"
+      ]
+    },
+    {
+      "id": "d-depth",
+      "content": "자주 읽힌 기억은 깊이가 올라가 천천히 잊힌다",
+      "keys": [
+        "깊이",
+        "망각"
+      ]
+    },
+    {
+      "id": "d-ttl",
+      "content": "만료 시각이 지난 기억은 정리 도구로 걷어낸다",
+      "keys": [
+        "만료",
+        "정리"
+      ]
+    },
+    {
+      "id": "d-supersede",
+      "content": "정정된 기억은 지우지 않고 약화시켜 보존한다",
+      "keys": [
+        "정정",
+        "보존"
+      ]
+    },
+    {
+      "id": "d-dedup",
+      "content": "거의 같은 내용은 새로 쓰지 않고 기존 것을 갱신한다",
+      "keys": [
+        "중복",
+        "갱신"
+      ]
+    },
+    {
+      "id": "d-hook",
+      "content": "프롬프트 훅은 짧은 입력은 건너뛴다",
+      "keys": [
+        "훅",
+        "프롬프트"
+      ]
+    },
+    {
+      "id": "d-daemon",
+      "content": "MCP는 단일 데몬을 여러 클라이언트가 공유한다",
+      "keys": [
+        "데몬",
+        "MCP"
+      ]
+    },
+    {
+      "id": "d-shim",
+      "content": "shim은 데몬에 붙고 끊기면 재연결한다",
+      "keys": [
+        "shim",
+        "재연결"
+      ]
+    },
+    {
+      "id": "d-transcript",
+      "content": "대화록 도구는 신뢰된 로컬 컨텍스트에서만 노출된다",
+      "keys": [
+        "대화록",
+        "보안"
+      ]
+    },
+    {
+      "id": "d-uuid",
+      "content": "세션 식별자는 UUID 형식만 허용한다",
+      "keys": [
+        "세션",
+        "식별자"
+      ]
+    },
+    {
+      "id": "d-path-check",
+      "content": "경로는 화이트리스트 루트 안에서만 해석한다",
+      "keys": [
+        "경로",
+        "검증"
+      ]
+    },
+    {
+      "id": "d-plugin",
+      "content": "플러그인 매니페스트 버전은 빌드 때 package.json에서 동기화된다",
+      "keys": [
+        "플러그인",
+        "매니페스트"
+      ]
+    },
+    {
+      "id": "d-marketplace",
+      "content": "저장소 자체가 플러그인 마켓플레이스 역할을 겸한다",
+      "keys": [
+        "마켓플레이스",
+        "플러그인"
+      ]
+    },
+    {
+      "id": "d-docs",
+      "content": "문서는 먼저 읽고 작업을 시작한다",
+      "keys": [
+        "문서",
+        "작업순서"
+      ]
+    },
+    {
+      "id": "d-bench-guard",
+      "content": "벤치는 회귀 가드로 커밋해 두고 변경 때마다 대조한다",
+      "keys": [
+        "벤치",
+        "회귀"
+      ]
+    },
+    {
+      "id": "d-model-cache",
+      "content": "모델 가중치는 첫 실행에 자동으로 내려받는다",
+      "keys": [
+        "모델",
+        "다운로드"
+      ]
+    },
+    {
+      "id": "d-lang",
+      "content": "키는 한국어와 영어를 함께 단다",
+      "keys": [
+        "키",
+        "다국어"
+      ]
+    },
+    {
+      "id": "d-keylen",
+      "content": "키는 한두 단어의 원자 개념으로 짓는다",
+      "keys": [
+        "키",
+        "원자성"
+      ]
+    },
+    {
+      "id": "d-namespace",
+      "content": "네임스페이스는 프로젝트 단위로 나눈다",
+      "keys": [
+        "네임스페이스",
+        "프로젝트"
+      ]
+    },
+    {
+      "id": "d-inject",
+      "content": "자동 주입은 절대 관련도 하한을 넘긴 것만 넣는다",
+      "keys": [
+        "주입",
+        "하한"
+      ]
+    },
+    {
+      "id": "d-explain",
+      "content": "설명 모드는 왜 그 결과가 나왔는지를 같이 준다",
+      "keys": [
+        "설명",
+        "디버깅"
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "q": "배포 규칙",
+      "expect": [
+        "orphan-deploy-registry"
+      ],
+      "category": "bridge"
+    },
+    {
+      "q": "배포 되돌리기",
+      "expect": [
+        "orphan-deploy-rollback"
+      ],
+      "category": "bridge"
+    },
+    {
+      "q": "임베딩 캐시",
+      "expect": [
+        "orphan-embed-cache"
+      ],
+      "category": "bridge"
+    },
+    {
+      "q": "임베딩 배치",
+      "expect": [
+        "orphan-embed-batch"
+      ],
+      "category": "bridge"
+    },
+    {
+      "q": "리뷰 크기",
+      "expect": [
+        "orphan-review-scope"
+      ],
+      "category": "bridge"
+    },
+    {
+      "q": "테스트 실패",
+      "expect": [
+        "orphan-test-flake"
+      ],
+      "category": "bridge"
+    },
+    {
+      "q": "배포 순서",
+      "expect": [
+        "deploy-order"
+      ],
+      "category": "direct"
+    },
+    {
+      "q": "임베딩 기본 모델",
+      "expect": [
+        "embed-default"
+      ],
+      "category": "direct"
+    },
+    {
+      "q": "코드 리뷰 순서",
+      "expect": [
+        "review-order"
+      ],
+      "category": "direct"
+    },
+    {
+      "q": "테스트 러너",
+      "expect": [
+        "test-runner"
+      ],
+      "category": "direct"
+    },
+    {
+      "q": "예산",
+      "expect": [
+        "far-budget"
+      ],
+      "category": "precision"
+    },
+    {
+      "q": "채용",
+      "expect": [
+        "far-hiring"
+      ],
+      "category": "precision"
+    },
+    {
+      "q": "사무실 주차 정책",
+      "expect": [],
+      "category": "notfound"
+    },
+    {
+      "q": "점심 메뉴 추천",
+      "expect": [],
+      "category": "notfound"
+    }
+  ]
+}

@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `bench/phrase-bridge.ts` + `bench/phrase-fixture.json` — gate ablation for phrase-key
+  bridging (NO-BRIDGE vs the shipped cosine gate vs an experimental structural one).
+  Documented as §6 of BENCHMARKS.md. The structural gate lost on its own terms: no reach
+  gain, worse ranking on the bridge queries, a degraded `direct` control, and it pulled
+  off-topic token-sharing memories into the top 5. The cosine gate stays.
+- `KEYMEM_PHRASE_BRIDGE=false` opts out of load-time phrase-key bridging (and lets the
+  ablation A/B it).
+
 ## [0.23.0] - 2026-08-30
 
 ### Fixed
