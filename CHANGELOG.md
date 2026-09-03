@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.1] - 2026-09-03
+
+### Fixed
+
+- Codex plugin and manual shim launch commands now request `keymem@latest` explicitly. This
+  prevents npm 11 from treating a checkout whose local package is also named `keymem` as the
+  requested package and then failing startup with `keymem-shim: command not found`.
+
 ## [0.25.0] - 2026-09-03
 
 ### Added
