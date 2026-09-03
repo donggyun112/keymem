@@ -9,6 +9,7 @@ node_modules/
 dist/
 .pnpm-store/
 .serena/
+.worktrees/
 local_cache/
 *.tgz
 coverage/
