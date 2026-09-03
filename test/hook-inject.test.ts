@@ -5,12 +5,28 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-test("hook renders stale injected validity with currentness guidance", async (t) => {
+test("hook renders fresh and stale injected validity with currentness guidance", async (t) => {
   const daemon = createServer(async (req, res) => {
     for await (const _chunk of req) { /* consume request */ }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
       memories: [
+        {
+          id: "fresh-memory",
+          content: "The user prefers tea.",
+          relevance_score: 0.95,
+          namespace: "default",
+          validity: {
+            freshness: 1,
+            status: "fresh",
+            age_days: 0,
+            last_confirmed_at: 2,
+            confirmation_count: 2,
+            decay_profile: "standard",
+            verification_recommended: false,
+            verification_required: false,
+          },
+        },
         {
           id: "stale-memory",
           content: "The user lives in Busan.",
@@ -60,6 +76,11 @@ test("hook renders stale injected validity with currentness guidance", async (t)
 
   const payload = JSON.parse(stdout);
   const context = payload.hookSpecificOutput.additionalContext as string;
+  assert.match(
+    context,
+    /- \[fresh-memory[^\n]*validity=\{[^}\n]*"status":"fresh"[^}\n]*"verification_recommended":false[^}\n]*"verification_required":false\}/
+  );
+  assert.match(context, /use fresh memories normally/i);
   assert.match(context, /validity=\{[^}]*"status":"stale"/);
   assert.match(context, /"verification_required":true/);
   assert.match(context, /read_memory.*does not confirm.*current/is);
