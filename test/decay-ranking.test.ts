@@ -34,7 +34,7 @@ async function keyEntryFixture(t: TestContext) {
   graph.memories[staleId].last_confirmed_at = now - 4 * 90 * DAY;
   const staleKeyId = Object.values(graph.keys).find((key) => key.concept === "stale-key")!.id;
   const freshKeyId = Object.values(graph.keys).find((key) => key.concept === "fresh-key")!.id;
-  return { graph, ids: { staleKeyId, freshKeyId } };
+  return { graph, ids: { staleId, staleKeyId, freshKeyId } };
 }
 
 async function hopFixture(t: TestContext) {
@@ -68,6 +68,20 @@ test("searchKeys discounts stale member content but keeps literal key reachabili
   assert.equal(result[0].key_id, ids.freshKeyId);
   const literal = await graph.searchKeys("stale-key", 10) as any[];
   assert.ok(literal.some((key) => key.key_id === ids.staleKeyId));
+});
+
+test("searchKeys keeps stale content-only keys admitted while discounting their rank", async (t) => {
+  const { graph, ids } = await keyEntryFixture(t);
+  graph.memories[ids.staleId].last_confirmed_at = graph.memories[ids.staleId].created_at;
+  const before = await graph.searchKeys("query cue", 10) as any[];
+  const freshScore = before.find((key) => key.key_id === ids.staleKeyId)?.score;
+  assert.ok(freshScore);
+
+  graph.memories[ids.staleId].last_confirmed_at -= 4 * 90 * DAY;
+  const after = await graph.searchKeys("query cue", 10) as any[];
+  const stale = after.find((key) => key.key_id === ids.staleKeyId);
+  assert.ok(stale);
+  assert.ok(freshScore > stale.score);
 });
 
 test("direct recall ranks fresh before stale when semantic evidence is equal", async (t) => {

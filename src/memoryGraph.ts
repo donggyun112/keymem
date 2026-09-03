@@ -1527,17 +1527,15 @@ export class MemoryGraph {
           if (la) la.hits += 1;
         }
         const literal = conceptLiteral || matchedAlias !== undefined;
-        let contentSim = 0;
-        let contentMid = "";
+        let rawContentSim = 0;
         for (const mid of activeIds) {
-          const s = (memSim.get(mid) ?? 0) * this._freshnessFactor(this.memories[mid]);
-          if (s > contentSim) { contentSim = s; contentMid = mid; }
+          rawContentSim = Math.max(rawContentSim, memSim.get(mid) ?? 0);
         }
         const keySim = sims[i];
         if (
           (key.key_type === "name" || key.key_type === "proper_noun")
             ? !literal
-            : !literal && keySim < KEY_RECALL_THRESHOLD && contentSim < contentGate
+            : !literal && keySim < KEY_RECALL_THRESHOLD && rawContentSim < contentGate
         ) {
           // Gate-dropped, but a concept key whose embedding sits just below the recall gate
           // (in the confirmation band) is a learning signal: if the agent later confirms the
@@ -1551,6 +1549,12 @@ export class MemoryGraph {
             nearMiss.set(kid, Math.round(keySim * 1000) / 1000);
           }
           continue;
+        }
+        let contentSim = 0;
+        let contentMid = "";
+        for (const mid of activeIds) {
+          const s = (memSim.get(mid) ?? 0) * this._freshnessFactor(this.memories[mid]);
+          if (s > contentSim) { contentSim = s; contentMid = mid; }
         }
         // Entity keys (name/proper_noun) enter ONLY via literal match, and an exact entity
         // hit IS the answer — so they keep relevance 1. A concept key matched by a literal
