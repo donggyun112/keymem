@@ -22,6 +22,7 @@ import {
   type Agent,
 } from "./nativeTranscripts.js";
 import { cfgRaw } from "./env.js";
+import { parseDecayProfile, type ConfirmationEvidence } from "./decay.js";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 
@@ -133,8 +134,8 @@ Stats: {stats}
 
 ### Recall (PROACTIVE — do it often)
 1. **MUST recall before your first reply.** Recall returns key clusters, not memory content. Always pass the active project/context \`namespace\` when one is known.
-2. For relevant keys, complete \`read_key(key_id, query, namespace)\` → \`read_memory(memory_id, via_key_id, namespace)\` before using a fact. The full read is what grows depth, access count, traversed-edge weight, and learned aliases.
-2a. \`inject:true\` returns an unconfirmed passive preview. Do not use it for core lookups or as a substitute for the full traversal; if a preview matters, confirm it with \`read_memory\`.
+2. For relevant keys, complete \`read_key(key_id, query, namespace)\` → \`read_memory(memory_id, via_key_id, namespace)\` before using a fact. The full read records access, reinforces the traversed-edge weight, and may learn aliases; it does not change content depth or confirm that the content is current.
+2a. \`inject:true\` returns an unconfirmed passive preview. Do not use it for core lookups or as a substitute for the full traversal; if a preview matters, inspect it with \`read_memory\`.
 3. Recall again whenever the topic shifts. Never say "I don't know" without navigating first.
 4. **Query = short noun/keyword, NOT a full sentence.**
    - ❌ recall("어디 살아"), recall("뭐 마셔") — 구어체 문장은 매칭 안 됨
@@ -177,14 +178,22 @@ Stats: {stats}
 ### Correct
 11. Use \`correct()\` when info changes. Never use \`remember()\` for updates.
 
+### Freshness and confirmation
+12. \`read_memory\` reads a fact and may reinforce the key path; it does **not** confirm that the content is current.
+13. \`fresh\` may be used normally. Qualify \`aging\` facts when currentness matters.
+14. Never assert a \`stale\` fact as current. Verify it externally or ask the user.
+15. Call \`confirm_memory\` only after an explicit current user assertion, an authoritative current source, or direct observation.
+16. Do not call \`confirm_memory\` merely because \`read_memory\` returned the content.
+17. Changed fact → \`correct\`. Junk fact → \`forget\`. Wrong key → \`dismiss\`.
+
 ### Explore
-12. \`recall\` returns matching canonical keys, aliases, and hub metadata only.
-13. \`read_key\` returns memory handles connected to one key. Hubs are paginated.
-14. \`read_memory(memory_id, via_key_id)\` returns full content and its connected keys.
-15. Follow another returned key with \`read_key\` to continue associative exploration.
+18. \`recall\` returns matching canonical keys, aliases, and hub metadata only.
+19. \`read_key\` returns memory handles connected to one key. Hubs are paginated.
+20. \`read_memory(memory_id, via_key_id)\` returns full content and its connected keys.
+21. Follow another returned key with \`read_key\` to continue associative exploration.
 
 ### Delete
-16. \`forget()\` only for completely wrong information. For outdated info, use \`correct()\`.
+22. \`forget()\` only for completely wrong information. For outdated info, use \`correct()\`.
 `;
 
 export const graph = new MemoryGraph();
@@ -209,7 +218,11 @@ matches sentences, and the two cues are routed to different paths. On {status:"n
 nearest_keys concept or browse_keys(namespace) before giving up. recall returns matching keys only; \
 complete read_key(key_id, query, namespace) \
 then read_memory(memory_id, via_key_id, namespace) to read a fact and reinforce the traversed path. \
-inject:true is an unconfirmed passive preview, not a substitute for this core lookup flow.
+Reading records access and may reinforce the key path or learn aliases; it does not change content depth or confirm that the content is current. \
+inject:true is an unconfirmed passive preview, not a substitute for this core lookup flow. \
+\`fresh\` may be used normally. Qualify \`aging\` facts when currentness matters. Never assert a \`stale\` fact as current. Verify it externally or ask the user. \
+Call confirm_memory only after an explicit current user assertion, an authoritative current source, or direct observation. \
+Do not call confirm_memory merely because read_memory returned the content.
 
 Remember durable facts — the write-side twin of recall first: recall opens the turn, remember \
 closes it. Before you finish EVERY reply you MUST check whether this turn revealed anything \
@@ -254,7 +267,7 @@ export function createMcpServer(): Server {
       {
         name: "recall",
         description:
-          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. Returns matching key clusters only (not memory content): canonical concept, aliases, key type, match score, linked-memory count, hub status, and specificity. For a core lookup, complete read_key(key_id, original_query, namespace) then read_memory(memory_id, via_key_id, namespace): only the full read grows depth/access, reinforces the traversed edge, and learns aliases. Use short focused noun queries and decompose multi-fact questions into several recall calls. inject:true is only an unconfirmed passive preview and must not replace that traversal; injected memories are not reinforced. inject_top_k defaults to 1; inject_max_chars defaults to 2000 and marks truncated previews. An empty result returns {status:'no_match', nearest_keys} — the closest stored concepts below the gate; retry with one of those concepts when relevant.",
+          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. Returns matching key clusters only (not memory content): canonical concept, aliases, key type, match score, linked-memory count, hub status, and specificity. For a core lookup, complete read_key(key_id, original_query, namespace) then read_memory(memory_id, via_key_id, namespace): the full read records access, reinforces the traversed edge, and may learn aliases, but does not change content depth or confirm that the content is current. Use short focused noun queries and decompose multi-fact questions into several recall calls. inject:true is only an unconfirmed passive preview and must not replace that traversal; injected memories are not reinforced. inject_top_k defaults to 1; inject_max_chars defaults to 2000 and marks truncated previews. An empty result returns {status:'no_match', nearest_keys} — the closest stored concepts below the gate; retry with one of those concepts when relevant.",
         inputSchema: {
           type: "object",
           properties: {
@@ -299,7 +312,7 @@ export function createMcpServer(): Server {
       {
         name: "read_key",
         description:
-          "List the memories stored under one key (concept), ranked. Returns the canonical key, its aliases, and hub metadata plus ranked memory IDs and metadata — never memory content. Always pass the original focused query and active namespace when known: handles are then ranked by content relevance, which is essential for hubs. Call read_memory(memory_id, via_key_id=key_id, namespace) on the selected handle to confirm the fact and reinforce the path. Use limit/offset to page without flooding context.",
+          "List the memories stored under one key (concept), ranked. Returns the canonical key, its aliases, and hub metadata plus ranked memory IDs, metadata, and validity — never memory content. Always pass the original focused query and active namespace when known: handles are then ranked by content relevance, which is essential for hubs. Call read_memory(memory_id, via_key_id=key_id, namespace) on the selected handle to inspect the fact and reinforce the path; reading does not confirm that its content is current. Use limit/offset to page without flooding context.",
         inputSchema: {
           type: "object",
           properties: {
@@ -315,7 +328,7 @@ export function createMcpServer(): Server {
       {
         name: "read_memory",
         description:
-          "Read the full content of one stored memory (selected via read_key). Returns the memory and all connected key clusters so exploration can continue Key → Memory → Key. Pass via_key_id from the selected key: only that traversed edge is Hebbian-reinforced, and depth/access count increase only when this full read occurs.",
+          "Read the full content and validity of one stored memory (selected via read_key). Returns the memory and all connected key clusters so exploration can continue Key → Memory → Key. Pass via_key_id from the selected key: the read records access and only that traversed edge is Hebbian-reinforced. Reading does not change content depth or confirm that the content is current.",
         inputSchema: {
           type: "object",
           properties: {
@@ -324,6 +337,21 @@ export function createMcpServer(): Server {
             namespace: { type: "string" },
           },
           required: ["memory_id"],
+        },
+      },
+      {
+        name: "confirm_memory",
+        description:
+          "Confirm that a memory is still current using explicit present evidence. Never call this merely because read_memory returned the content. Use only after a current user assertion, an authoritative current source, or direct observation. Refreshes validity but does not change content or key links.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            memory_id: { type: "string" },
+            evidence: { type: "string", enum: ["user", "authoritative_source", "observation"] },
+            namespace: { type: "string" },
+            source: { type: "object", additionalProperties: true },
+          },
+          required: ["memory_id", "evidence"],
         },
       },
       ...(DIRECT_RECALL_ENABLED
@@ -354,7 +382,7 @@ export function createMcpServer(): Server {
       {
         name: "remember",
         description:
-          "MANDATORY END-OF-TURN GATE: before replying, save every durable fact newly revealed this turn (names, preferences, decisions, corrections, project facts, goals). A durable fact left unsaved is a bug; save silently in the same turn. Save nothing only after consciously confirming that nothing durable appeared. Before writing, recall() the topic in the same namespace and reuse returned canonical concepts or aliases. Use 3-6 diverse ATOMIC concept keys of 1-2 words each, never memory-specific phrases (use 'Nexora' and 'portfolio', not 'Nexora portfolio'); 3+-word keys are flagged in hints.phrase_keys and are measurably 91% unreachable singletons. CROSS-LINGUAL: register both language forms together (for example '포트폴리오' and 'portfolio'). Shared broad keys become navigable hubs. namespace groups memories by project/context; ttl_seconds sets expiry; related_to adds explicit memory links; source attaches provenance and is auto-stamped with the server session, a timestamp, and — when a host agent (Claude Code, Codex) transcript is active — host_session/host_agent/host_turn so the memory can be traced back to its original conversation via get_conversation. The response may include hints.near_keys (existing concepts your keys nearly duplicate — prefer reusing those concepts) and hints.language_note (add the missing-language variants).",
+          "MANDATORY END-OF-TURN GATE: before replying, save every durable fact newly revealed this turn (names, preferences, decisions, corrections, project facts, goals). A durable fact left unsaved is a bug; save silently in the same turn. Save nothing only after consciously confirming that nothing durable appeared. Before writing, recall() the topic in the same namespace and reuse returned canonical concepts or aliases. Use 3-6 diverse ATOMIC concept keys of 1-2 words each, never memory-specific phrases (use 'Nexora' and 'portfolio', not 'Nexora portfolio'); 3+-word keys are flagged in hints.phrase_keys and are measurably 91% unreachable singletons. CROSS-LINGUAL: register both language forms together (for example '포트폴리오' and 'portfolio'). Shared broad keys become navigable hubs. namespace groups memories by project/context; ttl_seconds sets expiry; decay_profile selects transient, standard (the default), stable, or permanent confirmation freshness; related_to adds explicit memory links; source attaches provenance and is auto-stamped with the server session, a timestamp, and — when a host agent (Claude Code, Codex) transcript is active — host_session/host_agent/host_turn so the memory can be traced back to its original conversation via get_conversation. The response may include hints.near_keys (existing concepts your keys nearly duplicate — prefer reusing those concepts) and hints.language_note (add the missing-language variants).",
         inputSchema: {
           type: "object",
           properties: {
@@ -366,6 +394,10 @@ export function createMcpServer(): Server {
             },
             namespace: { type: "string" },
             ttl_seconds: { type: "number" },
+            decay_profile: {
+              type: "string",
+              enum: ["transient", "standard", "stable", "permanent"],
+            },
             related_to: { type: "array", items: { type: "string" } },
             source: { type: "object", additionalProperties: true },
           },
@@ -375,7 +407,7 @@ export function createMcpServer(): Server {
       {
         name: "correct",
         description:
-          "Update outdated information. Use when user corrects you or info changes (e.g. moved cities, changed job). Old version is preserved but weakened — never lost. Omit keys to keep the same search terms. related_to links the updated memory to other memory IDs.",
+          "Update outdated information. Use when user corrects you or info changes (e.g. moved cities, changed job). Old version is preserved but weakened — never lost. Omit keys to keep the same search terms. Omit decay_profile and ttl_seconds to preserve the predecessor's policies; provide either to replace that policy. related_to links the updated memory to other memory IDs.",
         inputSchema: {
           type: "object",
           properties: {
@@ -385,6 +417,11 @@ export function createMcpServer(): Server {
             key_types: {
               type: "object",
               additionalProperties: { type: "string" },
+            },
+            ttl_seconds: { type: "number" },
+            decay_profile: {
+              type: "string",
+              enum: ["transient", "standard", "stable", "permanent"],
             },
             related_to: { type: "array", items: { type: "string" } },
             source: { type: "object", additionalProperties: true },
@@ -492,7 +529,7 @@ export function createMcpServer(): Server {
       {
         name: "remember_batch",
         description:
-          "MANDATORY END-OF-TURN GATE: when a turn reveals multiple durable facts, save them silently before replying. A durable fact left unsaved is a bug. Recall each topic first, reuse canonical concept-level keys (ATOMIC, 1-2 words each — never phrases), and register cross-lingual forms together. Each item: {content, keys, key_types?, namespace?, ttl_seconds?, related_to?}. Returns saved IDs and is more efficient than multiple remember() calls.",
+          "MANDATORY END-OF-TURN GATE: when a turn reveals multiple durable facts, save them silently before replying. A durable fact left unsaved is a bug. Recall each topic first, reuse canonical concept-level keys (ATOMIC, 1-2 words each — never phrases), and register cross-lingual forms together. Each item: {content, keys, key_types?, namespace?, ttl_seconds?, decay_profile?, related_to?}; decay_profile defaults to standard. Returns saved IDs and is more efficient than multiple remember() calls.",
         inputSchema: {
           type: "object",
           properties: {
@@ -509,6 +546,10 @@ export function createMcpServer(): Server {
                   },
                   namespace: { type: "string" },
                   ttl_seconds: { type: "number" },
+                  decay_profile: {
+                    type: "string",
+                    enum: ["transient", "standard", "stable", "permanent"],
+                  },
                   related_to: { type: "array", items: { type: "string" } },
                   source: { type: "object", additionalProperties: true },
                 },
@@ -636,6 +677,25 @@ export function createMcpServer(): Server {
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
         }
 
+        case "confirm_memory": {
+          const evidence = a.evidence;
+          if (evidence !== "user" && evidence !== "authoritative_source" && evidence !== "observation") {
+            throw new Error(`Unknown confirmation evidence: ${String(evidence)}`);
+          }
+          const confirmedEvidence: ConfirmationEvidence = evidence;
+          const hostLink = await resolveHostLink(headers);
+          const confirmationId = hostLink
+            ? `${hostLink.agent}:${hostLink.session_id}:${hostLink.turn}`
+            : null;
+          const result = await graph.confirmMemory(a.memory_id as string, {
+            evidence: confirmedEvidence,
+            namespace: typeof a.namespace === "string" ? a.namespace : null,
+            source: buildSource(parseObject(a.source), "confirm_memory", hostLink),
+            confirmationId,
+          });
+          return { content: [{ type: "text", text: JSON.stringify(result) }] };
+        }
+
         case "recall_memories": {
           if (!DIRECT_RECALL_ENABLED) throw new Error("recall_memories is disabled");
           const results = await graph.recall(
@@ -679,6 +739,7 @@ export function createMcpServer(): Server {
               keyTypes: parseObject(a.key_types) as Record<string, string> | null,
               namespace: typeof a.namespace === "string" ? a.namespace : "default",
               ttlSeconds: parseNumber(a.ttl_seconds),
+              decayProfile: parseDecayProfile(a.decay_profile),
               relatedTo: parseArray(a.related_to) as string[] | null,
               source: buildSource(parseObject(a.source), "remember", hostLink),
             }
@@ -717,6 +778,8 @@ export function createMcpServer(): Server {
               keyConcepts: parseArray(a.keys) as string[] | null,
               keyTypes: parseObject(a.key_types) as Record<string, string> | null,
               relatedTo: parseArray(a.related_to) as string[] | null,
+              decayProfile: a.decay_profile === undefined ? undefined : parseDecayProfile(a.decay_profile),
+              ttlSeconds: typeof a.ttl_seconds === "number" ? a.ttl_seconds : undefined,
               source: buildSource(parseObject(a.source), "correct", hostLink),
             }
           );
@@ -818,6 +881,7 @@ export function createMcpServer(): Server {
               keyTypes: item.key_types as Record<string, string> | null,
               namespace: typeof item.namespace === "string" ? item.namespace : "default",
               ttlSeconds: parseNumber(item.ttl_seconds),
+              decayProfile: parseDecayProfile(item.decay_profile),
               relatedTo: Array.isArray(item.related_to) ? (item.related_to as string[]) : null,
               source: buildSource((item.source as Record<string, unknown>) ?? null, "remember_batch", hostLink),
             });
