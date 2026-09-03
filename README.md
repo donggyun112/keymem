@@ -144,10 +144,10 @@ claude mcp add keymem -e EMBEDDING_BACKEND=local -e LOCAL_EMBEDDING_MODEL=bge-m3
 
 ```bash
 # OpenAI embeddings
-codex mcp add keymem --env OPENAI_API_KEY=your-key -- npx -y -p keymem keymem-shim
+codex mcp add keymem --env OPENAI_API_KEY=your-key -- npx -y -p keymem@latest keymem-shim
 
 # Local embeddings (no API key required)
-codex mcp add keymem --env EMBEDDING_BACKEND=local --env LOCAL_EMBEDDING_MODEL=bge-m3 -- npx -y -p keymem keymem-shim
+codex mcp add keymem --env EMBEDDING_BACKEND=local --env LOCAL_EMBEDDING_MODEL=bge-m3 -- npx -y -p keymem@latest keymem-shim
 ```
 
 Use the `keymem-shim` entry point (not bare `keymem`): it runs the shared daemon the push-path hook

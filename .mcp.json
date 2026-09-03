@@ -2,7 +2,7 @@
   "mcpServers": {
     "keymem": {
       "command": "npx",
-      "args": ["-y", "-p", "keymem", "keymem-shim"],
+      "args": ["-y", "-p", "keymem@latest", "keymem-shim"],
       "env": {
         "EMBEDDING_BACKEND": "local",
         "LOCAL_EMBEDDING_MODEL": "bge-m3"
