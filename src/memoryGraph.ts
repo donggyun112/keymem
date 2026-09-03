@@ -746,7 +746,7 @@ export class MemoryGraph {
 
   private _findDuplicate(embedding: number[]): string | null {
     const activeMems = Object.entries(this.memories).filter(
-      ([mid]) => !(mid in this._supersededBy)
+      ([mid, mem]) => !(mid in this._supersededBy) && !this._isExpired(mem)
     );
     if (activeMems.length === 0) return null;
     const matrix = activeMems.map(([, mem]) => mem.embedding);
@@ -772,7 +772,7 @@ export class MemoryGraph {
     let bestId: string | null = null;
     let bestSim = -Infinity;
     for (const [mid, mem] of Object.entries(this.memories)) {
-      if (mid in this._supersededBy) continue;
+      if (mid in this._supersededBy || this._isExpired(mem)) continue;
       const sim = cosineSim(embedding, mem.embedding);
       if (!inContradictionBand(sim, CONTRADICTION_THRESHOLD, MEMORY_DEDUP_THRESHOLD)) continue;
       const shares = [...(this._memToKeys[mid]?.keys() ?? [])].some((kid) => newKeys.has(kid));
@@ -1258,9 +1258,10 @@ export class MemoryGraph {
         keyConcepts,
         keyTypes: options.keyTypes ?? undefined,
         source: options.source,
-        decayProfile: options.decayProfile,
         namespace: options.namespace,
         relatedTo: options.relatedTo,
+        ttlSeconds: options.ttlSeconds,
+        decayProfile: options.decayProfile,
       });
       return [newId, true, dupId, conflict];
     }
@@ -1277,6 +1278,7 @@ export class MemoryGraph {
       keyConcepts?: string[] | null;
       keyTypes?: Record<string, string> | null;
       source?: Record<string, unknown> | null;
+      ttlSeconds?: number | null;
       decayProfile?: DecayProfile;
       namespace?: string | null;
       relatedTo?: string[] | null;
@@ -1304,6 +1306,9 @@ export class MemoryGraph {
       }
 
       const old = this.memories[oldId];
+      if (this._isExpired(old)) {
+        throw new Error(`Memory ${oldId} not found`);
+      }
 
       // Chain cleanup: keep depth max 1 (new -> old; grandparent deleted)
       const grandparentId = old.supersedes;
@@ -1334,12 +1339,17 @@ export class MemoryGraph {
         access_count: 0,
         last_accessed: now,
         namespace: ns,
-        ttl: old.ttl,
+        ttl:
+          options.ttlSeconds !== undefined
+            ? options.ttlSeconds === null
+              ? null
+              : now + options.ttlSeconds
+            : old.ttl,
         links: validLinks,
         contradicts: [],
         last_confirmed_at: now,
         confirmation_count: 1,
-        decay_profile: parseDecayProfile(options.decayProfile),
+        decay_profile: options.decayProfile ?? old.decay_profile,
         last_confirmation_evidence: "user",
         last_confirmation_source: options.source ?? null,
         last_confirmation_id: null,

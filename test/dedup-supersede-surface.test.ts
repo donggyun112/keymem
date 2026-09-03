@@ -28,7 +28,7 @@ function vec(t: string): number[] {
   return m[t] ?? [0, 1];
 }
 
-async function freshGraph(t: any) {
+async function freshGraph(t: any, now?: () => number) {
   const dir = await mkdtemp(join(tmpdir(), "sm-supersede-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   process.env.SUPER_MEMORY_DATA_DIR = dir;
@@ -40,7 +40,7 @@ async function freshGraph(t: any) {
   t.after(() => emb.__clearTestEmbedder());
 
   const mg = await import(`../src/memoryGraph.ts?supersede=${n++}`);
-  const g = new mg.MemoryGraph();
+  const g = new mg.MemoryGraph({ now });
   await g.load();
   return g;
 }
@@ -70,4 +70,37 @@ test("add() reports a key-disjoint dedup as a non-conflict supersede", async (t)
   assert.equal(dup2, true, "deduped on content similarity");
   assert.equal(sup2, m1, "superseded id still surfaced");
   assert.equal(conflict2, false, "no shared key -> not flagged as a conflict");
+});
+
+test("expired duplicate cannot supersede a newly remembered fact", async (t) => {
+  let now = 1_800_000_000;
+  const g = await freshGraph(t, () => now);
+  const [expiredId] = await g.add("회의는 월요일이다", ["회의"], { ttlSeconds: 1 });
+  now += 2;
+  const [newId, deduped, superseded] = await g.add(
+    "회의는 월요일이다",
+    ["회의"],
+    { ttlSeconds: 60 }
+  );
+  assert.notEqual(newId, expiredId);
+  assert.equal(deduped, false);
+  assert.equal(superseded, null);
+  assert.ok(g.listAll().some((m: any) => m.id === newId));
+});
+
+test("duplicate add forwards supplied expiry and profile to its successor", async (t) => {
+  let now = 1_800_000_000;
+  const g = await freshGraph(t, () => now);
+  await g.add("회의는 월요일이다", ["회의"], {
+    ttlSeconds: 100,
+    decayProfile: "stable",
+  });
+  now += 10;
+  const [id, deduped] = await g.add("회의는 금요일이다", ["회의"], {
+    ttlSeconds: 200,
+    decayProfile: "transient",
+  });
+  assert.equal(deduped, true);
+  assert.equal(g.memories[id].ttl, now + 200);
+  assert.equal(g.memories[id].decay_profile, "transient");
 });
