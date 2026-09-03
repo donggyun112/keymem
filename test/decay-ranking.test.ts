@@ -94,5 +94,9 @@ test("list, read, recall, and injection expose validity", async (t) => {
   assert.ok((graph.listAll() as any[]).every((memory) => "validity" in memory));
   assert.ok("validity" in ((await graph.readMemory(ids.freshId)) as any).memory);
   assert.ok(((await graph.recall("same relevance", 5, null, false, 1, 0, 0, 0, 0, 0, false)) as any[]).every((memory) => "validity" in memory));
-  assert.ok(((await graph.recallInject("same relevance", 1)) as any).memories.every((memory: any) => "validity" in memory));
+  await graph.add(`injected payload ${"detail ".repeat(50)}`, ["injected"]);
+  const injected = (await graph.recallInject("injected payload", 1, null, { maxChars: 256 })) as any;
+  assert.ok(injected.memories.length > 0);
+  assert.equal(injected.memories[0].content_truncated, true);
+  assert.ok(injected.memories.every((memory: any) => "validity" in memory));
 });
