@@ -29,3 +29,17 @@ test("expired memory cannot become a live contradiction", async (t) => {
   assert.deepEqual(graph.memories[currentId].contradicts, []);
   assert.ok(!graph.memories[expiredId].contradicts.includes(currentId));
 });
+
+test("supersede rejects an invalid profile without mutating the graph", async (t) => {
+  const { graph } = await freshDecayGraph(t, () => 1_800_000_000);
+  const [id] = await graph.add("original", ["topic"], { decayProfile: "stable" });
+  const original = { ...graph.memories[id] };
+
+  await assert.rejects(
+    () => graph.supersede(id, "updated", { decayProfile: "forever" as any }),
+    /Unknown decay profile/
+  );
+
+  assert.deepEqual(graph.memories[id], original);
+  assert.deepEqual(Object.keys(graph.memories), [id]);
+});

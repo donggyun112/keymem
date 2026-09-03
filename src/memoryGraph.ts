@@ -1294,6 +1294,8 @@ export class MemoryGraph {
       relatedTo?: string[] | null;
     } = {}
   ): Promise<string> {
+    const decayProfile =
+      options.decayProfile === undefined ? undefined : parseDecayProfile(options.decayProfile);
     const newEmbedding = await embedTextAsync(newContent); // outside lock
     const newSentVecs = await this._embedSentences(newContent); // outside lock
 
@@ -1359,7 +1361,7 @@ export class MemoryGraph {
         contradicts: [],
         last_confirmed_at: now,
         confirmation_count: 1,
-        decay_profile: options.decayProfile ?? old.decay_profile,
+        decay_profile: decayProfile ?? old.decay_profile,
         last_confirmation_evidence: "user",
         last_confirmation_source: options.source ?? null,
         last_confirmation_id: null,
