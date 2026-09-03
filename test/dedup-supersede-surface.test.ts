@@ -104,3 +104,17 @@ test("duplicate add forwards supplied expiry and profile to its successor", asyn
   assert.equal(g.memories[id].ttl, now + 200);
   assert.equal(g.memories[id].decay_profile, "transient");
 });
+
+test("duplicate add without policies uses normal add defaults", async (t) => {
+  let now = 1_800_000_000;
+  const g = await freshGraph(t, () => now);
+  await g.add("회의는 월요일이다", ["회의"], {
+    ttlSeconds: 100,
+    decayProfile: "stable",
+  });
+  now += 10;
+  const [id, deduped] = await g.add("회의는 금요일이다", ["회의"]);
+  assert.equal(deduped, true);
+  assert.equal(g.memories[id].ttl, null);
+  assert.equal(g.memories[id].decay_profile, "standard");
+});

@@ -1270,8 +1270,8 @@ export class MemoryGraph {
         source: options.source,
         namespace: options.namespace,
         relatedTo: options.relatedTo,
-        ttlSeconds: options.ttlSeconds,
-        decayProfile: options.decayProfile,
+        ttlSeconds: options.ttlSeconds ?? null,
+        decayProfile: parseDecayProfile(options.decayProfile),
       });
       return [newId, true, dupId, conflict];
     }
