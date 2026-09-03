@@ -11,9 +11,12 @@ import { writeVectors, readVectors } from "./vectorStore.js";
 import type { Key, Memory, GraphData } from "./types.js";
 import {
   buildValidityView,
+  computeFreshness,
+  freshnessRankFactor,
   parseDecayProfile,
   type ConfirmationEvidence,
   type DecayProfile,
+  type ValidityView,
 } from "./decay.js";
 import {
   RecallBuffer, decidePromotion,
@@ -398,7 +401,6 @@ export class MemoryGraph {
   }
 
   static readonly HOP_DECAY = 0.3;
-  static readonly TIME_HALF_LIFE = 30 * 24 * 3600;
 
   get linkCount(): number {
     return Object.values(this._keyToMems).reduce(
@@ -588,11 +590,14 @@ export class MemoryGraph {
     return mem.ttl != null && this._now() > mem.ttl;
   }
 
-  private _timeFactor(mem: Memory): number {
-    const age = this._now() - mem.created_at;
-    const decayRate = 1.0 - mem.depth * 0.7;
-    const decay = Math.exp((-age * decayRate) / MemoryGraph.TIME_HALF_LIFE);
-    return 0.5 + 0.5 * decay;
+  private _validity(mem: Memory): ValidityView {
+    return buildValidityView(mem, this._now());
+  }
+
+  private _freshnessFactor(mem: Memory): number {
+    return freshnessRankFactor(
+      computeFreshness(mem.last_confirmed_at, mem.decay_profile, this._now())
+    );
   }
 
   private _keyIdf(keyId: string): number {
@@ -1525,7 +1530,7 @@ export class MemoryGraph {
         let contentSim = 0;
         let contentMid = "";
         for (const mid of activeIds) {
-          const s = memSim.get(mid) ?? 0;
+          const s = (memSim.get(mid) ?? 0) * this._freshnessFactor(this.memories[mid]);
           if (s > contentSim) { contentSim = s; contentMid = mid; }
         }
         const keySim = sims[i];
@@ -1773,7 +1778,7 @@ export class MemoryGraph {
         const mem = this.memories[mid];
         const linkWeight = this._getLinkWeight(keyId, mid);
         const rel = qEmb ? cosineSim(qEmb, mem.embedding) : 1;
-        const score = rel * linkWeight * (0.9 + mem.depth * 0.1) * this._timeFactor(mem);
+        const score = rel * linkWeight * (0.9 + mem.depth * 0.1) * this._freshnessFactor(mem);
         return { mid, mem, linkWeight, relevance: rel, score };
       })
       .sort((a, b) => b.score - a.score || b.mem.created_at - a.mem.created_at);
@@ -1785,6 +1790,7 @@ export class MemoryGraph {
       depth: Math.round(mem.depth * 1000) / 1000,
       created_at: mem.created_at,
       namespace: mem.namespace,
+      validity: this._validity(mem),
       link_weight: Math.round(linkWeight * 1000) / 1000,
       content_relevance: qEmb ? Math.round(relevance * 1000) / 1000 : null,
       score_kind: qEmb ? "within_key_rank" as const : "link_rank" as const,
@@ -1801,8 +1807,8 @@ export class MemoryGraph {
           ? "cosine similarity; comparable to recall key relevance"
           : "not computed because query was omitted",
         score: qEmb
-          ? "content_relevance × link_weight × depth_factor × time_factor; compare only within this key"
-          : "link_weight × depth_factor × time_factor; compare only within this key",
+          ? "content_relevance × link_weight × depth_factor × freshness_factor; compare only within this key"
+          : "link_weight × depth_factor × freshness_factor; compare only within this key",
       },
     };
   }
@@ -2030,7 +2036,7 @@ export class MemoryGraph {
           superseded_by: this._supersededBy[memoryId] ?? null,
           related_to: mem.links,
           contradicts: mem.contradicts ?? [],
-          validity: buildValidityView(mem, this._now()),
+          validity: this._validity(mem),
         },
         keys: connectedKeys,
         via_key_id: viaKeyId ?? null,
@@ -2070,7 +2076,7 @@ export class MemoryGraph {
           memory_id: memoryId,
           confirmed: false,
           duplicate: true,
-          validity: buildValidityView(mem, this._now()),
+          validity: this._validity(mem),
         };
       }
       mem.last_confirmed_at = this._now();
@@ -2084,7 +2090,7 @@ export class MemoryGraph {
         memory_id: memoryId,
         confirmed: true,
         duplicate: false,
-        validity: buildValidityView(mem, this._now()),
+        validity: this._validity(mem),
       };
     });
   }
@@ -2369,13 +2375,12 @@ export class MemoryGraph {
         }
       }
 
-      // ── Apply depth/time modulation to fused scores ──
+      // ── Apply depth/freshness modulation to fused scores ──
       for (const mid of Object.keys(memScores)) {
         const mem = this.memories[mid];
         if (!mem) continue;
         const depthFactor = 0.9 + mem.depth * 0.1;
-        const tf = this._timeFactor(mem);
-        memScores[mid] *= depthFactor * tf;
+        memScores[mid] *= depthFactor * this._freshnessFactor(mem);
       }
 
       // ── Associative traversal: hops 2..maxHops via shared keys + explicit links ──
@@ -2414,7 +2419,8 @@ export class MemoryGraph {
             for (const otherMid of this._keyToMems[kid]?.keys() ?? []) {
               if (otherMid === mid || skip(otherMid)) continue;
               const lw = this._getLinkWeight(kid, otherMid);
-              memScores[otherMid] = (memScores[otherMid] ?? 0) + baseScore * MemoryGraph.HOP_DECAY * idf * lw;
+              memScores[otherMid] = (memScores[otherMid] ?? 0)
+                + baseScore * MemoryGraph.HOP_DECAY * idf * lw * this._freshnessFactor(this.memories[otherMid]);
               if (!memMatchedKeys[otherMid]) memMatchedKeys[otherMid] = [];
               if (sourceAnchored) {
                 memMatchedKeys[otherMid].push(`${concept}(via)`);
@@ -2429,7 +2435,8 @@ export class MemoryGraph {
             const linkedIds = new Set([...memObj.links, ...(reverseLinks[mid] ?? [])]);
             for (const linkedId of linkedIds) {
               if (linkedId === mid || skip(linkedId)) continue;
-              memScores[linkedId] = (memScores[linkedId] ?? 0) + baseScore * MemoryGraph.HOP_DECAY;
+              memScores[linkedId] = (memScores[linkedId] ?? 0)
+                + baseScore * MemoryGraph.HOP_DECAY * this._freshnessFactor(this.memories[linkedId]);
               if (!memMatchedKeys[linkedId]) memMatchedKeys[linkedId] = [];
               if (sourceAnchored) {
                 memMatchedKeys[linkedId].push("(linked)");
@@ -2551,6 +2558,7 @@ export class MemoryGraph {
           namespace: mem.namespace,
           links: mem.links,
           contradicts: mem.contradicts ?? [],
+          validity: this._validity(mem),
         });
       }
 
@@ -2604,6 +2612,7 @@ export class MemoryGraph {
         link_type: string;
         depth: number;
         contradicts: string[];
+        validity: ValidityView;
         _score: number;
       }
     > = {};
@@ -2626,6 +2635,7 @@ export class MemoryGraph {
             link_type: "key",
             depth: Math.round(mem.depth * 1000) / 1000,
             contradicts: mem.contradicts ?? [],
+            validity: this._validity(mem),
             _score: 0,
           };
         }
@@ -2650,6 +2660,7 @@ export class MemoryGraph {
           link_type: "explicit",
           depth: Math.round(mem.depth * 1000) / 1000,
           contradicts: mem.contradicts ?? [],
+          validity: this._validity(mem),
           _score: 0,
         };
       } else {
@@ -2673,6 +2684,7 @@ export class MemoryGraph {
             link_type: "explicit",
             depth: Math.round(mem.depth * 1000) / 1000,
             contradicts: mem.contradicts ?? [],
+            validity: this._validity(mem),
             _score: 0,
           };
         } else if (!related[mid].shared_keys.includes("(explicit ←)")) {
@@ -2682,7 +2694,11 @@ export class MemoryGraph {
       }
     }
 
-    // Rank by specificity score, cap so a hub can't flood the chain, drop internal score.
+    for (const entry of Object.values(related)) {
+      entry._score *= this._freshnessFactor(this.memories[entry.id]);
+    }
+
+    // Rank by specificity and freshness, cap so a hub can't flood the chain, drop internal score.
     return Object.values(related)
       .sort((a, b) => b._score - a._score)
       .slice(0, RELATED_LIMIT)
@@ -2730,6 +2746,7 @@ export class MemoryGraph {
         namespace: mem.namespace,
         expires_at: mem.ttl,
         links: mem.links,
+        validity: this._validity(mem),
       }));
   }
 

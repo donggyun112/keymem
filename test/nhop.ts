@@ -12,6 +12,24 @@ process.env.SUPER_MEMORY_KEY_RECALL = "0.85";
 const dataDir = await mkdtemp(join(tmpdir(), "sm-nhop-"));
 process.env.SUPER_MEMORY_DATA_DIR = dataDir;
 
+const basis = (index: number) => {
+  const vector = new Array(10).fill(0);
+  vector[index] = 1;
+  return vector;
+};
+const vectors: Record<string, number[]> = {
+  "알파프로젝트": basis(0),
+  "인증모듈": basis(1),
+  "결제게이트웨이": basis(2),
+  "배송추적": basis(3),
+  "리뷰시스템": basis(4),
+  "A: 알파 프로젝트 인증": basis(5),
+  "B: 결제 게이트웨이 연동": basis(6),
+  "C: 배송 추적 시스템": basis(7),
+  "D: 리뷰와 별점 수집": basis(8),
+};
+const embedding = await import("../src/embedding.ts");
+embedding.__setTestEmbedder((text: string) => vectors[text] ?? basis(9));
 const { MemoryGraph } = await import("../src/memoryGraph.ts");
 const g = new MemoryGraph();
 await g.load();
@@ -45,5 +63,6 @@ check("D tagged hop=4 (true chain distance)", d?.hop === 4, `hop=${d?.hop}`);
 console.log(`\n${"=".repeat(50)}`);
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 if (fail) console.log(`FAILED: ${fails.join(", ")}`);
+embedding.__clearTestEmbedder();
 await rm(dataDir, { recursive: true, force: true });
 process.exitCode = fail ? 1 : 0;
