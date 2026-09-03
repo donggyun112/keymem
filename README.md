@@ -225,11 +225,11 @@ pnpm start
 - **Agent-driven Key → Memory → Key navigation** — the agent walks the graph deliberately instead of collapsing it into one opaque similarity search.
 - **Associative multi-hop recall** — reach memories no embedding distance would connect, by following chains of shared keys.
 - **Confirmation-aware freshness** — reads learn useful paths without certifying old content; explicit evidence refreshes facts across four decay profiles.
-- **Versioning, not overwriting** — corrections preserve the full history (when a belief changed, and from what).
+- **One-step versioning** — a correction retains its immediate predecessor and records what it superseded.
 - **Key types** — `concept` keys match by similarity; `name`/`proper_noun` keys match exactly, so "동건" never matches "뉴턴" just for being short.
 - **Cross-lingual key merging (IDF)** — `파이썬` and `Python` collapse into one canonical cluster instead of fragmenting the key space.
 - **Hebbian link learning** — the path an agent actually traverses gets reinforced ("fire together, wire together"), so useful associations become easier to reach.
-- **Hybrid retrieval** (optional direct mode) — BM25 + dense + Reciprocal Rank Fusion, with depth/time modulation and configurable multi-hop expansion.
+- **Hybrid retrieval** (optional direct mode) — BM25 + dense + Reciprocal Rank Fusion, with depth/confirmation-freshness modulation and configurable multi-hop expansion.
 - **Cross-encoder reranking** (opt-in) — `bge-reranker-v2-m3` re-scores candidates in direct mode.
 - **Local-first** — all data in a local JSON graph; no external database. OpenAI or fully-local embeddings (auto-downloaded).
 
@@ -281,7 +281,7 @@ Not all keys should behave the same. Names shouldn't match semantically — "동
 
 Name/proper_noun keys also get an IDF penalty (`×0.5`) when they become hub keys connected to many memories, preventing them from polluting unrelated searches.
 
-### Versioning (not overwriting)
+### Versioning (one-step predecessor)
 
 ```
 "user lives in Seoul"   (depth: 0.4 → weakened to 0.12, preserved)
@@ -289,9 +289,10 @@ Name/proper_noun keys also get an IDF penalty (`×0.5`) when they become hub key
 "user moved to Busan"   (depth: 0.0, new)
 ```
 
-`keymem` keeps the full history instead of overwriting on change. The superseded record is excluded
-from active retrieval regardless of its depth; the new version becomes the current record. Every
-correction is traceable — when did the belief change, and from what session?
+`keymem` retains the immediate predecessor instead of overwriting it. The superseded record is
+excluded from active retrieval regardless of its depth, and the new version becomes current. A
+later correction prunes the grandparent, so provenance is one step rather than a full-history
+archive.
 
 ### Key Merging
 
@@ -321,14 +322,16 @@ Set `KEYMEM_DIRECT_RECALL=true` to expose `recall_memories()`, a one-call memory
 - **Dense Path A (key matching):** query embedding → match keys → follow links → memories. Score = `keySim × IDF × linkWeight`, summed across all matching keys.
 - **Dense Path B (content matching):** query embedding → directly compare against memory content embeddings. Finds memories even when they weren't tagged with the right keys.
 
-Sparse and dense rank lists are merged by RRF, then modulated by depth and time before configurable multi-hop expansion (`hops=1–5`, default `2`). This compatibility tool is hidden by default so agents use explicit key navigation instead of collapsing the graph into one search call.
+Sparse and dense rank lists are merged by RRF, then modulated by depth and confirmation freshness before configurable multi-hop expansion (`hops=1–5`, default `2`). This compatibility tool is hidden by default so agents use explicit key navigation instead of collapsing the graph into one search call.
 
 ### Hebbian Link Learning
 
 Reading a full memory is a **write**, not just a read. In the default flow, `recall()` and `read_key()` are read-only; `read_memory(memory_id, via_key_id)` reshapes the selected path:
 
 - The traversed `via_key_id → memory_id` link is **reinforced** (`+0.1`, capped at `3.0`).
-- Memory access count increases after a full read, but depth and freshness do not. Those change only through evidence-backed `confirm_memory()`.
+- A full read increments access metadata but changes neither depth nor `last_confirmed_at`, so it
+  never refreshes freshness. Freshness continues to decay as elapsed time grows. Evidence-backed
+  `confirm_memory()` increases depth and refreshes freshness by advancing `last_confirmed_at`.
 
 Reinforcement is scoped to the key the agent actually traversed — not every key attached to the memory. This is the literal Hebbian rule ("fire together, wire together") and prevents unrelated associations from growing when the memory is reached through a different concept. Weights are clamped to `[0.1, 3.0]`.
 
@@ -356,7 +359,7 @@ Link weights feed back into `read_key()` ranking, so repeatedly selected paths b
 1. Embed the query and match canonical key concepts plus exact aliases.
 2. Return key clusters with `memory_count`, `is_hub`, and `specificity`; do not return memory content.
 3. Rank a selected key's memory handles by link weight, depth, and confirmation freshness in `read_key()`.
-4. Return full content and adjacent key clusters from `read_memory()`; reinforce only the traversed edge.
+4. Return full content and adjacent key clusters from `read_memory()`; reinforce the traversed edge only when `via_key_id` is supplied.
 5. Repeat `read_key(next_key_id)` to walk the graph deliberately.
 
 **Optional `recall_memories()` algorithm (hybrid, configurable 1–5 hops; default 2):**
@@ -402,7 +405,7 @@ KEYMEM_MEMORY_DEDUP=0.99
 | `KEYMEM_GATE_Z` | `0` by default | Opt-in distribution gate for `recall_memories()` (robust-z, median/MAD). Values around 2–5 are typical; `0` disables it. |
 | `KEYMEM_CONTRADICTION` | per-model (e.g. `0.80` for bge-m3) | Contradiction-band lower bound. Memory pairs whose cosine similarity falls in `[contradiction, memoryDedup)` are flagged as contradictions. `read_memory()`, `related()`, and optional `recall_memories()` expose conflicting IDs. |
 | `KEYMEM_AUTOKEY` | `true` | Auto-key self-healing: learn missing search terms from real usage. Set `false` to disable. |
-| `KEYMEM_AUTOKEY_PROMOTE_N` | `3` | Weak-confirmed reads of a `(key, query)` pair before the query is folded into the key space. |
+| `KEYMEM_AUTOKEY_PROMOTE_N` | `3` | Routing-confirmed selections of a `(key, query)` pair before the query is folded into the key space. |
 | `KEYMEM_AUTOKEY_CONFIRM_FLOOR` | `0.45` | Lowest query↔key cosine eligible for routing-confirmation learning. Repeated selections through the same key can teach a below-gate query alias; this confirms routing only, never content freshness. Lower (e.g. `0.40`) to catch more borderline paraphrases; set `≥` the recall threshold to disable. |
 | `KEYMEM_AUTOKEY_MAX_ALIASES` | `8` | Max learned aliases promoted per key. |
 | `KEYMEM_AUTOKEY_PRUNE_AGE` | `2592000` | Seconds before a never-hit learned alias is pruned by `cleanup_expired` (30 days). |
@@ -436,10 +439,10 @@ servers hide the two transcript tools (`list_sessions`, `get_conversation`):
 | `recall(query, top_k?, namespace?, explain?)` | Search Key Space only. Returns canonical keys, aliases, scores, and hub metadata; never memory content. `explain:true` distinguishes `found`, `no_match`, and `empty_namespace`. |
 | `browse_keys(namespace, hubs_only?, limit?, offset?)` | Browse a namespace's active key vocabulary, hubs first, when recall has no entry hit. |
 | `read_key(key_id, query?, namespace?, limit?, offset?)` | List ranked memory IDs and metadata connected to one key. Pass the original query for relevance ordering; supports pagination for hubs. |
-| `read_memory(memory_id, via_key_id?, namespace?)` | Read full memory content, connected keys, and `validity`. Updates access and the traversed edge, but never confirms or deepens content. |
+| `read_memory(memory_id, via_key_id?, namespace?)` | Read full memory content, connected keys, and `validity`. Updates access and, when `via_key_id` is supplied, that traversed edge; never confirms or deepens content. |
 | `confirm_memory(memory_id, evidence, namespace?, source?)` | Refresh freshness and deepen a current memory after explicit user evidence, an authoritative source, or direct observation. A read alone is not evidence. |
 | `remember(content, keys, key_types?, namespace?, ttl_seconds?, decay_profile?, related_to?)` | Save memory with key concepts, optional TTL, and a `transient`, `standard`, `stable`, or `permanent` decay profile. |
-| `correct(memory_id, content, keys?, key_types?, ttl_seconds?, decay_profile?, related_to?)` | Versioned update. Old memory is preserved but inactive; omitted TTL/profile inherit from it. |
+| `correct(memory_id, content, keys?, key_types?, ttl_seconds?, decay_profile?, related_to?)` | Versioned update. The immediate predecessor is preserved but inactive; omitted TTL/profile inherit from it. |
 | `dismiss(memory_id, key_id, namespace?)` | Negative feedback: the fact is fine, this key should not have surfaced it. Weakens that one edge (floored, never severed) and cancels its pending alias learning |
 | `related(memory_id)` | Find memories sharing keys (associative exploration) |
 | `forget(memory_id)` | Permanently delete |

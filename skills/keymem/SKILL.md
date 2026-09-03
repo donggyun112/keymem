@@ -31,8 +31,8 @@ description: Use when the conversation reveals or needs durable knowledge about 
 
 ## Remember (close the turn)
 
-- Before ending each reply, silently save any durable name, preference, decision, correction,
-  project fact, or goal revealed in the turn.
+- Before ending every reply, check whether the turn revealed something durable: a name, preference,
+  decision, correction, project fact, or goal. If it did, save it silently in the same turn.
 - `remember(content, keys)` with 3–6 keys. Each key is ONE atomic concept of 1–2 words
   (`"recall"`, `"적중률"` — never `"recall 적중률 개선"`). Phrase keys become unreachable singletons.
 - Keys MUST span both Korean and English, plus colloquial variants. Reuse the canonical concepts

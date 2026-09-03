@@ -13,9 +13,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   payload (`fresh`, `aging`, or `stale`), and ranking softly discounts aging facts without
   deleting them.
 - `confirm_memory(memory_id, evidence)` separates evidence-backed confirmation from retrieval.
-  `read_memory` can still update access metadata and the selected graph edge, but no longer
-  refreshes freshness or depth. `remember`, `remember_batch`, and `correct` accept the additive
-  `decay_profile` field; `correct` also accepts `ttl_seconds` while preserving omitted policies.
+  `read_memory` can still update access metadata and, when given `via_key_id`, the selected graph
+  edge, but no longer refreshes freshness or depth. `remember`, `remember_batch`, and `correct`
+  accept the additive `decay_profile` field; `correct` also accepts `ttl_seconds` while preserving
+  omitted policies and retaining the immediate predecessor as one-step provenance.
 
 ### Changed
 
