@@ -18,7 +18,7 @@ function vec(tx: string): number[] {
   return [0, 0, 1];
 }
 
-test("recall reinforces only the top-ranked result, not the lower-ranked returned tail", async (t) => {
+test("recall reinforces only the top link without confirming retrieved content", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "sm-reinf-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   process.env.KEYMEM_DATA_DIR = dir;
@@ -30,7 +30,8 @@ test("recall reinforces only the top-ranked result, not the lower-ranked returne
   t.after(() => emb.__clearTestEmbedder());
 
   const mg = await import(`../src/memoryGraph.ts?reinf=${n++}`);
-  const g = new mg.MemoryGraph();
+  let now = 1_800_000_000;
+  const g = new mg.MemoryGraph({ now: () => now });
   await g.load();
 
   const [m1] = await g.add("primary topic answer", ["topic"]); // top hit (cos 1.0)
@@ -40,7 +41,10 @@ test("recall reinforces only the top-ranked result, not the lower-ranked returne
   const gw = g as unknown as { _getLinkWeight(k: string, m: string): number };
   const w1Before = gw._getLinkWeight(kid, m1);
   const w2Before = gw._getLinkWeight(kid, m2);
+  const m1Before = { ...g.memories[m1] };
+  const m2Before = { ...g.memories[m2] };
 
+  now += 100;
   const res = (await g.recall("topic query", 5)) as Array<{ id: string }>;
   // Sanity: both memories are returned, M1 first.
   assert.equal(res[0].id, m1, "M1 should rank first");
@@ -50,4 +54,11 @@ test("recall reinforces only the top-ranked result, not the lower-ranked returne
   const w2After = gw._getLinkWeight(kid, m2);
   assert.ok(w1After > w1Before, "top-ranked result's link must be reinforced");
   assert.equal(w2After, w2Before, "lower-ranked returned tail must NOT be reinforced");
+  for (const [mid, before] of [[m1, m1Before], [m2, m2Before]] as const) {
+    assert.equal(g.memories[mid].access_count, before.access_count + 1);
+    assert.equal(g.memories[mid].last_accessed, now);
+    assert.equal(g.memories[mid].depth, before.depth);
+    assert.equal(g.memories[mid].last_confirmed_at, before.last_confirmed_at);
+    assert.equal(g.memories[mid].confirmation_count, before.confirmation_count);
+  }
 });

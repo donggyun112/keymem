@@ -79,7 +79,7 @@ console.log("S4 versioning (supersede)");
 {
   const ns = "s4";
   const [oldId] = await remember("user lives in Seoul", ["거주지", "Seoul", "location"], ns);
-  await g.recall("where does the user live", 3, ns); // raise depth a bit
+  await g.recall("where does the user live", 3, ns);
   const newId = await g.supersede(oldId, "user moved to Busan", { keyConcepts: ["거주지", "Busan", "location"] });
   const r = await recall("거주지", ns);
   check("after supersede: Busan present", has(r, "Busan"), `top=${top(r)}`);
@@ -88,16 +88,24 @@ console.log("S4 versioning (supersede)");
   check("new memory supersedes old", g.memories[newId]?.supersedes === oldId, "");
 }
 
-// ── S5: Depth growth on repeated recall ──
-console.log("S5 depth growth");
+// ── S5: Repeated recall is confirmation-neutral ──
+console.log("S5 recall access without confirmation");
 {
   const ns = "s5";
   const [id] = await remember("사용자의 직업은 소프트웨어 엔지니어다", ["직업", "engineer", "job"], ns);
-  const d0 = g.memories[id].depth;
+  const initial = { ...g.memories[id] };
   for (let i = 0; i < 5; i++) await g.recall("직업", 3, ns);
-  const d1 = g.memories[id].depth;
-  check("depth increases with repeated recall", d1 > d0, `${d0} -> ${d1}`);
-  check("depth stays within [0,1]", d1 <= 1.0 && d1 >= 0, `d1=${d1}`);
+  const after = g.memories[id];
+  check("access count increases with repeated recall", after.access_count === initial.access_count + 5,
+    `${initial.access_count} -> ${after.access_count}`);
+  check("depth is unchanged by repeated recall", after.depth === initial.depth,
+    `${initial.depth} -> ${after.depth}`);
+  check("last confirmation time is unchanged by repeated recall",
+    after.last_confirmed_at === initial.last_confirmed_at,
+    `${initial.last_confirmed_at} -> ${after.last_confirmed_at}`);
+  check("confirmation count is unchanged by repeated recall",
+    after.confirmation_count === initial.confirmation_count,
+    `${initial.confirmation_count} -> ${after.confirmation_count}`);
 }
 
 // ── S6: name-type key — exact, no semantic bleed ──

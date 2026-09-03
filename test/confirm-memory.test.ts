@@ -85,3 +85,36 @@ test("confirmation hides missing, expired, superseded, and cross-namespace ids",
   );
   assert.equal(graph.memories[replacementId].confirmation_count, 1);
 });
+
+test("an empty confirmation id is still idempotent", async (t) => {
+  let now = 1_800_000_000;
+  const { graph } = await freshDecayGraph(t, () => now);
+  const [mid] = await graph.add("사용자는 서울에 산다", ["거주지"]);
+  const initialCount = graph.memories[mid].confirmation_count;
+
+  await graph.confirmMemory(mid, { evidence: "user", confirmationId: "" });
+  const confirmedAt = graph.memories[mid].last_confirmed_at;
+  now += 100;
+  const duplicate = (await graph.confirmMemory(mid, {
+    evidence: "observation",
+    confirmationId: "",
+  })) as any;
+
+  assert.equal(duplicate.confirmed, false);
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(graph.memories[mid].last_confirmed_at, confirmedAt);
+  assert.equal(graph.memories[mid].confirmation_count, initialCount + 1);
+  assert.equal(graph.memories[mid].last_confirmation_evidence, "user");
+});
+
+test("confirmation depth is capped at one from near or at the maximum", async (t) => {
+  const { graph } = await freshDecayGraph(t, () => 1_800_000_000);
+  const [mid] = await graph.add("사용자는 서울에 산다", ["거주지"]);
+
+  graph.memories[mid].depth = 0.98;
+  await graph.confirmMemory(mid, { evidence: "observation" });
+  assert.equal(graph.memories[mid].depth, 1);
+
+  await graph.confirmMemory(mid, { evidence: "authoritative_source" });
+  assert.equal(graph.memories[mid].depth, 1);
+});

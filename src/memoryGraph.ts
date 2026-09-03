@@ -2065,7 +2065,7 @@ export class MemoryGraph {
       ) {
         throw new Error(`Memory ${memoryId} not found`);
       }
-      if (options.confirmationId && mem.last_confirmation_id === options.confirmationId) {
+      if (options.confirmationId != null && mem.last_confirmation_id === options.confirmationId) {
         return {
           memory_id: memoryId,
           confirmed: false,
@@ -2171,7 +2171,7 @@ export class MemoryGraph {
     minZ = GATE_Z_THRESHOLD,
     minKeyGate = KEY_GATE_THRESHOLD,
     minDepth = 0,
-    // When false, recall is a pure read: no depth/access bump, no Hebbian reinforce/decay.
+    // When false, recall is a pure read: no access bump or Hebbian reinforce/decay.
     // recallInject uses this so passively-surfaced (and the wider internal candidate) memories
     // aren't reinforced — only a real read_memory should strengthen the graph.
     reinforce = true,
@@ -2529,7 +2529,6 @@ export class MemoryGraph {
         if (skip(mid)) continue;
         const mem = this.memories[mid];
         if (reinforce) {
-          mem.depth = Math.min(mem.depth + DEPTH_INCREMENT, DEPTH_MAX);
           mem.access_count += 1;
           mem.last_accessed = this._now();
         }
