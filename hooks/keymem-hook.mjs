@@ -4,7 +4,7 @@
 // context itself surfaces related memories. This hook inverts the trigger — the
 // harness sends every user utterance here, the daemon's precision-gated inject
 // path picks at most a couple of relevant memories, and they are added to the
-// turn's context as an UNCONFIRMED hint the agent may verify (read_memory) or ignore.
+// turn's context as an UNCONFIRMED hint the agent may inspect (read_memory) or ignore.
 //
 // Contract: NEVER block the prompt and NEVER wake the daemon.
 //  - daemon down → ECONNREFUSED → exit 0 silently (the MCP shim owns daemon spawning)
@@ -46,11 +46,13 @@ async function main() {
     const lines = memories.map((m) => {
         const preview = m.content.length > MAX_CHARS ? `${m.content.slice(0, MAX_CHARS)}…` : m.content;
         const score = m.relevance_score !== undefined ? ` rel=${m.relevance_score}` : "";
-        return `- [${m.id}${score}${m.namespace ? ` ns=${m.namespace}` : ""}] ${preview}`;
+        const validity = m.validity ? ` validity=${JSON.stringify(m.validity)}` : "";
+        return `- [${m.id}${score}${m.namespace ? ` ns=${m.namespace}` : ""}${validity}] ${preview}`;
     });
     const additionalContext = `<keymem-surfaced>\n` +
-        `Passively surfaced memories possibly related to this message (unconfirmed — ` +
-        `verify with read_memory(id) before asserting; ignore if irrelevant):\n` +
+        `Passively surfaced memories possibly related to this message (unconfirmed; ignore if irrelevant).\n` +
+        `read_memory(id) retrieves full content and may reinforce its access/key path; it does not confirm that the content is current.\n` +
+        `Use fresh memories normally and qualify aging memories when currentness matters. Never assert a stale memory as current; verify externally or ask the user.\n` +
         `${lines.join("\n")}\n</keymem-surfaced>`;
     const payload = JSON.stringify({
         hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext },
