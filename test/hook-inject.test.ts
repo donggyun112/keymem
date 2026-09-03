@@ -82,6 +82,10 @@ test("hook renders fresh and stale injected validity with currentness guidance",
   );
   assert.match(context, /use fresh memories normally/i);
   assert.match(context, /validity=\{[^}]*"status":"stale"/);
+  assert.match(
+    context,
+    /- \[stale-memory[^\n]*validity=\{[^}\n]*"status":"stale"[^}\n]*"verification_recommended":true/
+  );
   assert.match(context, /"verification_required":true/);
   assert.match(context, /read_memory.*does not confirm.*current/is);
   assert.match(context, /stale.*(?:verify externally|ask the user)/is);
