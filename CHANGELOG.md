@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Confirmation-aware freshness adds `transient` (7-day), `standard` (90-day), `stable`
+  (365-day), and `permanent` decay profiles. Memory views now expose an additive `validity`
+  payload (`fresh`, `aging`, or `stale`), and ranking softly discounts aging facts without
+  deleting them.
+- `confirm_memory(memory_id, evidence)` separates evidence-backed confirmation from retrieval.
+  `read_memory` can still update access metadata and the selected graph edge, but no longer
+  refreshes freshness or depth. `remember`, `remember_batch`, and `correct` accept the additive
+  `decay_profile` field; `correct` also accepts `ttl_seconds` while preserving omitted policies.
+
+### Changed
+
+- Version-1 graphs migrate to schema version 2 by deriving `last_confirmed_at` from existing
+  creation/access timestamps, seeding `confirmation_count` from access history with a minimum of
+  one, and assigning the `standard` profile. The repaired graph is saved through the existing
+  atomic persistence path.
+
+### Fixed
+
+- Expired memories no longer participate in duplicate, contradiction, or supersede candidate
+  selection, so obsolete TTL records cannot block or redirect a new write.
+
 ## [0.24.0] - 2026-08-30
 
 ### Added

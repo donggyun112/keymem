@@ -175,6 +175,8 @@ For reliable proactive saving in Claude Code, add the following to `~/.claude/CL
 - Before ending every reply, check whether this turn revealed a durable fact: a name, preference, decision, correction, project fact, or goal.
 - If it did, call `remember` or `remember_batch` silently in the same turn with 3-6 diverse keys. A durable fact left unsaved is a bug.
 - Use `correct` when existing information changes. Save nothing only when the turn revealed nothing durable.
+- Treat `read_memory` as retrieval, not confirmation. Use its `validity.status`: qualify `aging`, and never assert `stale` as current without checking an external source or asking the user.
+- Call `confirm_memory` only after an explicit current user assertion, an authoritative current source, or direct observation — never merely because a read succeeded.
 - Never mention memory lookup or saving to the user.
 ```
 
@@ -222,7 +224,7 @@ pnpm start
 - **N:M key/value graph** — memories and the concepts that index them are separate spaces, linked many-to-many. One memory is reachable through many keys; one key leads to many memories.
 - **Agent-driven Key → Memory → Key navigation** — the agent walks the graph deliberately instead of collapsing it into one opaque similarity search.
 - **Associative multi-hop recall** — reach memories no embedding distance would connect, by following chains of shared keys.
-- **Depth system** — every memory has a stability score `0.0 → 1.0`. Frequently recalled facts deepen, stabilize, and decay slower.
+- **Confirmation-aware freshness** — reads learn useful paths without certifying old content; explicit evidence refreshes facts across four decay profiles.
 - **Versioning, not overwriting** — corrections preserve the full history (when a belief changed, and from what).
 - **Key types** — `concept` keys match by similarity; `name`/`proper_noun` keys match exactly, so "동건" never matches "뉴턴" just for being short.
 - **Cross-lingual key merging (IDF)** — `파이썬` and `Python` collapse into one canonical cluster instead of fragmenting the key space.
@@ -231,17 +233,41 @@ pnpm start
 - **Cross-encoder reranking** (opt-in) — `bge-reranker-v2-m3` re-scores candidates in direct mode.
 - **Local-first** — all data in a local JSON graph; no external database. OpenAI or fully-local embeddings (auto-downloaded).
 
-### Depth System
+### Freshness and Depth
 
-Every memory has a depth score `0.0 → 1.0`:
+Every memory has a depth score `0.0 → 1.0`, but retrieval and confirmation are separate:
 
 | Stage | Depth | Behavior |
 | --- | --- | --- |
-| Shallow | `< 0.3` | Recent, unverified. Easy to update or forget. |
-| Medium | `0.3–0.7` | Confirmed multiple times. Stable. |
-| Deep | `> 0.7` | Well-established fact. Resists correction. |
+| Shallow | `< 0.3` | Little explicit confirmation; minimal ranking boost. |
+| Medium | `0.3–0.7` | Repeatedly confirmed; moderate ranking boost. |
+| Deep | `> 0.7` | Strongly confirmed; maximum ranking boost, but still correctable and age-sensitive. |
 
-Depth increases `+0.05` only when the agent confirms a fact with `read_memory()`. Key search, `read_key()`, and passive `inject:true` previews do not deepen memories. Deep memories decay slower over time. If you try to correct a deep memory, it resists — its depth stays higher even after supersede.
+`read_memory()` increments access metadata and may reinforce the traversed key edge, but it does
+**not** change depth, `last_confirmed_at`, `confirmation_count`, or freshness. Only
+`confirm_memory(memory_id, evidence)` refreshes validity and increases depth `+0.05`; accepted
+evidence is an explicit current user assertion, an authoritative current source, or direct
+observation. A successful read alone is never confirmation.
+
+Freshness decays from `last_confirmed_at` according to the memory's `decay_profile`:
+
+| Profile | Default half-life | Intended use |
+| --- | --- | --- |
+| `transient` | 7 days | Fast-changing state such as temporary plans or availability |
+| `standard` | 90 days | General facts; the default |
+| `stable` | 365 days | Slowly changing facts |
+| `permanent` | No decay | Deliberately timeless or immutable facts |
+
+Every memory view includes a `validity` payload with `freshness`, `status` (`fresh`, `aging`, or
+`stale`), `age_days`, `last_confirmed_at`, `confirmation_count`, `decay_profile`,
+`verification_recommended`, and `verification_required`. `fresh` means freshness is at least
+`0.5`; `aging` is at least `0.125` but below `0.5`; `stale` is below `0.125` and must not be
+asserted as current without verification. Decay is soft: it lowers ranking through
+`0.2 + 0.8 × freshness` and never deletes a memory. TTL remains the only automatic expiry mechanism.
+
+For example, save a temporary plan with `remember(..., decay_profile:"transient")`; after the user
+explicitly says it is still current, call `confirm_memory(memory_id, evidence:"user")`. Do not
+confirm merely because `read_memory` returned it.
 
 ### Key Types
 
@@ -263,7 +289,9 @@ Name/proper_noun keys also get an IDF penalty (`×0.5`) when they become hub key
 "user moved to Busan"   (depth: 0.0, new)
 ```
 
-`keymem` keeps the full history instead of overwriting on change. Every correction is traceable — when did the belief change, and from what session?
+`keymem` keeps the full history instead of overwriting on change. The superseded record is excluded
+from active retrieval regardless of its depth; the new version becomes the current record. Every
+correction is traceable — when did the belief change, and from what session?
 
 ### Key Merging
 
@@ -280,7 +308,7 @@ The default MCP API keeps Key Space and Value Space separate:
 
 1. `recall(query)` searches canonical keys and aliases. It returns key IDs, concept labels, match scores, linked-memory counts, hub status, and specificity — never memory content.
 2. `read_key(key_id)` returns ranked memory IDs and metadata, never content. Hub keys are paginated with `limit`/`offset` so broad concepts cannot flood context.
-3. `read_memory(memory_id, via_key_id)` returns the full memory plus every connected key cluster. Only this full read increases memory depth/access count; only the traversed `via_key_id` edge receives Hebbian reinforcement.
+3. `read_memory(memory_id, via_key_id)` returns the full memory, its `validity`, and every connected key cluster. It updates access metadata and reinforces only the traversed `via_key_id` edge; it does not confirm or deepen the memory.
 4. The agent follows any returned key with another `read_key()` call, producing an explicit **Key → Memory → Key** graph walk.
 
 Semantically merged keys are preserved as aliases on one canonical key cluster (for example `Python` + `파이썬`). The recommended `bge-m3` profile enables conservative short-key merging by default; override or disable it with `KEYMEM_SHORT_KEY_MERGE`. A key linked to at least three active memories is surfaced as a hub with `is_hub`, `memory_count`, and `specificity` metadata rather than being hidden by IDF. Override the hub threshold with `KEYMEM_KEY_HUB_MIN_LINKS`.
@@ -300,7 +328,7 @@ Sparse and dense rank lists are merged by RRF, then modulated by depth and time 
 Reading a full memory is a **write**, not just a read. In the default flow, `recall()` and `read_key()` are read-only; `read_memory(memory_id, via_key_id)` reshapes the selected path:
 
 - The traversed `via_key_id → memory_id` link is **reinforced** (`+0.1`, capped at `3.0`).
-- Memory depth and access count increase only after the agent reads the full memory.
+- Memory access count increases after a full read, but depth and freshness do not. Those change only through evidence-backed `confirm_memory()`.
 
 Reinforcement is scoped to the key the agent actually traversed — not every key attached to the memory. This is the literal Hebbian rule ("fire together, wire together") and prevents unrelated associations from growing when the memory is reached through a different concept. Weights are clamped to `[0.1, 3.0]`.
 
@@ -327,7 +355,7 @@ Link weights feed back into `read_key()` ranking, so repeatedly selected paths b
 
 1. Embed the query and match canonical key concepts plus exact aliases.
 2. Return key clusters with `memory_count`, `is_hub`, and `specificity`; do not return memory content.
-3. Rank a selected key's memory handles by link weight, depth, and time decay in `read_key()`.
+3. Rank a selected key's memory handles by link weight, depth, and confirmation freshness in `read_key()`.
 4. Return full content and adjacent key clusters from `read_memory()`; reinforce only the traversed edge.
 5. Repeat `read_key(next_key_id)` to walk the graph deliberately.
 
@@ -339,7 +367,7 @@ Three retrieval signals run in parallel, then get fused and expanded:
 2. **Dense Path A (keys):** embed query → match keys (concept: cosine ≥ threshold; name/proper_noun: substring match → score `1.0`) → take top 10 keys → follow links. Score = `keySim × IDF × linkWeight`, summed across matching keys.
 3. **Dense Path B (content):** compare query embedding directly against memory content embeddings (cosine ≥ threshold).
 4. **RRF fusion:** merge the BM25 and dense rank lists via `score += 1 / (RRF_K + rank + 1)` (`RRF_K = 60`).
-5. **Depth & time modulation:** `score × (0.9 + depth × 0.1) × timeFactor`, where `timeFactor` is a depth-weighted 30-day half-life decay (deep memories decay slower).
+5. **Depth & freshness modulation:** `score × (0.9 + depth × 0.1) × (0.2 + 0.8 × freshness)`, using the selected 7/90/365-day half-life or no decay for `permanent`.
 6. **Associative expansion (`hops`, default 2):** breadth-first from the directly-matched set — each round follows shared keys (`× HOP_DECAY(0.3) × IDF × linkWeight`) and explicit `related_to` links (bidirectional, `× HOP_DECAY`) to the next frontier. `hops=N` walks up to N steps, so a memory's `hop` is its shortest chain distance. Score decays by `HOP_DECAY` per hop.
 7. **Hebbian update:** reinforce matched-key links of returned memories (`+0.1`), decay explored-but-unreturned links (`−0.005`).
 8. Return ranked results with `hop` field (`1` = direct, `2+` = associative distance).
@@ -375,9 +403,12 @@ KEYMEM_MEMORY_DEDUP=0.99
 | `KEYMEM_CONTRADICTION` | per-model (e.g. `0.80` for bge-m3) | Contradiction-band lower bound. Memory pairs whose cosine similarity falls in `[contradiction, memoryDedup)` are flagged as contradictions. `read_memory()`, `related()`, and optional `recall_memories()` expose conflicting IDs. |
 | `KEYMEM_AUTOKEY` | `true` | Auto-key self-healing: learn missing search terms from real usage. Set `false` to disable. |
 | `KEYMEM_AUTOKEY_PROMOTE_N` | `3` | Weak-confirmed reads of a `(key, query)` pair before the query is folded into the key space. |
-| `KEYMEM_AUTOKEY_CONFIRM_FLOOR` | `0.45` | Lowest query↔key cosine eligible for confirmation-driven learning. Lets a query that fell **below** the recall gate (returned `[]`) still be learned once repeated reads confirm the right memory via that key — frequency overrides the weak cosine. Lower (e.g. `0.40`) to catch more borderline paraphrases; set `≥` the recall threshold to disable. |
+| `KEYMEM_AUTOKEY_CONFIRM_FLOOR` | `0.45` | Lowest query↔key cosine eligible for routing-confirmation learning. Repeated selections through the same key can teach a below-gate query alias; this confirms routing only, never content freshness. Lower (e.g. `0.40`) to catch more borderline paraphrases; set `≥` the recall threshold to disable. |
 | `KEYMEM_AUTOKEY_MAX_ALIASES` | `8` | Max learned aliases promoted per key. |
 | `KEYMEM_AUTOKEY_PRUNE_AGE` | `2592000` | Seconds before a never-hit learned alias is pruned by `cleanup_expired` (30 days). |
+| `KEYMEM_DECAY_TRANSIENT_DAYS` | `7` | Half-life in days for `transient` memories. Must be finite and greater than zero. |
+| `KEYMEM_DECAY_STANDARD_DAYS` | `90` | Half-life in days for the default `standard` profile. Must be finite and greater than zero. |
+| `KEYMEM_DECAY_STABLE_DAYS` | `365` | Half-life in days for `stable` memories. Must be finite and greater than zero. |
 
 **Why e5 gates are opt-in:** multilingual-e5's narrow cosine band (~0.86–0.99) makes a static floor unreliable, while held-out tests showed distribution and key-proximity gates can also overfit. Both are disabled by default to avoid hiding real memories. Use bge-m3 for reliable not-found behavior, or calibrate e5 gates on your own corpus.
 
@@ -397,7 +428,7 @@ An uncalibrated `LOCAL_EMBEDDING_MODEL` falls back to the BGE profile **and logs
 
 ## MCP Tools
 
-The full trusted-local tool set contains 14 tools by default. Plain untrusted
+The full trusted-local tool set contains 16 tools by default. Plain untrusted
 servers hide the two transcript tools (`list_sessions`, `get_conversation`):
 
 | Tool | Description |
@@ -405,22 +436,23 @@ servers hide the two transcript tools (`list_sessions`, `get_conversation`):
 | `recall(query, top_k?, namespace?, explain?)` | Search Key Space only. Returns canonical keys, aliases, scores, and hub metadata; never memory content. `explain:true` distinguishes `found`, `no_match`, and `empty_namespace`. |
 | `browse_keys(namespace, hubs_only?, limit?, offset?)` | Browse a namespace's active key vocabulary, hubs first, when recall has no entry hit. |
 | `read_key(key_id, query?, namespace?, limit?, offset?)` | List ranked memory IDs and metadata connected to one key. Pass the original query for relevance ordering; supports pagination for hubs. |
-| `read_memory(memory_id, via_key_id?, namespace?)` | Read full memory content and connected keys. Increases depth/access and reinforces the traversed edge. |
-| `remember(content, keys, key_types?, namespace?, ttl_seconds?, related_to?)` | Save memory with key concepts and optional type annotations |
-| `correct(memory_id, content, keys?, key_types?, related_to?)` | Versioned update — old memory preserved but weakened |
+| `read_memory(memory_id, via_key_id?, namespace?)` | Read full memory content, connected keys, and `validity`. Updates access and the traversed edge, but never confirms or deepens content. |
+| `confirm_memory(memory_id, evidence, namespace?, source?)` | Refresh freshness and deepen a current memory after explicit user evidence, an authoritative source, or direct observation. A read alone is not evidence. |
+| `remember(content, keys, key_types?, namespace?, ttl_seconds?, decay_profile?, related_to?)` | Save memory with key concepts, optional TTL, and a `transient`, `standard`, `stable`, or `permanent` decay profile. |
+| `correct(memory_id, content, keys?, key_types?, ttl_seconds?, decay_profile?, related_to?)` | Versioned update. Old memory is preserved but inactive; omitted TTL/profile inherit from it. |
 | `dismiss(memory_id, key_id, namespace?)` | Negative feedback: the fact is fine, this key should not have surfaced it. Weakens that one edge (floored, never severed) and cancels its pending alias learning |
 | `related(memory_id)` | Find memories sharing keys (associative exploration) |
 | `forget(memory_id)` | Permanently delete |
 | `list_sessions(agent?, limit?)` | Discover recent host-agent conversation sessions (Claude Code, Codex) on this machine, newest first |
 | `get_conversation(session_id, turn?, agent?)` | Load original conversation turns from the host agent's on-disk transcript (Claude Code / Codex), normalized to `{turn, role, content, ts}` |
-| `list_memories(namespace?)` | List all stored memories with keys, depth, access count |
-| `remember_batch(items)` | Save multiple memories in one call |
+| `list_memories(namespace?)` | List active memories with keys, depth, access count, and validity |
+| `remember_batch(items)` | Save multiple memories; each item accepts `ttl_seconds` and `decay_profile` |
 | `cleanup_expired()` | Delete memories whose TTL has expired |
 | `memory_stats()` | Get current key/memory/link counts |
 
 Scores carry `score_kind`. Key recall exposes cosine-like `key_relevance`; `read_key` exposes `content_relevance` plus a within-key rank score; injected/direct memories expose `relevance_score` separately from their small RRF `rank_score`. Compare thresholds only within the same score kind.
 
-Set `KEYMEM_DIRECT_RECALL=true` to expose a fifteenth compatibility tool, `recall_memories(...)`, with BM25+dense+RRF multi-hop behavior.
+Set `KEYMEM_DIRECT_RECALL=true` to expose a seventeenth compatibility tool, `recall_memories(...)`, with BM25+dense+RRF multi-hop behavior.
 
 A system prompt template is also available via the `memory_system_prompt` MCP prompt — include it to instruct the agent to recall silently, use diverse keys, and never mention the memory system to users.
 
