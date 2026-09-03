@@ -356,6 +356,37 @@ export interface MemoryGraphOptions {
   now?: () => number;
 }
 
+export interface DirectHydrateKey {
+  key_id: string;
+  concept: string;
+  score: number;
+  match_type: string;
+}
+
+export type DirectHydrateTop1Decision =
+  | {
+      status: "candidate";
+      candidate: {
+        key: DirectHydrateKey;
+        memory: {
+          id: string;
+          content: string;
+          evidence: "passive_preview";
+          reinforced: false;
+          namespace: string;
+          depth: number;
+          created_at: number;
+          validity: ValidityView;
+          link_weight: number;
+          content_relevance: number | null;
+          score: number;
+          content_truncated?: true;
+          content_chars?: number;
+        };
+      };
+    }
+  | { status: "no_key" | "no_memory"; candidate: null };
+
 export class MemoryGraph {
   keys: Record<string, Key> = {};
   memories: Record<string, Memory> = {};
@@ -1817,6 +1848,61 @@ export class MemoryGraph {
           : "link_weight × depth_factor × freshness_factor; compare only within this key",
       },
     };
+  }
+
+  async directHydrateTop1(
+    topKey: DirectHydrateKey | null | undefined,
+    query: string,
+    namespace: string | null = null,
+    maxChars = INJECT_MAX_CHARS
+  ): Promise<DirectHydrateTop1Decision> {
+    if (!topKey) return { status: "no_key", candidate: null };
+    const page = await this.readKey(topKey.key_id, {
+      query,
+      namespace,
+      limit: 1,
+    }) as {
+      memories: Array<{
+        memory_id: string;
+        link_weight: number;
+        content_relevance: number | null;
+        score: number;
+      }>;
+    };
+    const handle = page.memories[0];
+    if (!handle) return { status: "no_memory", candidate: null };
+    const contentLimit = Number.isFinite(maxChars)
+      ? Math.max(256, Math.min(20_000, Math.floor(maxChars)))
+      : INJECT_MAX_CHARS;
+
+    return this._lock.runExclusive(async () => {
+      const mem = this.memories[handle.memory_id];
+      if (
+        !mem ||
+        this._isExpired(mem) ||
+        this._supersededBy[handle.memory_id] ||
+        (namespace && mem.namespace !== namespace)
+      ) {
+        return { status: "no_memory", candidate: null };
+      }
+      const memory = truncateInjectedContent({
+        id: handle.memory_id,
+        content: mem.content,
+        evidence: "passive_preview" as const,
+        reinforced: false as const,
+        namespace: mem.namespace,
+        depth: Math.round(mem.depth * 1000) / 1000,
+        created_at: mem.created_at,
+        validity: this._validity(mem),
+        link_weight: handle.link_weight,
+        content_relevance: handle.content_relevance,
+        score: handle.score,
+      }, contentLimit);
+      return {
+        status: "candidate" as const,
+        candidate: { key: topKey, memory },
+      };
+    });
   }
 
   async browseKeys(

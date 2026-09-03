@@ -409,6 +409,7 @@ KEYMEM_MEMORY_DEDUP=0.99
 | `KEYMEM_AUTOKEY_CONFIRM_FLOOR` | `0.45` | Lowest query↔key cosine eligible for routing-confirmation learning. Repeated selections through the same key can teach a below-gate query alias; this confirms routing only, never content freshness. Lower (e.g. `0.40`) to catch more borderline paraphrases; set `≥` the recall threshold to disable. |
 | `KEYMEM_AUTOKEY_MAX_ALIASES` | `8` | Max learned aliases promoted per key. |
 | `KEYMEM_AUTOKEY_PRUNE_AGE` | `2592000` | Seconds before a never-hit learned alias is pruned by `cleanup_expired` (30 days). |
+| `KEYMEM_DIRECT_HYDRATE_SHADOW` | `false` | Record the top memory under the top recalled key for offline evaluation. The candidate is never returned to the agent and is never reinforced. |
 | `KEYMEM_DECAY_TRANSIENT_DAYS` | `7` | Half-life in days for `transient` memories. Must be finite and greater than zero. |
 | `KEYMEM_DECAY_STANDARD_DAYS` | `90` | Half-life in days for the default `standard` profile. Must be finite and greater than zero. |
 | `KEYMEM_DECAY_STABLE_DAYS` | `365` | Half-life in days for `stable` memories. Must be finite and greater than zero. |
@@ -515,11 +516,20 @@ All data is local. No external database required.
 ```
 ~/.keymem/
 ├── graph.json          # canonical keys, aliases, memories, weighted links
+├── direct-hydrate-shadow.jsonl  # optional local counterfactual recall log
 └── conversations/
     └── {session_id}.jsonl   # optional conversation log (only if a host integration writes one)
 ```
 
 Set `KEYMEM_DATA_DIR` to use a different storage directory.
+
+### Direct-hydrate shadow evaluation
+
+Set `KEYMEM_DIRECT_HYDRATE_SHADOW=true` to evaluate a deterministic Top-1 policy without exposing it to the model. After each normal, non-inject `recall`, keymem takes the already-ranked top key, ranks that key's memory handles using the raw `context` utterance when available, and appends one event to `direct-hydrate-shadow.jsonl`. Calls with no candidate are recorded too, so coverage is measurable.
+
+The public `recall` result is unchanged. Shadow candidates are passive: they do not increment access/depth, reinforce a link, learn an alias, or confirm freshness. Each schema-v1 JSONL event contains `query`, `context`, `namespace`, optional host transcript coordinates, and a `candidate`/`no_key`/`no_memory` decision. Candidate content is capped at 2,000 characters.
+
+The log contains raw prompts and memory previews and can therefore be sensitive. It stays in the configured local data directory; do not publish it. Delete or archive it after the evaluation window.
 
 `get_conversation` / `list_sessions` read the **host coding agent's own transcripts** directly — keymem does not record conversations itself. Locations are auto-detected per OS and honour the agents' env overrides:
 

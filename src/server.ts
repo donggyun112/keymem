@@ -23,6 +23,11 @@ import {
 } from "./nativeTranscripts.js";
 import { cfgRaw } from "./env.js";
 import { parseDecayProfile, type ConfirmationEvidence } from "./decay.js";
+import {
+  directHydrateShadowEnabled,
+  recordDirectHydrateShadow,
+} from "./directHydrateShadow.js";
+import type { DirectHydrateKey } from "./memoryGraph.js";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 
@@ -624,6 +629,26 @@ export function createMcpServer(): Server {
             namespace,
             context
           );
+          if (directHydrateShadowEnabled()) {
+            try {
+              const decision = await graph.directHydrateTop1(
+                results[0] as DirectHydrateKey | undefined,
+                context?.trim() || (a.query as string),
+                namespace,
+              );
+              const host = await resolveHostLink(headers);
+              await recordDirectHydrateShadow({
+                query: a.query as string,
+                context,
+                namespace,
+                host,
+                decision,
+              });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              console.error(`[direct-hydrate-shadow] ${message}`);
+            }
+          }
           if (a.explain === true) {
             const overview = await graph.browseKeys(namespace, { limit: 1 }) as {
               memory_count: number;
