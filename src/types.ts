@@ -1,3 +1,5 @@
+import type { ConfirmationEvidence, DecayProfile } from "./decay.js";
+
 export interface AliasCandidate {
   count: number;
   lastSeen: number;
@@ -39,6 +41,12 @@ export interface Memory {
   ttl: number | null;
   links: string[];
   contradicts: string[];
+  last_confirmed_at: number;
+  confirmation_count: number;
+  decay_profile: DecayProfile;
+  last_confirmation_evidence: ConfirmationEvidence | null;
+  last_confirmation_source: Record<string, unknown> | null;
+  last_confirmation_id: string | null;
 }
 
 export interface GraphData {
@@ -47,5 +55,5 @@ export interface GraphData {
   links: Array<{ key_id: string; memory_id: string; weight?: number }>;
   // Provenance for the embedding vector space (see embeddingFingerprint). Absent
   // in graphs written before fingerprinting; treated as "unknown" on load.
-  meta?: { embeddingFingerprint?: string };
+  meta?: { embeddingFingerprint?: string; schemaVersion?: number };
 }

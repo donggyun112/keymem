@@ -9,6 +9,7 @@ import { embedTextAsync, EMBEDDING_BACKEND, embeddingFingerprint, getThresholdPr
 import { rerankEnabled, rerankScores } from "./reranker.js";
 import { writeVectors, readVectors } from "./vectorStore.js";
 import type { Key, Memory, GraphData } from "./types.js";
+import { parseDecayProfile, type DecayProfile } from "./decay.js";
 import {
   RecallBuffer, decidePromotion,
   AUTOKEY_ENABLED, AUTOKEY_BUFFER_CAPACITY, AUTOKEY_BUFFER_TTL_SECONDS,
@@ -343,6 +344,10 @@ export function sanitizeKeys(keys: unknown): string[] {
 
 // ── MemoryGraph ──
 
+export interface MemoryGraphOptions {
+  now?: () => number;
+}
+
 export class MemoryGraph {
   keys: Record<string, Key> = {};
   memories: Record<string, Memory> = {};
@@ -366,12 +371,14 @@ export class MemoryGraph {
   _sentVecs: Record<string, number[][]> = {};
   private _dirty = false;
   private _bm25: MiniSearch;
+  private readonly _now: () => number;
   private _recallBuffer = new RecallBuffer({
     capacity: AUTOKEY_BUFFER_CAPACITY,
     ttlSeconds: AUTOKEY_BUFFER_TTL_SECONDS,
   });
 
-  constructor() {
+  constructor(options: MemoryGraphOptions = {}) {
+    this._now = options.now ?? (() => Date.now() / 1000);
     this._bm25 = new MiniSearch({
       fields: ["content"],
       storeFields: [],
@@ -573,11 +580,11 @@ export class MemoryGraph {
   }
 
   private _isExpired(mem: Memory): boolean {
-    return mem.ttl != null && Date.now() / 1000 > mem.ttl;
+    return mem.ttl != null && this._now() > mem.ttl;
   }
 
   private _timeFactor(mem: Memory): number {
-    const age = Date.now() / 1000 - mem.created_at;
+    const age = this._now() - mem.created_at;
     const decayRate = 1.0 - mem.depth * 0.7;
     const decay = Math.exp((-age * decayRate) / MemoryGraph.TIME_HALF_LIFE);
     return 0.5 + 0.5 * decay;
@@ -890,10 +897,12 @@ export class MemoryGraph {
         supersedes: null,
       };
       const mem: Memory = { ...defaults, ...m };
+      const loadedMem = mem as unknown as Record<string, unknown>;
+      let repaired = false;
       const normalizedNs = normalizeNamespace(mem.namespace) ?? "default";
       if (normalizedNs !== mem.namespace) {
         mem.namespace = normalizedNs;
-        this.markDirty(); // case-variant namespace repaired; persist on next flush
+        repaired = true;
       }
       mem.links = Array.isArray(mem.links)
         ? mem.links.filter((linkedId): linkedId is string => typeof linkedId === "string")
@@ -906,6 +915,42 @@ export class MemoryGraph {
       if (!mem.embedding || mem.embedding.length === 0) {
         mem.embedding = await embedTextAsync(mem.content);
       }
+      const legacyConfirmedAt = Math.max(
+        Number.isFinite(mem.created_at) ? mem.created_at : 0,
+        Number.isFinite(mem.last_accessed) ? mem.last_accessed : 0
+      );
+      if (!Number.isFinite(mem.last_confirmed_at)) {
+        mem.last_confirmed_at = legacyConfirmedAt;
+        repaired = true;
+      }
+      if (!Number.isFinite(mem.confirmation_count) || mem.confirmation_count < 1) {
+        mem.confirmation_count = Math.max(
+          1,
+          Number.isFinite(mem.access_count) ? mem.access_count : 1
+        );
+        repaired = true;
+      }
+      try {
+        const decayProfile = parseDecayProfile(mem.decay_profile);
+        if (mem.decay_profile !== decayProfile) repaired = true;
+        mem.decay_profile = decayProfile;
+      } catch {
+        mem.decay_profile = "standard";
+        repaired = true;
+      }
+      if (!("last_confirmation_evidence" in loadedMem)) {
+        mem.last_confirmation_evidence = null;
+        repaired = true;
+      }
+      if (!("last_confirmation_source" in loadedMem)) {
+        mem.last_confirmation_source = null;
+        repaired = true;
+      }
+      if (!("last_confirmation_id" in loadedMem)) {
+        mem.last_confirmation_id = null;
+        repaired = true;
+      }
+      if (repaired) this.markDirty();
       const sent = sidecar?.get(`s:${mid}`);
       if (sent && sent.length > 0) this._sentVecs[mid] = sent;
       this.memories[mid] = mem;
@@ -980,7 +1025,7 @@ export class MemoryGraph {
       keys: strippedKeys,
       memories: strippedMems,
       links,
-      meta: { embeddingFingerprint: fingerprint },
+      meta: { embeddingFingerprint: fingerprint, schemaVersion: 2 },
     };
     // Snapshot is built synchronously above (callers mutate under _lock without
     // awaiting mid-mutation, so this read is consistent). Serialize the actual I/O
@@ -1107,6 +1152,7 @@ export class MemoryGraph {
     options: {
       keyTypes?: Record<string, string> | null;
       source?: Record<string, unknown> | null;
+      decayProfile?: DecayProfile;
       namespace?: string;
       ttlSeconds?: number | null;
       relatedTo?: string[] | null;
@@ -1138,7 +1184,7 @@ export class MemoryGraph {
 
       const mid = uid();
       resultMid = mid;
-      const now = Date.now() / 1000;
+      const now = this._now();
       const expiresAt =
         options.ttlSeconds != null ? now + options.ttlSeconds : null;
       const validLinks = this._validMemoryLinks(options.relatedTo ?? [], mid);
@@ -1157,6 +1203,12 @@ export class MemoryGraph {
         ttl: expiresAt,
         links: validLinks,
         contradicts: [],
+        last_confirmed_at: now,
+        confirmation_count: 1,
+        decay_profile: parseDecayProfile(options.decayProfile),
+        last_confirmation_evidence: "user",
+        last_confirmation_source: options.source ?? null,
+        last_confirmation_id: null,
       };
       if (sentVecs.length > 0) this._sentVecs[mid] = sentVecs;
 
@@ -1206,6 +1258,7 @@ export class MemoryGraph {
         keyConcepts,
         keyTypes: options.keyTypes ?? undefined,
         source: options.source,
+        decayProfile: options.decayProfile,
         namespace: options.namespace,
         relatedTo: options.relatedTo,
       });
@@ -1224,6 +1277,7 @@ export class MemoryGraph {
       keyConcepts?: string[] | null;
       keyTypes?: Record<string, string> | null;
       source?: Record<string, unknown> | null;
+      decayProfile?: DecayProfile;
       namespace?: string | null;
       relatedTo?: string[] | null;
     } = {}
@@ -1264,7 +1318,7 @@ export class MemoryGraph {
 
       const mid = uid();
       resultMid = mid;
-      const now = Date.now() / 1000;
+      const now = this._now();
       const ns = normalizeNamespace(options.namespace) ?? old.namespace;
       const nextLinks = options.relatedTo === undefined ? old.links : options.relatedTo;
       const validLinks = this._validMemoryLinks(nextLinks ?? [], mid);
@@ -1283,6 +1337,12 @@ export class MemoryGraph {
         ttl: old.ttl,
         links: validLinks,
         contradicts: [],
+        last_confirmed_at: now,
+        confirmation_count: 1,
+        decay_profile: parseDecayProfile(options.decayProfile),
+        last_confirmation_evidence: "user",
+        last_confirmation_source: options.source ?? null,
+        last_confirmation_id: null,
       };
       if (newSentVecs.length > 0) this._sentVecs[mid] = newSentVecs;
 
@@ -1793,7 +1853,7 @@ export class MemoryGraph {
 
     key.aliasCandidates ??= {};
     const prev = key.aliasCandidates[norm];
-    const candidate = { count: (prev?.count ?? 0) + 1, lastSeen: Date.now() / 1000, queryText: q };
+    const candidate = { count: (prev?.count ?? 0) + 1, lastSeen: this._now(), queryText: q };
     key.aliasCandidates[norm] = candidate;
 
     const decision = decidePromotion({
@@ -1811,7 +1871,7 @@ export class MemoryGraph {
     if (decision === "alias") {
       this._recordKeyAlias(keyId, q);
       key.learnedAliases ??= [];
-      key.learnedAliases.push({ alias: q, addedAt: Date.now() / 1000, hits: 0 });
+      key.learnedAliases.push({ alias: q, addedAt: this._now(), hits: 0 });
       delete key.aliasCandidates[norm];
     } else if (decision === "newKey") {
       const newKid = await this.findOrCreateKey(q, "concept");
@@ -1895,7 +1955,7 @@ export class MemoryGraph {
 
       mem.depth = Math.min(mem.depth + DEPTH_INCREMENT, DEPTH_MAX);
       mem.access_count += 1;
-      mem.last_accessed = Date.now() / 1000;
+      mem.last_accessed = this._now();
       if (viaKeyId) {
         this._setLinkWeight(
           viaKeyId,
@@ -2405,7 +2465,7 @@ export class MemoryGraph {
         if (reinforce) {
           mem.depth = Math.min(mem.depth + DEPTH_INCREMENT, DEPTH_MAX);
           mem.access_count += 1;
-          mem.last_accessed = Date.now() / 1000;
+          mem.last_accessed = this._now();
         }
         results.push({
           id: mid,
@@ -2629,7 +2689,7 @@ export class MemoryGraph {
       this._pruneOrphanKeys();
 
       let pruned = false;
-      const now = Date.now() / 1000;
+      const now = this._now();
       for (const key of Object.values(this.keys)) {
         if (!key.learnedAliases?.length) continue;
         const keep = key.learnedAliases.filter(

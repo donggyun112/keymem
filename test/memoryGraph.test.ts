@@ -30,6 +30,13 @@ function memory(id: string, links: string[] = [], ttl: number | null = null): Me
     namespace: "default",
     ttl,
     links,
+    contradicts: [],
+    last_confirmed_at: 0,
+    confirmation_count: 1,
+    decay_profile: "standard",
+    last_confirmation_evidence: null,
+    last_confirmation_source: null,
+    last_confirmation_id: null,
   };
 }
 
