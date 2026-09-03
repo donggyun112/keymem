@@ -1,8 +1,7 @@
-// read_memory currently calls save() on every call, rewriting the whole graph.json
-// (O(graph) per read — measured 263ms @ 3k memories). Reinforcement signals
-// (depth/access/link) are soft: they should accumulate in RAM and be flushed, not
-// force a full-file write per read. Behavior test (no timing): a read must NOT rewrite
-// graph.json; flush() must persist the accumulated depth.
+// read_memory access/link signals are soft: they should accumulate in RAM and be
+// flushed, not force a full-file write per read (measured 263ms @ 3k memories).
+// Behavior test (no timing): flush() persists access without turning reads into
+// confirmation.
 import assert from "node:assert/strict";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -27,14 +26,16 @@ test("read_memory defers persistence; flush() writes it", async (t) => {
   await g.load();
 
   const [mid] = await g.add("a fact to reinforce by reading", ["reinforce-key"], {});
-  const diskDepth = async () => JSON.parse(await readFile(join(dir, "graph.json"), "utf-8")).memories[mid].depth;
+  const diskMemory = async () => JSON.parse(await readFile(join(dir, "graph.json"), "utf-8")).memories[mid];
 
-  assert.equal(await diskDepth(), 0, "new memory persists at depth 0");
+  assert.equal((await diskMemory()).depth, 0, "new memory persists at depth 0");
 
-  await g.readMemory(mid, null, null); // +0.05 in RAM
-  await g.readMemory(mid, null, null); // +0.05 in RAM
-  assert.equal(await diskDepth(), 0, "read_memory must NOT rewrite graph.json on every read");
+  await g.readMemory(mid, null, null);
+  await g.readMemory(mid, null, null);
+  assert.equal((await diskMemory()).access_count, 0, "read_memory must NOT rewrite graph.json on every read");
 
   await g.flush();
-  assert.ok((await diskDepth()) >= 0.1 - 1e-9, "flush() persists the accumulated depth");
+  const persisted = await diskMemory();
+  assert.equal(persisted.access_count, 2, "flush() persists accumulated access");
+  assert.equal(persisted.depth, 0, "reads must not deepen memory when flushed");
 });

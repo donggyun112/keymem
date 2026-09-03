@@ -9,7 +9,12 @@ import { embedTextAsync, EMBEDDING_BACKEND, embeddingFingerprint, getThresholdPr
 import { rerankEnabled, rerankScores } from "./reranker.js";
 import { writeVectors, readVectors } from "./vectorStore.js";
 import type { Key, Memory, GraphData } from "./types.js";
-import { parseDecayProfile, type DecayProfile } from "./decay.js";
+import {
+  buildValidityView,
+  parseDecayProfile,
+  type ConfirmationEvidence,
+  type DecayProfile,
+} from "./decay.js";
 import {
   RecallBuffer, decidePromotion,
   AUTOKEY_ENABLED, AUTOKEY_BUFFER_CAPACITY, AUTOKEY_BUFFER_TTL_SECONDS,
@@ -1846,10 +1851,10 @@ export class MemoryGraph {
     });
   }
 
-  // Auto-key self-healing: a memory was just confirmed (read) via viaKeyId. If that key
+  // Auto-key self-healing: a memory was just read via viaKeyId. If that key
   // was a recent WEAK (semantic) recall match, the originating query is candidate
   // vocabulary the key is missing. Accumulate heat; promote at threshold. Runs inside
-  // readMemory's lock; readMemory's unconditional save() persists any mutation.
+  // readMemory's lock; readMemory's deferred dirty path persists any mutation.
   private async _maybeLearnAlias(keyId: string, memoryId: string): Promise<void> {
     const entry = this._recallBuffer.consumeWeakMatch(keyId);
     if (!entry) return;
@@ -1891,7 +1896,7 @@ export class MemoryGraph {
   }
 
   // Negative counterpart of readMemory's reinforcement. Every signal the graph carries is
-  // positive — a read deepens a memory and strengthens the link it traversed, a weak match
+  // positive — a read strengthens the link it traversed, a weak match
   // accrues heat toward becoming an alias — so a wrong surface costs nothing and the only
   // defence against a bad link is refusing to create it (which is why the phrase-bridge gate
   // has to be conservative; see BENCHMARKS.md §6). dismiss supplies the missing sign: it
@@ -1963,7 +1968,6 @@ export class MemoryGraph {
         throw new Error(`Key ${viaKeyId} is not linked to memory ${memoryId}`);
       }
 
-      mem.depth = Math.min(mem.depth + DEPTH_INCREMENT, DEPTH_MAX);
       mem.access_count += 1;
       mem.last_accessed = this._now();
       if (viaKeyId) {
@@ -2026,9 +2030,61 @@ export class MemoryGraph {
           superseded_by: this._supersededBy[memoryId] ?? null,
           related_to: mem.links,
           contradicts: mem.contradicts ?? [],
+          validity: buildValidityView(mem, this._now()),
         },
         keys: connectedKeys,
         via_key_id: viaKeyId ?? null,
+      };
+    });
+  }
+
+  async confirmMemory(
+    memoryId: string,
+    options: {
+      namespace?: string | null;
+      evidence: ConfirmationEvidence;
+      source?: Record<string, unknown> | null;
+      confirmationId?: string | null;
+    }
+  ): Promise<object> {
+    return this._lock.runExclusive(async () => {
+      if (
+        options.evidence !== "user" &&
+        options.evidence !== "authoritative_source" &&
+        options.evidence !== "observation"
+      ) {
+        throw new Error(`Unknown confirmation evidence: ${String(options.evidence)}`);
+      }
+      const mem = this.memories[memoryId];
+      const ns = normalizeNamespace(options.namespace);
+      if (
+        !mem ||
+        this._isExpired(mem) ||
+        memoryId in this._supersededBy ||
+        (ns && mem.namespace !== ns)
+      ) {
+        throw new Error(`Memory ${memoryId} not found`);
+      }
+      if (options.confirmationId && mem.last_confirmation_id === options.confirmationId) {
+        return {
+          memory_id: memoryId,
+          confirmed: false,
+          duplicate: true,
+          validity: buildValidityView(mem, this._now()),
+        };
+      }
+      mem.last_confirmed_at = this._now();
+      mem.confirmation_count += 1;
+      mem.depth = Math.min(mem.depth + DEPTH_INCREMENT, DEPTH_MAX);
+      mem.last_confirmation_evidence = options.evidence;
+      mem.last_confirmation_source = options.source ?? null;
+      mem.last_confirmation_id = options.confirmationId ?? null;
+      await this.save();
+      return {
+        memory_id: memoryId,
+        confirmed: true,
+        duplicate: false,
+        validity: buildValidityView(mem, this._now()),
       };
     });
   }

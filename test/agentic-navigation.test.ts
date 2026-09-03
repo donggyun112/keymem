@@ -80,7 +80,7 @@ test("agent navigates Key → Memory → Key while aliases and hubs stay visible
   assert.equal(memoryRead.suggested_tool, null);
   assert.equal(memoryRead.memory.content, "first memory");
   assert.equal(memoryRead.memory.access_count, 1);
-  assert.equal(memoryRead.memory.depth, 0.05);
+  assert.equal(memoryRead.memory.depth, 0);
 
   const traversedKey = memoryRead.keys.find((key: any) => key.key_id === programming.id);
   assert.equal(traversedKey.traversed_from, true);

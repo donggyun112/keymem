@@ -133,7 +133,7 @@ test("a gated near-miss query (recall []) is recorded and heals after repeated c
   }
 });
 
-test("depth/access_count still increment exactly once per readMemory", async () => {
+test("readMemory increments access count without confirming or deepening memory", async () => {
   const emb = await import("../src/embedding.ts");
   emb.__setTestEmbedder(() => [1, 0]);
   try {
@@ -141,9 +141,13 @@ test("depth/access_count still increment exactly once per readMemory", async () 
     const g = new MemoryGraph();
     const [mid] = await g.add("x", ["kx"]);
     const kid = Object.keys(g.keys).find((k) => g.keys[k].concept === "kx")!;
+    const initial = { ...g.memories[mid] };
     const before = (await g.readMemory(mid, kid)) as { memory: { access_count: number } };
     const after = (await g.readMemory(mid, kid)) as { memory: { access_count: number } };
     assert.equal(after.memory.access_count, before.memory.access_count + 1);
+    assert.equal(after.memory.access_count, initial.access_count + 2);
+    assert.equal(g.memories[mid].depth, initial.depth);
+    assert.equal(g.memories[mid].confirmation_count, initial.confirmation_count);
   } finally {
     emb.__clearTestEmbedder();
   }
