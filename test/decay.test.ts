@@ -43,8 +43,13 @@ test("permanent memories do not decay", () => {
 
 test("freshness rank factor is bounded between 0.2 and 1", () => {
   assert.equal(freshnessRankFactor(1), 1);
-  assert.equal(freshnessRankFactor(0.5), 0.6);
+  assert.ok(Math.abs(freshnessRankFactor(0.5) - 0.6) < Number.EPSILON);
   assert.equal(freshnessRankFactor(0), 0.2);
+});
+
+test("freshness rank factor preserves the contractual formula", () => {
+  const freshness = 0.1234;
+  assert.ok(Math.abs(freshnessRankFactor(freshness) - (0.2 + 0.8 * freshness)) < Number.EPSILON);
 });
 
 test("decay profiles reject unknown tool input", () => {
@@ -58,11 +63,11 @@ test("invalid configured half-lives fall back once per field", () => {
   const values: Record<string, string> = {
     DECAY_TRANSIENT_DAYS: "0",
     DECAY_STANDARD_DAYS: "not-a-number",
-    DECAY_STABLE_DAYS: "730",
+    DECAY_STABLE_DAYS: "1e308",
   };
   const config = loadDecayConfig((key) => values[key], (message) => warnings.push(message));
   assert.equal(config.halfLivesSeconds.transient, DEFAULT_DECAY_CONFIG.halfLivesSeconds.transient);
   assert.equal(config.halfLivesSeconds.standard, DEFAULT_DECAY_CONFIG.halfLivesSeconds.standard);
-  assert.equal(config.halfLivesSeconds.stable, 730 * DAY);
-  assert.equal(warnings.length, 2);
+  assert.equal(config.halfLivesSeconds.stable, DEFAULT_DECAY_CONFIG.halfLivesSeconds.stable);
+  assert.equal(warnings.length, 3);
 });

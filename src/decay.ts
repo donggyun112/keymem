@@ -32,7 +32,7 @@ export function loadDecayConfig(
     const raw = read(suffix);
     if (raw === undefined) return fallback;
     const days = Number(raw);
-    if (Number.isFinite(days) && days > 0) return days * DAY;
+    if (Number.isFinite(days) && days > 0 && Number.isFinite(days * DAY)) return days * DAY;
     warn(`[decay] invalid ${cfgName(suffix)}=${JSON.stringify(raw)}; using ${fallback / DAY} days`);
     return fallback;
   };
@@ -65,7 +65,7 @@ export function computeFreshness(
 }
 
 export function freshnessRankFactor(freshness: number): number {
-  return Math.round((0.2 + 0.8 * Math.max(0, Math.min(1, freshness))) * 1000) / 1000;
+  return 0.2 + 0.8 * Math.max(0, Math.min(1, freshness));
 }
 
 export function buildValidityView(
