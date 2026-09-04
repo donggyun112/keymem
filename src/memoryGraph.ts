@@ -63,8 +63,8 @@ const KEY_HUB_MIN_LINKS = Number.isFinite(_hubMinLinks)
   ? Math.max(2, Math.floor(_hubMinLinks))
   : 3;
 
-// When the cross-encoder reranker is on (KEYMEM_RERANK), re-score this many of the
-// top fused candidates by joint (query, memory) relevance, then keep the requested top_k.
+// The default-on cross-encoder reranker re-scores this many of the top fused candidates by
+// joint (query, memory) relevance, then keeps the requested top_k. KEYMEM_RERANK=false disables it.
 // A wider pool than top_k lets the reranker rescue a right answer the fused score buried.
 const RERANK_POOL = Number(cfgRaw("RERANK_POOL") ?? 30);
 
@@ -1858,10 +1858,11 @@ export class MemoryGraph {
     maxChars = INJECT_MAX_CHARS
   ): Promise<DirectHydrateTop1Decision> {
     if (!topKey) return { status: "no_key", candidate: null };
+    const shouldRerank = rerankEnabled();
     const page = await this.readKey(topKey.key_id, {
       query,
       namespace,
-      limit: 1,
+      limit: shouldRerank ? RERANK_POOL : 1,
     }) as {
       memories: Array<{
         memory_id: string;
@@ -1870,8 +1871,27 @@ export class MemoryGraph {
         score: number;
       }>;
     };
-    const handle = page.memories[0];
+    let handle = page.memories[0];
     if (!handle) return { status: "no_memory", candidate: null };
+    if (shouldRerank && page.memories.length > 1) {
+      const candidates = await this._lock.runExclusive(async () => page.memories.flatMap((candidate) => {
+        const mem = this.memories[candidate.memory_id];
+        if (
+          !mem ||
+          this._isExpired(mem) ||
+          this._supersededBy[candidate.memory_id] ||
+          (namespace && mem.namespace !== namespace)
+        ) return [];
+        return [{ handle: candidate, content: mem.content }];
+      }));
+      const scores = await rerankScores(query, candidates.map((candidate) => candidate.content));
+      if (scores) {
+        handle = candidates
+          .map((candidate, index) => ({ ...candidate, rerankScore: scores[index] }))
+          .sort((a, b) => b.rerankScore - a.rerankScore)[0]?.handle;
+      }
+      if (!handle) return { status: "no_memory", candidate: null };
+    }
     const contentLimit = Number.isFinite(maxChars)
       ? Math.max(256, Math.min(20_000, Math.floor(maxChars)))
       : INJECT_MAX_CHARS;
@@ -2590,7 +2610,7 @@ export class MemoryGraph {
         .filter(([mid]) => minDepth <= 0 || (this.memories[mid]?.depth ?? 0) >= minDepth);
     });
 
-    // ── Phase 2 (UNLOCKED) ── cross-encoder rerank (opt-in). Model inference is the
+    // ── Phase 2 (UNLOCKED) ── default-on cross-encoder rerank. Model inference is the
     // only slow, I/O-like await in recall; running it outside the lock lets other
     // recalls and writes proceed meanwhile. It only READS immutable memory content
     // (all reads happen synchronously before the await) and mutates nothing shared.

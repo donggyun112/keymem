@@ -54,7 +54,7 @@
     "start": "node dist/index.js",
     "daemon": "node dist/daemon.js",
     "shim": "node dist/shim.js",
-    "test": "tsx --test test/*.test.ts",
+    "test": "KEYMEM_RERANK=false tsx --test test/*.test.ts",
     "bench": "tsx bench/run.ts",
     "bench:keynav": "tsx bench/keynav.ts",
     "bench:calibrate": "tsx bench/calibrate.ts"

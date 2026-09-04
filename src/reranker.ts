@@ -1,4 +1,4 @@
-// Cross-encoder reranker (opt-in via KEYMEM_RERANK=true).
+// Cross-encoder reranker (core by default; KEYMEM_RERANK=false disables it).
 //
 // The retriever (recall) finds candidate memories; this re-scores the top of that list by
 // JOINT (query, memory) relevance — fixing cases where the right memory is in the result
@@ -6,8 +6,8 @@
 // needs an LLM and is the caller's job), a reranker is a MODEL, so it runs in-process.
 //
 // Loaded lazily on first use. If the model files or fastembed's native deps are missing,
-// rerank silently no-ops and recall falls back to its fused ranking — so enabling the flag
-// without the model never breaks recall.
+// rerank silently no-ops and recall falls back to its fused ranking, so the default-on
+// precision pass never makes recall unavailable.
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -26,7 +26,7 @@ export function __clearTestReranker(): void {
 }
 
 export function rerankEnabled(): boolean {
-  return _testReranker !== null || cfgRaw("RERANK") === "true";
+  return _testReranker !== null || cfgRaw("RERANK") !== "false";
 }
 
 const MODEL_DIR = cfgRaw("RERANK_MODEL_PATH") ?? defaultModelDir("reranker");

@@ -87,6 +87,45 @@ test("directHydrateTop1 selects the top memory under the supplied key without re
   );
 });
 
+test("directHydrateTop1 lets the cross-encoder choose from the top-key candidate pool", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "keymem-direct-rerank-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  process.env.KEYMEM_DATA_DIR = dir;
+  process.env.EMBEDDING_BACKEND = "local";
+  process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
+
+  const embedding = await import("../src/embedding.ts");
+  embedding.__setTestEmbedder((text: string) => {
+    if (text.includes("QUERY") || text.includes("WRONG")) return [1, 0, 0];
+    if (text.includes("RIGHT")) return [0, 1, 0];
+    return [0, 0, 1];
+  });
+  t.after(() => embedding.__clearTestEmbedder());
+  const reranker = await import("../src/reranker.ts");
+  reranker.__setTestReranker((_query, texts) =>
+    texts.map((text) => text.includes("RIGHT") ? 10 : 0),
+  );
+  t.after(() => reranker.__clearTestReranker());
+
+  const { MemoryGraph } = await import(`../src/memoryGraph.ts?direct-rerank=${moduleId++}`);
+  const graph = new MemoryGraph();
+  await graph.load();
+  await graph.add("WRONG candidate", ["topic"], {});
+  const [rightId] = await graph.add("RIGHT candidate", ["topic"], {});
+  const [topKey] = await graph.searchKeys("topic", 8, null, "QUERY");
+  const page = await graph.readKey(topKey.key_id, { query: "QUERY", limit: 30 }) as {
+    memories: Array<{ memory_id: string }>;
+  };
+  assert.equal(reranker.rerankEnabled(), true);
+  assert.notEqual(page.memories[0].memory_id, rightId);
+
+  const decision = await graph.directHydrateTop1(topKey, "QUERY", null);
+
+  assert.equal(decision.status, "candidate");
+  assert.equal(decision.candidate?.memory.id, rightId);
+  assert.equal(decision.candidate?.memory.content, "RIGHT candidate");
+});
+
 test("recall returns the passive top-1 memory by default and no memory on a miss", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "keymem-direct-recall-mcp-"));
   t.after(() => rm(dir, { recursive: true, force: true }));

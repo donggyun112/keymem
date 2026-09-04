@@ -106,7 +106,7 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-> `bge-m3` (multilingual, recommended) **auto-downloads ~570MB on first run**, then caches. Omit `LOCAL_EMBEDDING_MODEL` for the lighter default (`fast-multilingual-e5-large`). Add `"KEYMEM_RERANK": "true"` to enable cross-encoder reranking (downloads a second model on first use).
+> `bge-m3` (multilingual, recommended) **auto-downloads ~570MB on first run**, then caches. Omit `LOCAL_EMBEDDING_MODEL` for the lighter default (`fast-multilingual-e5-large`). Cross-encoder reranking is part of the core recall path and downloads a second model on first use; set `"KEYMEM_RERANK": "false"` only to disable it.
 
 ### Plugin (recommended — Claude Code & Codex)
 
@@ -230,7 +230,7 @@ pnpm start
 - **Cross-lingual key merging (IDF)** — `파이썬` and `Python` collapse into one canonical cluster instead of fragmenting the key space.
 - **Hebbian link learning** — the path an agent actually traverses gets reinforced ("fire together, wire together"), so useful associations become easier to reach.
 - **Hybrid retrieval** (optional direct mode) — BM25 + dense + Reciprocal Rank Fusion, with depth/confirmation-freshness modulation and configurable multi-hop expansion.
-- **Cross-encoder reranking** (opt-in) — `bge-reranker-v2-m3` re-scores candidates in direct mode.
+- **Cross-encoder reranking** (core default) — `bge-reranker-v2-m3` re-scores the passive Top-1 pool and compatibility direct-mode candidates.
 - **Local-first** — all data in a local JSON graph; no external database. OpenAI or fully-local embeddings (auto-downloaded).
 
 ### Freshness and Depth
@@ -475,20 +475,19 @@ LOCAL_EMBEDDING_MODEL=bge-m3
 
 > First run downloads ~570MB once, then reuses the cache. If `LOCAL_EMBEDDING_MODEL_PATH` already holds the model it is used **as-is with no download** (a partial dir is self-healed — only missing files are fetched). Online-API backends (OpenAI) and fastembed built-ins are unaffected.
 
-**Cross-encoder reranking (optional direct mode):** set `KEYMEM_DIRECT_RECALL=true` and `KEYMEM_RERANK=true` to re-score `recall_memories()` candidates with `bge-reranker-v2-m3`. The default key-navigation flow does not load the reranker. The model (~570MB, quantized) auto-downloads on first use and caches under `~/.keymem/models/reranker`.
+**Cross-encoder reranking (core):** the default `recall()` Top-1 path re-scores the candidate pool under its strongest key with `bge-reranker-v2-m3`. Compatibility `recall_memories()` results are reranked too. The model (~570MB, quantized) auto-downloads on first use and caches under `~/.keymem/models/reranker`.
 
 ```
-KEYMEM_RERANK=true
-KEYMEM_DIRECT_RECALL=true
-# optional: KEYMEM_RERANK_MODEL_PATH=/dir   KEYMEM_RERANK_POOL=30  (candidates re-scored)
+# optional: KEYMEM_RERANK=false              # disable the core reranker
+# optional: KEYMEM_RERANK_MODEL_PATH=/dir    # use an existing model directory
+# optional: KEYMEM_RERANK_POOL=30            # candidates re-scored (default 30)
 ```
 
-> Off by default. If the model cannot load, `recall_memories()` falls back to fused ranking. Query decomposition remains the caller's responsibility.
+> On by default. If the model cannot load, recall falls back to fused ranking. Query decomposition remains the caller's responsibility.
 
 **Reranker not-found gate (`KEYMEM_RERANK_MIN_SCORE`):** in direct compatibility mode, reject the complete `recall_memories()` result when the top cross-encoder logit is below this floor.
 
 ```
-KEYMEM_RERANK=true
 KEYMEM_DIRECT_RECALL=true
 KEYMEM_RERANK_MIN_SCORE=0   # reject when top rerank logit < 0 (bge-reranker-v2-m3 scale)
 ```
@@ -497,7 +496,7 @@ KEYMEM_RERANK_MIN_SCORE=0   # reject when top rerank logit < 0 (bge-reranker-v2-
 
 > **Prefix behavior:** BGE-M3 does **not** use `passage:`/`query:` prefixes — embeddings are passed through as-is. All other local models (e5, BGE-en, MiniLM) continue to use prefixes unchanged.
 
-> **Recommended for multilingual / cross-lingual use: `bge-m3`.** It separates unrelated queries more reliably and performs substantially better than e5 on the project's Korean↔English fixtures. In optional direct mode, bge-m3's absolute `min_score` gate reaches ≈96% on the gate fixture; e5 requires corpus-specific tuning.
+> **Recommended for multilingual / cross-lingual use: `bge-m3`.** It separates unrelated queries more reliably and performs substantially better than e5 on the project's Korean↔English fixtures. For the optional direct-mode not-found gate, bge-m3's absolute `min_score` reaches ≈96% on the gate fixture; e5 requires corpus-specific tuning.
 
 If `OPENAI_API_KEY` is not set and `EMBEDDING_BACKEND` is unset, the server automatically uses the local `fastembed` backend.
 For English-only use or lower local resource usage, set `LOCAL_EMBEDDING_MODEL=fast-bge-base-en-v1.5` or `fast-bge-small-en-v1.5`.
