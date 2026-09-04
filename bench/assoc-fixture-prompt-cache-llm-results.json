@@ -1,0 +1,426 @@
+{
+  "generated_at": "2026-09-04T04:21:34.510Z",
+  "corpus": "/Users/dongkseo/project/super-memory/.worktrees/direct-hydrate-shadow/bench/assoc-fixture.json",
+  "model": "gpt-5.6-sol",
+  "cases": 14,
+  "batch_size": 4,
+  "retrieval": {
+    "pass": true,
+    "failures": [],
+    "top1_identity_rate": 1,
+    "control_reachability": 0.7272727272727273,
+    "candidate_reachability": 0.7272727272727273,
+    "reachability_delta": 0,
+    "payload_reduction": 0.3730736849811487,
+    "task_score_delta": 0,
+    "task_score_delta_ci95": [
+      0,
+      0
+    ]
+  },
+  "quality": {
+    "pass": true,
+    "margin": 0.25,
+    "mean_delta": 0,
+    "ci95": [
+      0,
+      0
+    ],
+    "cases": 14
+  },
+  "provider": {
+    "top8": {
+      "input_tokens": 71489,
+      "cached_input_tokens": 38784,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 616,
+      "reasoning_output_tokens": 0,
+      "requests": 4,
+      "uncached_input_tokens": 32705,
+      "cache_hit_rate": 0.5425170305921191
+    },
+    "compact8": {
+      "input_tokens": 68889,
+      "cached_input_tokens": 23552,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 606,
+      "reasoning_output_tokens": 0,
+      "requests": 4,
+      "uncached_input_tokens": 45337,
+      "cache_hit_rate": 0.34188331954303297
+    },
+    "cache_hit_rate_delta": -0.20063371104908612,
+    "uncached_input_reduction": -0.386240635988381,
+    "paired_warm": {
+      "pairs": 1,
+      "top8": {
+        "input_tokens": 18491,
+        "cached_input_tokens": 12928,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 169,
+        "reasoning_output_tokens": 0,
+        "requests": 1,
+        "uncached_input_tokens": 5563,
+        "cache_hit_rate": 0.6991509382943053
+      },
+      "compact8": {
+        "input_tokens": 17691,
+        "cached_input_tokens": 12928,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 171,
+        "reasoning_output_tokens": 0,
+        "requests": 1,
+        "uncached_input_tokens": 4763,
+        "cache_hit_rate": 0.7307670566954949
+      },
+      "cache_hit_rate_delta": 0.03161611840118961,
+      "uncached_input_reduction": 0.14380729822038474
+    }
+  },
+  "provider_runs": {
+    "top8": [
+      {
+        "input_tokens": 18470,
+        "cached_input_tokens": 12928,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 158,
+        "reasoning_output_tokens": 0
+      },
+      {
+        "input_tokens": 18491,
+        "cached_input_tokens": 12928,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 169,
+        "reasoning_output_tokens": 0
+      },
+      {
+        "input_tokens": 18486,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 208,
+        "reasoning_output_tokens": 0
+      },
+      {
+        "input_tokens": 16042,
+        "cached_input_tokens": 12928,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 81,
+        "reasoning_output_tokens": 0
+      }
+    ],
+    "compact8": [
+      {
+        "input_tokens": 17670,
+        "cached_input_tokens": 10624,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 153,
+        "reasoning_output_tokens": 0
+      },
+      {
+        "input_tokens": 17691,
+        "cached_input_tokens": 12928,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 171,
+        "reasoning_output_tokens": 0
+      },
+      {
+        "input_tokens": 17686,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 201,
+        "reasoning_output_tokens": 0
+      },
+      {
+        "input_tokens": 15842,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 81,
+        "reasoning_output_tokens": 0
+      }
+    ]
+  },
+  "provider_gate": {
+    "pass": true,
+    "failures": [],
+    "input_reduction": 0.04326429073603377,
+    "cache_hit_rate_delta": 0.03161611840118961
+  },
+  "judge_usage": {
+    "input_tokens": 16232,
+    "cached_input_tokens": 0,
+    "cache_write_input_tokens": 0,
+    "output_tokens": 999,
+    "reasoning_output_tokens": 743
+  },
+  "paired_scores": [
+    {
+      "id": "q0-direct",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q1-direct",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q2-direct",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q3-direct",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q4-direct",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q5-assoc2",
+      "top8_score": 1,
+      "compact8_score": 1
+    },
+    {
+      "id": "q6-assoc2",
+      "top8_score": 2,
+      "compact8_score": 2
+    },
+    {
+      "id": "q7-assoc2",
+      "top8_score": 0,
+      "compact8_score": 0
+    },
+    {
+      "id": "q8-assoc2",
+      "top8_score": 2,
+      "compact8_score": 2
+    },
+    {
+      "id": "q9-assoc2",
+      "top8_score": 2,
+      "compact8_score": 2
+    },
+    {
+      "id": "q10-assoc2",
+      "top8_score": 9,
+      "compact8_score": 9
+    },
+    {
+      "id": "q11-notfound",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q12-notfound",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q13-notfound",
+      "top8_score": 12,
+      "compact8_score": 12
+    }
+  ],
+  "answers": {
+    "top8": [
+      {
+        "id": "q0-direct",
+        "selected_key_ids": [
+          "42844102a0f9"
+        ],
+        "answer": "이름은 미나입니다."
+      },
+      {
+        "id": "q1-direct",
+        "selected_key_ids": [
+          "da139ca7b2a2"
+        ],
+        "answer": "미나는 서울 마포구에 살아요."
+      },
+      {
+        "id": "q2-direct",
+        "selected_key_ids": [
+          "8e740aeca5eb"
+        ],
+        "answer": "미나는 매일 오후 아이스 라떼를 마셔요."
+      },
+      {
+        "id": "q3-direct",
+        "selected_key_ids": [
+          "ba0c31038f83"
+        ],
+        "answer": "미나는 핀테크 스타트업에서 백엔드 엔지니어로 일해요."
+      },
+      {
+        "id": "q4-direct",
+        "selected_key_ids": [
+          "a6a8bf647664"
+        ],
+        "answer": "미나는 주말마다 실내 클라이밍을 즐깁니다."
+      },
+      {
+        "id": "q5-assoc2",
+        "selected_key_ids": [
+          "f429eb1343d5"
+        ],
+        "answer": "미나는 보리라는 이름의 강아지를 키웁니다."
+      },
+      {
+        "id": "q6-assoc2",
+        "selected_key_ids": [
+          "a6a8bf647664"
+        ],
+        "answer": "미나는 주말마다 실내 클라이밍을 즐깁니다."
+      },
+      {
+        "id": "q7-assoc2",
+        "selected_key_ids": [
+          "95986618b418"
+        ],
+        "answer": "미나는 매일 오후 아이스 라떼를 마십니다."
+      },
+      {
+        "id": "q8-assoc2",
+        "selected_key_ids": [
+          "ba0c31038f83"
+        ],
+        "answer": "미나는 핀테크 스타트업에서 백엔드 엔지니어로 일한다."
+      },
+      {
+        "id": "q9-assoc2",
+        "selected_key_ids": [
+          "fcf58f63651d"
+        ],
+        "answer": "미나는 지난봄 교토를 방문했고, 오래된 사찰들을 무척 좋아했다."
+      },
+      {
+        "id": "q10-assoc2",
+        "selected_key_ids": [
+          "8210808eb00e",
+          "b053b261dacb"
+        ],
+        "answer": "미나는 오픈소스 메모리 라이브러리인 keymem을 만들고 있으며, 이를 에이전트의 표준 메모리 레이어로 만드는 것이 목표다."
+      },
+      {
+        "id": "q11-notfound",
+        "selected_key_ids": [
+          "42844102a0f9"
+        ],
+        "answer": "미나의 전화번호는 알 수 없다."
+      },
+      {
+        "id": "q12-notfound",
+        "selected_key_ids": [
+          "42844102a0f9"
+        ],
+        "answer": "미나의 형제자매에 관한 정보는 없습니다."
+      },
+      {
+        "id": "q13-notfound",
+        "selected_key_ids": [],
+        "answer": "블록체인 합의 알고리즘에 관한 정보는 없습니다."
+      }
+    ],
+    "compact8": [
+      {
+        "id": "q0-direct",
+        "selected_key_ids": [
+          "42844102a0f9"
+        ],
+        "answer": "이름은 미나입니다."
+      },
+      {
+        "id": "q1-direct",
+        "selected_key_ids": [
+          "da139ca7b2a2"
+        ],
+        "answer": "미나는 서울 마포구에 살아요."
+      },
+      {
+        "id": "q2-direct",
+        "selected_key_ids": [
+          "95986618b418"
+        ],
+        "answer": "미나는 매일 오후 아이스 라떼를 마셔요."
+      },
+      {
+        "id": "q3-direct",
+        "selected_key_ids": [
+          "ba0c31038f83"
+        ],
+        "answer": "미나는 핀테크 스타트업의 백엔드 엔지니어입니다."
+      },
+      {
+        "id": "q4-direct",
+        "selected_key_ids": [
+          "a6a8bf647664"
+        ],
+        "answer": "미나의 취미는 주말마다 즐기는 실내 클라이밍입니다."
+      },
+      {
+        "id": "q5-assoc2",
+        "selected_key_ids": [
+          "f429eb1343d5"
+        ],
+        "answer": "미나는 보리라는 이름의 강아지를 키웁니다."
+      },
+      {
+        "id": "q6-assoc2",
+        "selected_key_ids": [
+          "a6a8bf647664"
+        ],
+        "answer": "미나는 주말마다 실내 클라이밍을 즐깁니다."
+      },
+      {
+        "id": "q7-assoc2",
+        "selected_key_ids": [
+          "95986618b418"
+        ],
+        "answer": "미나는 매일 오후 아이스 라떼를 마십니다."
+      },
+      {
+        "id": "q8-assoc2",
+        "selected_key_ids": [
+          "ba0c31038f83"
+        ],
+        "answer": "미나는 핀테크 스타트업에서 백엔드 엔지니어로 일합니다."
+      },
+      {
+        "id": "q9-assoc2",
+        "selected_key_ids": [
+          "fcf58f63651d"
+        ],
+        "answer": "미나는 지난봄 교토를 여행했고, 오래된 사찰들을 마음에 들어 했습니다."
+      },
+      {
+        "id": "q10-assoc2",
+        "selected_key_ids": [
+          "8210808eb00e",
+          "b053b261dacb"
+        ],
+        "answer": "미나는 오픈소스 메모리 라이브러리인 keymem을 만들고 있으며, 이를 에이전트의 표준 메모리 레이어로 만드는 것이 목표입니다."
+      },
+      {
+        "id": "q11-notfound",
+        "selected_key_ids": [],
+        "answer": "미나의 전화번호는 알 수 없습니다."
+      },
+      {
+        "id": "q12-notfound",
+        "selected_key_ids": [
+          "42844102a0f9"
+        ],
+        "answer": "미나의 형제자매에 관한 정보는 없습니다."
+      },
+      {
+        "id": "q13-notfound",
+        "selected_key_ids": [],
+        "answer": "블록체인 합의 알고리즘에 관한 정보는 없습니다."
+      }
+    ]
+  },
+  "runtime_rollout_allowed": true
+}

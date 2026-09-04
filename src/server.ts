@@ -24,6 +24,7 @@ import {
 import { cfgRaw } from "./env.js";
 import { parseDecayProfile, type ConfirmationEvidence } from "./decay.js";
 import type { DirectHydrateKey } from "./memoryGraph.js";
+import { compactRecallKeys, type RecallKeyCandidate } from "./recallView.js";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 
@@ -624,12 +625,13 @@ export function createMcpServer(): Server {
             typeof a.top_k === "number" ? a.top_k : 8,
             namespace,
             context
-          );
+          ) as RecallKeyCandidate[];
           const decision = await graph.directHydrateTop1(
             results[0] as DirectHydrateKey | undefined,
             context?.trim() || (a.query as string),
             namespace,
           );
+          const responseKeys = compactRecallKeys(results);
           const memories = decision.status === "candidate"
             ? [{
                 ...decision.candidate.memory,
@@ -645,7 +647,7 @@ export function createMcpServer(): Server {
               query: a.query,
               namespace,
               namespace_memory_count: overview.memory_count,
-              keys: results,
+              keys: responseKeys,
               memories,
             };
             return { content: [{ type: "text", text: JSON.stringify(explained) }] };
@@ -656,7 +658,7 @@ export function createMcpServer(): Server {
               status: "no_match",
               query: a.query,
               namespace,
-              keys: results,
+              keys: responseKeys,
               memories,
               nearest_keys: nearest,
               note: "No key cleared the recall gate. If a nearest_keys concept matches the topic, retry recall with that concept (or read_key it directly); otherwise browse_keys(namespace) to see the vocabulary.",
@@ -667,7 +669,7 @@ export function createMcpServer(): Server {
             status: "found",
             query: a.query,
             namespace,
-            keys: results,
+            keys: responseKeys,
             memories,
           };
           return { content: [{ type: "text", text: JSON.stringify(recalled) }] };

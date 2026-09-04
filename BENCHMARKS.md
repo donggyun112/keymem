@@ -384,6 +384,59 @@ scoring bge-m3 with mean pooling instead of CLS drops a pair's related/unrelated
 
 ---
 
+## 9. Prompt-cache payload ablation — keep eight, make them compact
+
+**Question.** Can default recall reduce ranked keys from eight to three without degrading the
+memory available to the consuming LLM? Payload savings alone are not evidence: a relevant key at
+rank 4–8 may be the only route to the correct memory.
+
+**Method.** `bench/prompt-cache-ab.ts` loads a labeled corpus into a real `MemoryGraph`, obtains one
+top-8 key ranking per query, and evaluates three paired views of that exact ranking:
+
+| variant | candidates | representation |
+|---|---:|---|
+| top8 (control) | 8 | current full key objects |
+| top3 | 3 | current full key objects |
+| compact8 | 8 | identity/ranking fields plus `aliases`, `key_type`, `is_hub`, `specificity` |
+
+Task score is objective expected-key reachability on a 0–1 scale, not an LLM judge. The gate
+requires identical Top-1 identity, zero reachability loss, paired task-score CI lower bound ≥ 0,
+and at least 20% payload reduction. Missing paired task scores can never pass. The answer-quality
+gate runs blinded `gpt-5.6-sol` pairs on a 12-point rubric with a 0.25-point non-inferiority margin.
+Provider metrics come directly from Codex JSONL usage. Because cache routing can be intermittent,
+the rollout gate uses only batch pairs where both variants report the same nonzero cached prefix.
+
+### Results (`bge-m3`, 30 labeled queries)
+
+| corpus | top8 reachable | top3 reachable | top3 payload | compact8 reachable | compact8 payload |
+|---|---:|---:|---:|---:|---:|
+| retrieval fixture (16 queries / 12 answerable) | 12/12 | 11/12 | −58.5% | 12/12 | −37.2% |
+| associative fixture (14 queries / 11 answerable) | 8/11 | 4/11 | −62.5% | 8/11 | −37.3% |
+| **combined** | **20/23** | **15/23** | — | **20/23** | — |
+
+The first five-field compact profile failed one repeated LLM run: the “미나 취향” answer selected
+an extra broad key, giving mean delta −0.125 and CI95 [−0.375, 0]. The final navigation-compact
+profile therefore retains `aliases`, `key_type`, `is_hub`, and `specificity`, while removing
+`score_kind`, `cluster_size`, `evidence`, and `suggested_tool`.
+
+| final navigation-compact gate | retrieval fixture | associative fixture | combined |
+|---|---:|---:|---:|
+| LLM-judged cases | 16 | 14 | 30 |
+| score delta / CI95 | 0 / [0, 0] | 0 / [0, 0] | all paired deltas 0 |
+| paired-warm batches | 2 | 1 | 3 |
+| cache hit rate, top8 → compact8 | 72.31% → 74.99% | 69.92% → 73.08% | 71.50% → 74.34% |
+| uncached input reduction | 12.88% | 14.38% | 13.42% |
+
+**Verdict.** **Reject top-3.** It loses five relevant-key routes, a combined −21.7 percentage
+points versus top-8. **Use navigation-compact top-8.** It preserves every candidate and all 30
+paired answer scores, reduces key-list payload about 37%, and improves matched warm-cache hit rate
+by 2.84 percentage points. The runtime keeps `top_k=8` and compacts only the serialized `keys`
+view. Machine-readable results are in `bench/prompt-cache-ab-results.json`,
+`bench/fixture-prompt-cache-llm-results.json`, and
+`bench/assoc-fixture-prompt-cache-llm-results.json`.
+
+---
+
 ## Reproduce
 
 ```bash
@@ -399,6 +452,10 @@ tsx bench/hotpot.ts 100
 tsx bench/hotpot-agentkeys.ts bench/hotpot-agentkeys.json   # §2 validity check w/ blind agent keys
 tsx bench/inject-sweep.ts                                   # §5 inject top-N value/noise sweep
 tsx bench/phrase-bridge.ts                                  # §6 phrase-key bridging gate ablation
+npm run bench:prompt-cache -- bench/fixture.json            # §9 top3 vs compact8
+npm run bench:prompt-cache -- bench/assoc-fixture.json      # §9 associative controls
+npm run bench:prompt-cache-llm -- bench/fixture.json        # §9 LLM + provider gate
+npm run bench:prompt-cache-llm -- bench/assoc-fixture.json  # §9 associative LLM + provider gate
 ```
 
 Sources: [LoCoMo](https://github.com/snap-research/locomo) · [LongMemEval](https://github.com/xiaowu0162/LongMemEval) · [Zep vs Mem0 methodology dispute](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/) · [Mem0 paper](https://arxiv.org/pdf/2504.19413) · [Agentic search replacing RAG (VentureBeat, 2026)](https://venturebeat.com/data/context-architecture-is-replacing-rag-as-agentic-ai-pushes-enterprise-retrieval-to-its-limits)

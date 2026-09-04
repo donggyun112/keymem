@@ -120,6 +120,21 @@ test("recall returns the passive top-1 memory by default and no memory on a miss
   assert.equal(recallResult.namespace, null);
   assert.ok(Array.isArray(recallResult.keys));
   assert.ok(recallResult.keys.length > 0);
+  assert.deepEqual(Object.keys(recallResult.keys[0]), [
+    "key_id",
+    "concept",
+    "aliases",
+    "key_type",
+    "score",
+    "match_type",
+    "memory_count",
+    "is_hub",
+    "specificity",
+  ]);
+  assert.equal("score_kind" in recallResult.keys[0], false);
+  assert.equal("cluster_size" in recallResult.keys[0], false);
+  assert.equal("evidence" in recallResult.keys[0], false);
+  assert.equal("suggested_tool" in recallResult.keys[0], false);
   assert.equal(recallResult.memories.length, 1);
   assert.equal(recallResult.memories[0].id, coffeeId);
   assert.equal(recallResult.memories[0].content, "the user prefers coffee");

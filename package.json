@@ -56,6 +56,8 @@
     "shim": "node dist/shim.js",
     "test": "tsx --test test/*.test.ts",
     "bench": "tsx bench/run.ts",
+    "bench:prompt-cache": "tsx bench/prompt-cache-ab.ts",
+    "bench:prompt-cache-llm": "tsx bench/prompt-cache-llm.ts",
     "bench:keynav": "tsx bench/keynav.ts",
     "bench:calibrate": "tsx bench/calibrate.ts"
   },

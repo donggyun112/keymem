@@ -1,0 +1,472 @@
+{
+  "generated_at": "2026-09-04T04:19:03.168Z",
+  "corpus": "/Users/dongkseo/project/super-memory/.worktrees/direct-hydrate-shadow/bench/fixture.json",
+  "model": "gpt-5.6-sol",
+  "cases": 16,
+  "batch_size": 4,
+  "retrieval": {
+    "pass": true,
+    "failures": [],
+    "top1_identity_rate": 1,
+    "control_reachability": 1,
+    "candidate_reachability": 1,
+    "reachability_delta": 0,
+    "payload_reduction": 0.3724230704556919,
+    "task_score_delta": 0,
+    "task_score_delta_ci95": [
+      0,
+      0
+    ]
+  },
+  "quality": {
+    "pass": true,
+    "margin": 0.25,
+    "mean_delta": 0,
+    "ci95": [
+      0,
+      0
+    ],
+    "cases": 16
+  },
+  "provider": {
+    "top8": {
+      "input_tokens": 72662,
+      "cached_input_tokens": 25856,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 701,
+      "reasoning_output_tokens": 0,
+      "requests": 4,
+      "uncached_input_tokens": 46806,
+      "cache_hit_rate": 0.3558393658308332
+    },
+    "compact8": {
+      "input_tokens": 69837,
+      "cached_input_tokens": 51712,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 702,
+      "reasoning_output_tokens": 0,
+      "requests": 4,
+      "uncached_input_tokens": 18125,
+      "cache_hit_rate": 0.7404670876469494
+    },
+    "cache_hit_rate_delta": 0.38462772181611615,
+    "uncached_input_reduction": 0.6127633209417596,
+    "paired_warm": {
+      "pairs": 2,
+      "top8": {
+        "input_tokens": 35755,
+        "cached_input_tokens": 25856,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 325,
+        "reasoning_output_tokens": 0,
+        "requests": 2,
+        "uncached_input_tokens": 9899,
+        "cache_hit_rate": 0.7231436162774437
+      },
+      "compact8": {
+        "input_tokens": 34480,
+        "cached_input_tokens": 25856,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 321,
+        "reasoning_output_tokens": 0,
+        "requests": 2,
+        "uncached_input_tokens": 8624,
+        "cache_hit_rate": 0.7498839907192575
+      },
+      "cache_hit_rate_delta": 0.026740374441813763,
+      "uncached_input_reduction": 0.1288008889786847
+    }
+  },
+  "provider_runs": {
+    "top8": [
+      {
+        "input_tokens": 18481,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 151,
+        "reasoning_output_tokens": 0
+      },
+      {
+        "input_tokens": 18143,
+        "cached_input_tokens": 12928,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 173,
+        "reasoning_output_tokens": 0
+      },
+      {
+        "input_tokens": 18426,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 225,
+        "reasoning_output_tokens": 0
+      },
+      {
+        "input_tokens": 17612,
+        "cached_input_tokens": 12928,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 152,
+        "reasoning_output_tokens": 0
+      }
+    ],
+    "compact8": [
+      {
+        "input_tokens": 17681,
+        "cached_input_tokens": 12928,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 151,
+        "reasoning_output_tokens": 0
+      },
+      {
+        "input_tokens": 17443,
+        "cached_input_tokens": 12928,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 173,
+        "reasoning_output_tokens": 0
+      },
+      {
+        "input_tokens": 17676,
+        "cached_input_tokens": 12928,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 230,
+        "reasoning_output_tokens": 0
+      },
+      {
+        "input_tokens": 17037,
+        "cached_input_tokens": 12928,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 148,
+        "reasoning_output_tokens": 0
+      }
+    ]
+  },
+  "provider_gate": {
+    "pass": true,
+    "failures": [],
+    "input_reduction": 0.035659348342889086,
+    "cache_hit_rate_delta": 0.026740374441813763
+  },
+  "judge_usage": {
+    "input_tokens": 16360,
+    "cached_input_tokens": 12928,
+    "cache_write_input_tokens": 0,
+    "output_tokens": 478,
+    "reasoning_output_tokens": 175
+  },
+  "paired_scores": [
+    {
+      "id": "q0-single-ko",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q1-single-ko",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q2-single-ko",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q3-single-ko",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q4-xling-en2ko",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q5-xling-en2ko",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q6-xling-ko2en",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q7-xling-ko2en",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q8-single-en",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q9-single-en",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q10-multi-key",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q11-multi-key",
+      "top8_score": 9,
+      "compact8_score": 9
+    },
+    {
+      "id": "q12-notfound",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q13-notfound",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q14-notfound",
+      "top8_score": 12,
+      "compact8_score": 12
+    },
+    {
+      "id": "q15-notfound",
+      "top8_score": 12,
+      "compact8_score": 12
+    }
+  ],
+  "answers": {
+    "top8": [
+      {
+        "id": "q0-single-ko",
+        "selected_key_ids": [
+          "b4a584e4c952"
+        ],
+        "answer": "이름은 미나입니다."
+      },
+      {
+        "id": "q1-single-ko",
+        "selected_key_ids": [
+          "298284118252"
+        ],
+        "answer": "강아지 한 마리를 키우며, 이름은 보리입니다."
+      },
+      {
+        "id": "q2-single-ko",
+        "selected_key_ids": [
+          "686e76a09e88"
+        ],
+        "answer": "매일 아이스 라떼를 마십니다."
+      },
+      {
+        "id": "q3-single-ko",
+        "selected_key_ids": [
+          "d1bac4943915"
+        ],
+        "answer": "주말에 클라이밍을 즐깁니다."
+      },
+      {
+        "id": "q4-xling-en2ko",
+        "selected_key_ids": [
+          "c29b18a69e0b"
+        ],
+        "answer": "Mina lives in Mapo-gu, Seoul."
+      },
+      {
+        "id": "q5-xling-en2ko",
+        "selected_key_ids": [
+          "686e76a09e88"
+        ],
+        "answer": "Mina drinks an iced latte every day."
+      },
+      {
+        "id": "q6-xling-ko2en",
+        "selected_key_ids": [
+          "b191e8fd51b2"
+        ],
+        "answer": "미나는 핀테크 스타트업에서 백엔드 엔지니어로 일해."
+      },
+      {
+        "id": "q7-xling-ko2en",
+        "selected_key_ids": [
+          "0eedf8620ebd"
+        ],
+        "answer": "미나는 주로 Go와 Rust를 사용해."
+      },
+      {
+        "id": "q8-single-en",
+        "selected_key_ids": [
+          "0eedf8620ebd"
+        ],
+        "answer": "Mina primarily uses Go and Rust."
+      },
+      {
+        "id": "q9-single-en",
+        "selected_key_ids": [
+          "efca3506c416"
+        ],
+        "answer": "keymem 프로젝트는 TypeScript로 작성되었습니다."
+      },
+      {
+        "id": "q10-multi-key",
+        "selected_key_ids": [
+          "0fa08330ba08"
+        ],
+        "answer": "미나는 TypeScript로 작성되어 npm에 배포된 오픈소스 메모리 라이브러리 keymem을 만듭니다."
+      },
+      {
+        "id": "q11-multi-key",
+        "selected_key_ids": [
+          "3f82c7689547",
+          "d1bac4943915",
+          "223a74b75c32"
+        ],
+        "answer": "미나는 떡볶이와 파스타를 좋아하고, 매일 아이스 라떼를 마시며 재즈 피아노를 듣습니다. 주말에는 클라이밍을 즐기고 새벽에 집중이 잘 된다고 합니다."
+      },
+      {
+        "id": "q12-notfound",
+        "selected_key_ids": [
+          "39ddbab36047"
+        ],
+        "answer": "Information about what car Mina drives is unavailable."
+      },
+      {
+        "id": "q13-notfound",
+        "selected_key_ids": [
+          "70f4eddd65e5"
+        ],
+        "answer": "미나의 전화번호 정보는 없습니다."
+      },
+      {
+        "id": "q14-notfound",
+        "selected_key_ids": [
+          "abcaf571b5df"
+        ],
+        "answer": "블록체인 합의 알고리즘에 관한 정보는 없습니다."
+      },
+      {
+        "id": "q15-notfound",
+        "selected_key_ids": [
+          "70f4eddd65e5"
+        ],
+        "answer": "미나의 형제자매에 관한 정보는 없습니다."
+      }
+    ],
+    "compact8": [
+      {
+        "id": "q0-single-ko",
+        "selected_key_ids": [
+          "b4a584e4c952"
+        ],
+        "answer": "이름은 미나입니다."
+      },
+      {
+        "id": "q1-single-ko",
+        "selected_key_ids": [
+          "298284118252"
+        ],
+        "answer": "강아지 한 마리를 키우며, 이름은 보리입니다."
+      },
+      {
+        "id": "q2-single-ko",
+        "selected_key_ids": [
+          "686e76a09e88"
+        ],
+        "answer": "매일 아이스 라떼를 마십니다."
+      },
+      {
+        "id": "q3-single-ko",
+        "selected_key_ids": [
+          "d1bac4943915"
+        ],
+        "answer": "주말에 클라이밍을 즐깁니다."
+      },
+      {
+        "id": "q4-xling-en2ko",
+        "selected_key_ids": [
+          "c29b18a69e0b"
+        ],
+        "answer": "Mina lives in Mapo-gu, Seoul."
+      },
+      {
+        "id": "q5-xling-en2ko",
+        "selected_key_ids": [
+          "686e76a09e88"
+        ],
+        "answer": "Mina drinks an iced latte every day."
+      },
+      {
+        "id": "q6-xling-ko2en",
+        "selected_key_ids": [
+          "b191e8fd51b2"
+        ],
+        "answer": "미나는 핀테크 스타트업에서 백엔드 엔지니어로 일해."
+      },
+      {
+        "id": "q7-xling-ko2en",
+        "selected_key_ids": [
+          "0eedf8620ebd"
+        ],
+        "answer": "미나는 주로 Go와 Rust를 사용해."
+      },
+      {
+        "id": "q8-single-en",
+        "selected_key_ids": [
+          "0eedf8620ebd"
+        ],
+        "answer": "Mina primarily uses Go and Rust."
+      },
+      {
+        "id": "q9-single-en",
+        "selected_key_ids": [
+          "efca3506c416"
+        ],
+        "answer": "keymem 프로젝트는 TypeScript로 작성되었으며 npm에 배포됩니다."
+      },
+      {
+        "id": "q10-multi-key",
+        "selected_key_ids": [
+          "0fa08330ba08"
+        ],
+        "answer": "미나는 TypeScript로 작성되어 npm에 배포되는 오픈소스 메모리 라이브러리 keymem을 만든다."
+      },
+      {
+        "id": "q11-multi-key",
+        "selected_key_ids": [
+          "3f82c7689547",
+          "d1bac4943915",
+          "223a74b75c32"
+        ],
+        "answer": "미나는 떡볶이와 파스타를 좋아하고, 매일 아이스 라떼를 마시며 재즈 피아노를 듣는다. 주말에는 클라이밍을 즐기고 새벽에 집중이 잘 된다고 한다."
+      },
+      {
+        "id": "q12-notfound",
+        "selected_key_ids": [
+          "39ddbab36047"
+        ],
+        "answer": "That information is unavailable."
+      },
+      {
+        "id": "q13-notfound",
+        "selected_key_ids": [
+          "70f4eddd65e5"
+        ],
+        "answer": "미나의 전화번호 정보는 없습니다."
+      },
+      {
+        "id": "q14-notfound",
+        "selected_key_ids": [
+          "abcaf571b5df"
+        ],
+        "answer": "블록체인 합의 알고리즘에 관한 정보는 없습니다."
+      },
+      {
+        "id": "q15-notfound",
+        "selected_key_ids": [
+          "70f4eddd65e5"
+        ],
+        "answer": "미나의 형제자매에 관한 정보는 없습니다."
+      }
+    ]
+  },
+  "runtime_rollout_allowed": true
+}

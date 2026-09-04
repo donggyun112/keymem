@@ -1,0 +1,75 @@
+{
+  "date": "2026-09-04",
+  "model": "bge-m3",
+  "thresholds": {
+    "min_payload_reduction": 0.2,
+    "max_reachability_loss": 0,
+    "task_score_margin": 0
+  },
+  "corpora": [
+    {
+      "file": "bench/fixture.json",
+      "queries": 16,
+      "answerable": 12,
+      "top8_reachable": 12,
+      "top3_reachable": 11,
+      "top3_payload_reduction": 0.5853707751807634,
+      "top3_task_score_delta": -0.0625,
+      "top3_task_score_delta_ci95": [-0.1875, 0],
+      "compact8_reachable": 12,
+      "compact8_payload_reduction": 0.3724230704556919,
+      "compact8_task_score_delta": 0,
+      "compact8_task_score_delta_ci95": [0, 0]
+    },
+    {
+      "file": "bench/assoc-fixture.json",
+      "queries": 14,
+      "answerable": 11,
+      "top8_reachable": 8,
+      "top3_reachable": 4,
+      "top3_payload_reduction": 0.6254255280207914,
+      "top3_task_score_delta": -0.2857142857142857,
+      "top3_task_score_delta_ci95": [-0.5, -0.07142857142857142],
+      "compact8_reachable": 8,
+      "compact8_payload_reduction": 0.3730736849811487,
+      "compact8_task_score_delta": 0,
+      "compact8_task_score_delta_ci95": [0, 0]
+    }
+  ],
+  "combined": {
+    "queries": 30,
+    "answerable": 23,
+    "top8_reachable": 20,
+    "top3_reachable": 15,
+    "top3_reachability_delta": -0.21739130434782605,
+    "top3_task_losses": 5,
+    "compact8_reachable": 20,
+    "compact8_task_losses": 0
+  },
+  "verdict": {
+    "top3": "reject",
+    "compact8": "navigation-compact top-8 passes retrieval, paired LLM quality, and paired-warm provider gates; apply serialization-only runtime view"
+  },
+  "llm_judge": {
+    "model": "gpt-5.6-sol",
+    "rubric_points": 12,
+    "non_inferiority_margin": 0.25,
+    "cases": 30,
+    "mean_delta": 0,
+    "all_paired_deltas_zero": true
+  },
+  "paired_warm_provider": {
+    "pairs": 3,
+    "top8_input_tokens": 54246,
+    "top8_cached_input_tokens": 38784,
+    "top8_uncached_input_tokens": 15462,
+    "compact8_input_tokens": 52171,
+    "compact8_cached_input_tokens": 38784,
+    "compact8_uncached_input_tokens": 13387,
+    "top8_cache_hit_rate": 0.7149651587213803,
+    "compact8_cache_hit_rate": 0.7434015065841176,
+    "cache_hit_rate_delta": 0.0284363478627373,
+    "input_token_reduction": 0.0382516683257752,
+    "uncached_input_reduction": 0.13419997413012552
+  }
+}
