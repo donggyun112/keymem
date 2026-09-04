@@ -49,9 +49,9 @@ Key Space (concepts)         Value Space (memories)
 
 Memories live in a **Value Space**, reached through a separate **Key Space** — one memory reachable via many keys, one key leading to many memories.
 
-`recall("Newton")` returns matching key clusters such as `[Newton]` and `[apple]`, **not memory content**. The agent then navigates explicitly: `read_key(apple)` → select the Newton memory → `read_memory(...)` → discover its `[fruit]` key → `read_key(fruit)` → select the strawberry memory.
+`recall("Newton")` returns matching key clusters such as `[Newton]` and `[apple]` plus one passive Top-1 memory under the strongest key. That memory carries `matched_key`, `validity`, and `connected_keys`, so the agent can answer immediately or continue through `read_key(fruit)`.
 
-The default MCP flow is therefore **Key → Memory → Key**. Full memory content enters the model context only when the agent deliberately calls `read_memory()` — so broad concepts never flood the context window.
+The default MCP flow remains **Key → Memory → Key**, but its first Key → Memory hop is completed in one call. Only one memory enters context automatically; later hops remain deliberate.
 
 ---
 
@@ -305,12 +305,12 @@ Prevents key space fragmentation. The same concept across languages or phrasing 
 
 ### Agent-driven Retrieval (default)
 
-The default MCP API keeps Key Space and Value Space separate:
+The default MCP API crosses from Key Space to one Value while preserving explicit graph navigation:
 
-1. `recall(query)` searches canonical keys and aliases. It returns key IDs, concept labels, match scores, linked-memory counts, hub status, and specificity — never memory content.
-2. `read_key(key_id)` returns ranked memory IDs and metadata, never content. Hub keys are paginated with `limit`/`offset` so broad concepts cannot flood context.
-3. `read_memory(memory_id, via_key_id)` returns the full memory, its `validity`, and every connected key cluster. It updates access metadata and reinforces only the traversed `via_key_id` edge; it does not confirm or deepen the memory.
-4. The agent follows any returned key with another `read_key()` call, producing an explicit **Key → Memory → Key** graph walk.
+1. `recall(query, context)` returns ranked key clusters and the Top-1 memory under the strongest key. The raw `context` ranks memories within that key.
+2. The memory is a passive preview with `validity`, `matched_key`, and every `connected_keys[].key_id`. It does not increment access/depth, reinforce links, learn aliases, or confirm freshness.
+3. The agent can use relevant content immediately or follow a connected key with `read_key(key_id)`. Later memories are not automatically injected.
+4. `read_memory(memory_id, via_key_id)` remains the explicit full-read path. It updates access metadata and reinforces only the traversed edge; it does not confirm or deepen the memory.
 
 Semantically merged keys are preserved as aliases on one canonical key cluster (for example `Python` + `파이썬`). The recommended `bge-m3` profile enables conservative short-key merging by default; override or disable it with `KEYMEM_SHORT_KEY_MERGE`. A key linked to at least three active memories is surfaced as a hub with `is_hub`, `memory_count`, and `specificity` metadata rather than being hidden by IDF. Override the hub threshold with `KEYMEM_KEY_HUB_MIN_LINKS`.
 
@@ -409,7 +409,6 @@ KEYMEM_MEMORY_DEDUP=0.99
 | `KEYMEM_AUTOKEY_CONFIRM_FLOOR` | `0.45` | Lowest query↔key cosine eligible for routing-confirmation learning. Repeated selections through the same key can teach a below-gate query alias; this confirms routing only, never content freshness. Lower (e.g. `0.40`) to catch more borderline paraphrases; set `≥` the recall threshold to disable. |
 | `KEYMEM_AUTOKEY_MAX_ALIASES` | `8` | Max learned aliases promoted per key. |
 | `KEYMEM_AUTOKEY_PRUNE_AGE` | `2592000` | Seconds before a never-hit learned alias is pruned by `cleanup_expired` (30 days). |
-| `KEYMEM_DIRECT_HYDRATE_SHADOW` | `false` | Record the top memory under the top recalled key for offline evaluation. The candidate is never returned to the agent and is never reinforced. |
 | `KEYMEM_DECAY_TRANSIENT_DAYS` | `7` | Half-life in days for `transient` memories. Must be finite and greater than zero. |
 | `KEYMEM_DECAY_STANDARD_DAYS` | `90` | Half-life in days for the default `standard` profile. Must be finite and greater than zero. |
 | `KEYMEM_DECAY_STABLE_DAYS` | `365` | Half-life in days for `stable` memories. Must be finite and greater than zero. |
@@ -437,7 +436,7 @@ servers hide the two transcript tools (`list_sessions`, `get_conversation`):
 
 | Tool | Description |
 | --- | --- |
-| `recall(query, top_k?, namespace?, explain?)` | Search Key Space only. Returns canonical keys, aliases, scores, and hub metadata; never memory content. `explain:true` distinguishes `found`, `no_match`, and `empty_namespace`. |
+| `recall(query, top_k?, namespace?, context?, explain?)` | Return ranked keys plus one passive Top-1 memory with `validity`, `matched_key`, and `connected_keys`. `explain:true` also returns namespace counts. |
 | `browse_keys(namespace, hubs_only?, limit?, offset?)` | Browse a namespace's active key vocabulary, hubs first, when recall has no entry hit. |
 | `read_key(key_id, query?, namespace?, limit?, offset?)` | List ranked memory IDs and metadata connected to one key. Pass the original query for relevance ordering; supports pagination for hubs. |
 | `read_memory(memory_id, via_key_id?, namespace?)` | Read full memory content, connected keys, and `validity`. Updates access and, when `via_key_id` is supplied, that traversed edge; never confirms or deepens content. |
@@ -515,21 +514,12 @@ All data is local. No external database required.
 
 ```
 ~/.keymem/
-├── graph.json          # canonical keys, aliases, memories, weighted links
-├── direct-hydrate-shadow.jsonl  # optional local counterfactual recall log
+├── graph.json              # canonical keys, aliases, memories, weighted links
 └── conversations/
     └── {session_id}.jsonl   # optional conversation log (only if a host integration writes one)
 ```
 
 Set `KEYMEM_DATA_DIR` to use a different storage directory.
-
-### Direct-hydrate shadow evaluation
-
-Set `KEYMEM_DIRECT_HYDRATE_SHADOW=true` to evaluate a deterministic Top-1 policy without exposing it to the model. After each normal, non-inject `recall`, keymem takes the already-ranked top key, ranks that key's memory handles using the raw `context` utterance when available, and appends one event to `direct-hydrate-shadow.jsonl`. Calls with no candidate are recorded too, so coverage is measurable.
-
-The public `recall` result is unchanged. Shadow candidates are passive: they do not increment access/depth, reinforce a link, learn an alias, or confirm freshness. Each schema-v1 JSONL event contains `query`, `context`, `namespace`, optional host transcript coordinates, and a `candidate`/`no_key`/`no_memory` decision. Candidate content is capped at 2,000 characters.
-
-The log contains raw prompts and memory previews and can therefore be sensitive. It stays in the configured local data directory; do not publish it. Delete or archive it after the evaluation window.
 
 `get_conversation` / `list_sessions` read the **host coding agent's own transcripts** directly — keymem does not record conversations itself. Locations are auto-detected per OS and honour the agents' env overrides:
 
@@ -563,7 +553,7 @@ and caveats: **[BENCHMARKS.md](BENCHMARKS.md)**.
 ## Limitations
 
 - **Linear scan** — suitable for personal use (~10k memories). FAISS/ChromaDB integration planned for larger scale.
-- **Agentic round trips** — the default `recall → read_key → read_memory` flow is more controllable and context-efficient, but needs more tool calls than one-shot retrieval.
+- **Later-hop round trips** — `recall` completes the first Key → Memory hop, but following a connected key to another memory still requires `read_key → read_memory`.
 - **Hub breadth** — broad keys can connect many memories. `read_key()` paginates hubs; the agent must choose whether to continue paging or follow a more specific adjacent key.
 - **Agent quality matters** — key selection on `remember` affects retrieval quality. System prompt tuning is important.
 - **Cross-lingual content bias** — with multilingual e5, raw content similarity favors same-language memories regardless of meaning. Tag memories with multilingual keys so the key graph (not biased content cosine) carries cross-lingual recall.

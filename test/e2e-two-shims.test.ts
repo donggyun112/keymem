@@ -52,7 +52,9 @@ async function fetchStoredSource(
   query: string
 ): Promise<{ host_session?: string } | undefined> {
   const recallRes = await c.callTool({ name: "recall", arguments: { query } });
-  const keys = JSON.parse(toolText(recallRes)) as Array<{ key_id: string }>;
+  const { keys } = JSON.parse(toolText(recallRes)) as {
+    keys: Array<{ key_id: string }>;
+  };
   assert.ok(keys.length > 0, `recall("${query}") returned at least one key`);
   const keyId = keys[0].key_id;
 

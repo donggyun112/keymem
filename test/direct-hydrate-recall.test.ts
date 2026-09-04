@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,6 +11,7 @@ let moduleId = 0;
 function vec(text: string): number[] {
   const normalized = text.toLowerCase();
   if (normalized.includes("coffee") || normalized.includes("drinks")) return [1, 0, 0];
+  if (normalized.includes("profile")) return [0, 1, 0];
   if (normalized.includes("tea")) return [0.8, 0.6, 0];
   return [0, 0, 1];
 }
@@ -22,7 +23,7 @@ function textResult(result: any): string {
 }
 
 test("directHydrateTop1 selects the top memory under the supplied key without reinforcement", async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), "keymem-direct-shadow-"));
+  const dir = await mkdtemp(join(tmpdir(), "keymem-direct-recall-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   process.env.KEYMEM_DATA_DIR = dir;
   process.env.EMBEDDING_BACKEND = "local";
@@ -32,11 +33,11 @@ test("directHydrateTop1 selects the top memory under the supplied key without re
   embedding.__setTestEmbedder((text: string) => vec(text));
   t.after(() => embedding.__clearTestEmbedder());
 
-  const { MemoryGraph } = await import(`../src/memoryGraph.ts?direct-shadow=${moduleId++}`);
+  const { MemoryGraph } = await import(`../src/memoryGraph.ts?direct-recall=${moduleId++}`);
   const graph = new MemoryGraph();
   await graph.load();
   const [teaId] = await graph.add("the user usually drinks tea", ["drinks"], {});
-  const [coffeeId] = await graph.add("the user prefers coffee", ["drinks"], {});
+  const [coffeeId] = await graph.add("the user prefers coffee", ["drinks", "profile"], {});
 
   const keys = await graph.searchKeys("drinks", 8, null, "the user wants coffee");
   const topKey = keys[0] as { key_id: string; concept: string; score: number; match_type: string };
@@ -60,6 +61,15 @@ test("directHydrateTop1 selects the top memory under the supplied key without re
   assert.equal(decision.candidate?.memory.content, "the user prefers coffee");
   assert.equal(decision.candidate?.memory.evidence, "passive_preview");
   assert.equal(decision.candidate?.memory.reinforced, false);
+  assert.deepEqual(
+    decision.candidate?.memory.connected_keys
+      .map((key) => key.concept)
+      .sort(),
+    ["drinks", "profile"],
+  );
+  assert.ok(
+    decision.candidate?.memory.connected_keys.every((key) => key.key_id.length > 0),
+  );
   assert.deepEqual({
     coffeeAccess: graph.memories[coffeeId].access_count,
     coffeeDepth: graph.memories[coffeeId].depth,
@@ -77,23 +87,21 @@ test("directHydrateTop1 selects the top memory under the supplied key without re
   );
 });
 
-test("shadow mode records candidate and no-key decisions without changing the recall response", async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), "keymem-direct-shadow-mcp-"));
+test("recall returns the passive top-1 memory by default and no memory on a miss", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "keymem-direct-recall-mcp-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   process.env.KEYMEM_DATA_DIR = dir;
-  process.env.KEYMEM_DIRECT_HYDRATE_SHADOW = "true";
   process.env.EMBEDDING_BACKEND = "local";
   process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
-  t.after(() => { delete process.env.KEYMEM_DIRECT_HYDRATE_SHADOW; });
 
   const embedding = await import("../src/embedding.ts");
   embedding.__setTestEmbedder((text: string) => vec(text));
   t.after(() => embedding.__clearTestEmbedder());
 
-  const { createMcpServer, graph } = await import(`../src/server.ts?direct-shadow=${moduleId++}`);
-  const [coffeeId] = await graph.add("the user prefers coffee", ["drinks"], {});
+  const { createMcpServer, graph } = await import(`../src/server.ts?direct-recall=${moduleId++}`);
+  const [coffeeId] = await graph.add("the user prefers coffee", ["drinks", "profile"], {});
   const server = createMcpServer();
-  const client = new Client({ name: "direct-shadow-test", version: "0" });
+  const client = new Client({ name: "direct-recall-test", version: "0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   t.after(async () => { await client.close(); await server.close(); });
   await server.connect(serverTransport);
@@ -107,34 +115,37 @@ test("shadow mode records candidate and no-key decisions without changing the re
     name: "recall",
     arguments: { query: "drinks", context: "the user wants coffee" },
   })));
-  assert.ok(Array.isArray(recallResult));
-  assert.ok(recallResult.length > 0);
-  assert.equal("memory" in recallResult[0], false);
-  assert.equal("candidate" in recallResult[0], false);
-
-  const logPath = join(dir, "direct-hydrate-shadow.jsonl");
-  let events = (await readFile(logPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
-  assert.equal(events.length, 1);
-  assert.equal(events[0].schema_version, 1);
-  assert.equal(events[0].query, "drinks");
-  assert.equal(events[0].context, "the user wants coffee");
-  assert.equal(events[0].namespace, null);
-  assert.equal(events[0].decision.status, "candidate");
-  assert.equal(events[0].decision.candidate.memory.id, coffeeId);
-  assert.equal(events[0].decision.candidate.memory.content, "the user prefers coffee");
-  assert.equal(events[0].decision.candidate.memory.reinforced, false);
+  assert.equal(recallResult.status, "found");
+  assert.equal(recallResult.query, "drinks");
+  assert.equal(recallResult.namespace, null);
+  assert.ok(Array.isArray(recallResult.keys));
+  assert.ok(recallResult.keys.length > 0);
+  assert.equal(recallResult.memories.length, 1);
+  assert.equal(recallResult.memories[0].id, coffeeId);
+  assert.equal(recallResult.memories[0].content, "the user prefers coffee");
+  assert.equal(recallResult.memories[0].evidence, "passive_preview");
+  assert.equal(recallResult.memories[0].reinforced, false);
+  assert.equal(recallResult.memories[0].matched_key.key_id, recallResult.keys[0].key_id);
+  assert.deepEqual(
+    recallResult.memories[0].connected_keys.map((key: { concept: string }) => key.concept).sort(),
+    ["drinks", "profile"],
+  );
+  assert.ok(
+    recallResult.memories[0].connected_keys.every(
+      (key: { key_id: string }) => key.key_id.length > 0,
+    ),
+  );
+  assert.ok(recallResult.memories[0].validity);
   assert.deepEqual({
     access: graph.memories[coffeeId].access_count,
     depth: graph.memories[coffeeId].depth,
   }, before);
 
-  await client.callTool({
+  const miss = JSON.parse(textResult(await client.callTool({
     name: "recall",
     arguments: { query: "astronomy", context: "tell me about distant galaxies" },
-  });
-  events = (await readFile(logPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
-  assert.equal(events.length, 2);
-  assert.equal(events[1].query, "astronomy");
-  assert.equal(events[1].decision.status, "no_key");
-  assert.equal(events[1].decision.candidate, null);
+  })));
+  assert.equal(miss.status, "no_match");
+  assert.deepEqual(miss.keys, []);
+  assert.deepEqual(miss.memories, []);
 });

@@ -380,6 +380,7 @@ export type DirectHydrateTop1Decision =
           link_weight: number;
           content_relevance: number | null;
           score: number;
+          connected_keys: Array<{ concept: string; key_id: string }>;
           content_truncated?: true;
           content_chars?: number;
         };
@@ -854,8 +855,8 @@ export class MemoryGraph {
       .map((kid) => this.keys[kid].concept);
   }
 
-  // Like getKeysForMemory but carries each key's id alongside its concept. Used by inject so a
-  // consumer can jump straight to read_key(key_id) — no concept→id resolution round trip.
+  // Like getKeysForMemory but carries each key's id alongside its concept. Used by passive recall
+  // and inject so a consumer can jump straight to read_key(key_id) without concept resolution.
   getKeyRefsForMemory(memId: string): Array<{ concept: string; key_id: string }> {
     const kids = this._memToKeys[memId];
     if (!kids) return [];
@@ -1897,6 +1898,7 @@ export class MemoryGraph {
         link_weight: handle.link_weight,
         content_relevance: handle.content_relevance,
         score: handle.score,
+        connected_keys: this.getKeyRefsForMemory(handle.memory_id),
       }, contentLimit);
       return {
         status: "candidate" as const,
@@ -2187,11 +2189,9 @@ export class MemoryGraph {
     });
   }
 
-  // Opt-in one-shot "inject" recall: navigation keys PLUS the top-N associatively-expanded
-  // memories, so an agent gets connected-but-dissimilar memories in one call without manual
-  // read_key/read_memory traversal. Trades the deliberate-navigation default's context-efficiency
-  // and precision (the injected set carries lower-precision associative neighbours) for fewer
-  // round trips — hence opt-in, never the default. (TDD stub — replaced below.)
+  // Compatibility multi-memory expansion beyond the core recall Top-1. It returns navigation keys
+  // plus top-N associatively-expanded memories. The wider set carries lower-precision neighbours,
+  // so normal recall stays at one direct memory and exposes connected keys for deliberate hops.
   async recallInject(
     query: string,
     topK = 1,

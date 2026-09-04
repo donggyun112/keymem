@@ -23,10 +23,6 @@ import {
 } from "./nativeTranscripts.js";
 import { cfgRaw } from "./env.js";
 import { parseDecayProfile, type ConfirmationEvidence } from "./decay.js";
-import {
-  directHydrateShadowEnabled,
-  recordDirectHydrateShadow,
-} from "./directHydrateShadow.js";
 import type { DirectHydrateKey } from "./memoryGraph.js";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
@@ -117,7 +113,8 @@ You are a helpful assistant. You have long-term memory — use it silently and p
 ## MANDATORY: First turn behavior
 **Before your very first response, you MUST navigate memory.** Run in parallel:
 - recall("이름", namespace), recall("최근 대화", namespace), recall("관심사", namespace)
-- For useful returned keys: read_key(key_id, query, namespace), then read_memory(memory_id, via_key_id, namespace).
+- Use relevant Top-1 memories returned by recall. Follow their connected keys with read_key when
+  another hop is useful; use read_memory for deeper inspection or explicit path reinforcement.
 No exceptions. Even if recall returns no keys, you must try.
 
 ## MANDATORY: Before ending EVERY turn
@@ -138,16 +135,16 @@ Stats: {stats}
 ## Rules
 
 ### Recall (PROACTIVE — do it often)
-1. **MUST recall before your first reply.** Recall returns key clusters, not memory content. Always pass the active project/context \`namespace\` when one is known.
-2. For relevant keys, complete \`read_key(key_id, query, namespace)\` → \`read_memory(memory_id, via_key_id, namespace)\` before using a fact. The full read records access, reinforces the traversed-edge weight, and may learn aliases; it does not change content depth or confirm that the content is current.
-2a. \`inject:true\` returns an unconfirmed passive preview. Do not use it for core lookups or as a substitute for the full traversal; if a preview matters, inspect it with \`read_memory\`.
+1. **MUST recall before your first reply.** Recall returns ranked key clusters plus one passive Top-1 memory by default. Always pass the active project/context \`namespace\` when one is known.
+2. Use the returned memory directly when it is relevant, applying its \`validity\`. It is unconfirmed and non-reinforcing. Its \`matched_key\` records the incoming edge and \`connected_keys\` are ready-to-use next-hop targets.
+2a. For alternatives or more context, follow a \`connected_keys[].key_id\` with \`read_key\`, then call \`read_memory\` on the selected handle. A full read records access, reinforces only the traversed edge, and may learn aliases; it does not confirm currentness.
 3. Recall again whenever the topic shifts. Never say "I don't know" without navigating first.
 4. **Query = short noun/keyword, NOT a full sentence.**
    - ❌ recall("어디 살아"), recall("뭐 마셔") — 구어체 문장은 매칭 안 됨
    - ✅ recall("거주지"), recall("음료") — 명사 키워드로 검색
    - ✅ recall("이름"), recall("직업"), recall("취향") — specific, multiple
    - 복합 개념이면 키워드 여러 개로 분리: recall("운동"), recall("취미"), recall("건강")
-5. \`read_key\` returns handles and metadata only. Pass the original focused query so hub memories are relevance-ranked, then call \`read_memory\` to inspect content.
+5. \`read_key\` is the deeper-navigation fallback. It returns handles and metadata only. Pass the original focused query so hub memories are relevance-ranked, then call \`read_memory\` to inspect the selected content.
 5a. If a \`read_memory\` result is too compressed for the question and includes a \`trace\` field, call that tool with those exact args (\`get_conversation\`) to read the original conversation it came from. Use only when the summary genuinely lacks the detail you need — otherwise the recalled fact is enough.
 
 ### Remember (PROACTIVE — capture what matters)
@@ -192,10 +189,10 @@ Stats: {stats}
 17. Changed fact → \`correct\`. Junk fact → \`forget\`. Wrong key → \`dismiss\`.
 
 ### Explore
-18. \`recall\` returns matching canonical keys, aliases, and hub metadata only.
-19. \`read_key\` returns memory handles connected to one key. Hubs are paginated.
-20. \`read_memory(memory_id, via_key_id)\` returns full content and its connected keys.
-21. Follow another returned key with \`read_key\` to continue associative exploration.
+18. \`recall\` returns matching canonical keys plus one passive Top-1 memory with \`matched_key\` and \`connected_keys\`.
+19. Follow a returned memory's \`connected_keys\` with \`read_key\` to continue associative exploration without auto-injecting another memory.
+20. \`read_key\` returns memory handles connected to one key. Hubs are paginated.
+21. \`read_memory(memory_id, via_key_id)\` returns full content and reinforces only the traversed path.
 
 ### Delete
 22. \`forget()\` only for completely wrong information. For outdated info, use \`correct()\`.
@@ -220,11 +217,10 @@ with the active namespace to check what is already known about the user, project
 not full sentences (recall("거주지") not recall("어디 살아")), and split multi-fact questions \
 into several recall calls. ALSO pass the raw user utterance as context — keys match keywords, content \
 matches sentences, and the two cues are routed to different paths. On {status:"no_match"}, retry with a \
-nearest_keys concept or browse_keys(namespace) before giving up. recall returns matching keys only; \
-complete read_key(key_id, query, namespace) \
-then read_memory(memory_id, via_key_id, namespace) to read a fact and reinforce the traversed path. \
-Reading records access and may reinforce the key path or learn aliases; it does not change content depth or confirm that the content is current. \
-inject:true is an unconfirmed passive preview, not a substitute for this core lookup flow. \
+nearest_keys concept or browse_keys(namespace) before giving up. recall returns matching keys plus one passive Top-1 memory. \
+Use that memory directly when relevant, applying its validity. Follow connected_keys with read_key for another hop, \
+then read_memory when full inspection or explicit path reinforcement is useful. Passive recall changes no graph state; \
+a full read may reinforce the traversed key path or learn aliases but does not confirm that content is current. \
 \`fresh\` may be used normally. Qualify \`aging\` facts when currentness matters. Never assert a \`stale\` fact as current. Verify it externally or ask the user. \
 Call confirm_memory only after an explicit current user assertion, an authoritative current source, or direct observation. \
 Do not call confirm_memory merely because read_memory returned the content.
@@ -272,7 +268,7 @@ export function createMcpServer(): Server {
       {
         name: "recall",
         description:
-          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. Returns matching key clusters only (not memory content): canonical concept, aliases, key type, match score, linked-memory count, hub status, and specificity. For a core lookup, complete read_key(key_id, original_query, namespace) then read_memory(memory_id, via_key_id, namespace): the full read records access, reinforces the traversed edge, and may learn aliases, but does not change content depth or confirm that the content is current. Use short focused noun queries and decompose multi-fact questions into several recall calls. inject:true is only an unconfirmed passive preview and must not replace that traversal; injected memories are not reinforced. inject_top_k defaults to 1; inject_max_chars defaults to 2000 and marks truncated previews. An empty result returns {status:'no_match', nearest_keys} — the closest stored concepts below the gate; retry with one of those concepts when relevant.",
+          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. By default returns {status, query, namespace, keys, memories}: ranked key clusters plus one passive Top-1 memory selected under the top key. The memory includes validity, matched_key, and connected_keys with ready-to-use key IDs for an optional next hop. Passive recall never reinforces links or changes access, depth, aliases, or confirmation. Use the memory directly when relevant; use read_key then read_memory only for alternatives, full inspection, or explicit path reinforcement. inject:true remains a compatibility path for associative multi-memory expansion and is not required for Top-1 hydration. An empty result includes empty keys/memories and nearest_keys.",
         inputSchema: {
           type: "object",
           properties: {
@@ -287,7 +283,7 @@ export function createMcpServer(): Server {
             explain: {
               type: "boolean",
               description:
-                "When true, return {status, keys, namespace_memory_count}; status distinguishes found, no_match, and empty_namespace.",
+                "When true, also return namespace_memory_count; status distinguishes found, no_match, and empty_namespace.",
             },
             inject: { type: "boolean" },
             inject_top_k: { type: "number" },
@@ -629,26 +625,17 @@ export function createMcpServer(): Server {
             namespace,
             context
           );
-          if (directHydrateShadowEnabled()) {
-            try {
-              const decision = await graph.directHydrateTop1(
-                results[0] as DirectHydrateKey | undefined,
-                context?.trim() || (a.query as string),
-                namespace,
-              );
-              const host = await resolveHostLink(headers);
-              await recordDirectHydrateShadow({
-                query: a.query as string,
-                context,
-                namespace,
-                host,
-                decision,
-              });
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              console.error(`[direct-hydrate-shadow] ${message}`);
-            }
-          }
+          const decision = await graph.directHydrateTop1(
+            results[0] as DirectHydrateKey | undefined,
+            context?.trim() || (a.query as string),
+            namespace,
+          );
+          const memories = decision.status === "candidate"
+            ? [{
+                ...decision.candidate.memory,
+                matched_key: decision.candidate.key,
+              }]
+            : [];
           if (a.explain === true) {
             const overview = await graph.browseKeys(namespace, { limit: 1 }) as {
               memory_count: number;
@@ -659,6 +646,7 @@ export function createMcpServer(): Server {
               namespace,
               namespace_memory_count: overview.memory_count,
               keys: results,
+              memories,
             };
             return { content: [{ type: "text", text: JSON.stringify(explained) }] };
           }
@@ -666,12 +654,23 @@ export function createMcpServer(): Server {
             const nearest = await graph.nearestKeys(a.query as string, namespace, 5);
             const empty = {
               status: "no_match",
+              query: a.query,
+              namespace,
+              keys: results,
+              memories,
               nearest_keys: nearest,
               note: "No key cleared the recall gate. If a nearest_keys concept matches the topic, retry recall with that concept (or read_key it directly); otherwise browse_keys(namespace) to see the vocabulary.",
             };
             return { content: [{ type: "text", text: JSON.stringify(empty) }] };
           }
-          return { content: [{ type: "text", text: JSON.stringify(results, null, 0) }] };
+          const recalled = {
+            status: "found",
+            query: a.query,
+            namespace,
+            keys: results,
+            memories,
+          };
+          return { content: [{ type: "text", text: JSON.stringify(recalled) }] };
         }
 
         case "browse_keys": {
