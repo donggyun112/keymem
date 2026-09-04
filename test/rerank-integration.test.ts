@@ -20,9 +20,35 @@ function vec(t: string): number[] {
   return m[t] ?? [0, 1, 0, 0, 0, 0];
 }
 
+test("reranking is core by default and can be explicitly disabled", async (t) => {
+  const previousPrimary = process.env.KEYMEM_RERANK;
+  const previousLegacy = process.env.SUPER_MEMORY_RERANK;
+  t.after(() => {
+    if (previousPrimary === undefined) delete process.env.KEYMEM_RERANK;
+    else process.env.KEYMEM_RERANK = previousPrimary;
+    if (previousLegacy === undefined) delete process.env.SUPER_MEMORY_RERANK;
+    else process.env.SUPER_MEMORY_RERANK = previousLegacy;
+  });
+  delete process.env.KEYMEM_RERANK;
+  delete process.env.SUPER_MEMORY_RERANK;
+
+  const reranker = await import("../src/reranker.ts");
+  reranker.__clearTestReranker();
+  assert.equal(reranker.rerankEnabled(), true);
+
+  process.env.KEYMEM_RERANK = "false";
+  assert.equal(reranker.rerankEnabled(), false);
+});
+
 test("rerank reorders the gated results by reranker score (set unchanged)", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "sm-rerank-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
+  const previousRerank = process.env.KEYMEM_RERANK;
+  process.env.KEYMEM_RERANK = "false";
+  t.after(() => {
+    if (previousRerank === undefined) delete process.env.KEYMEM_RERANK;
+    else process.env.KEYMEM_RERANK = previousRerank;
+  });
   process.env.SUPER_MEMORY_DATA_DIR = dir;
   process.env.EMBEDDING_BACKEND = "local";
   process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
