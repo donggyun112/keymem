@@ -71,6 +71,15 @@ traversal should reach it. `direct` queries are 1-hop controls; `notfound` must 
 | | MRR | 0.48 | 0.82 | **0.69** |
 | notfound (3) | not-found acc | 1/3 | 1/3 | 1/3 |
 
+**Rerun 2026-09-06 (v0.27.2).** Same fixture, same model. With the now-default cross-encoder
+reranker: direct hit@5 100% / MRR 1.00 for both DIRECT and GRAPH (up from 80% / 0.82 / 0.69);
+assoc2 GRAPH reach@10 67%, hit@5 33%, MRR 0.14. With `KEYMEM_RERANK=false`: direct unchanged
+from June; assoc2 GRAPH reach@10 **50%** (3/6) vs 83% (5/6) in June, hit@5 33%, MRR 0.23. So
+the reranker lifts direct retrieval to ceiling and recovers one assoc2 query, but two assoc2
+queries that the graph reached in June are no longer reached with or without it — a regression
+somewhere in the recall path between v0.14 and v0.27 (candidate suspects: the content-gate and
+phrase-bridge changes). Not yet bisected; n=6, so one query is 17 points.
+
 ### What this proves (and doesn't)
 
 - ✅ **The key-graph reaches connected-but-dissimilar memories that *both* flat baselines cannot.**
@@ -366,6 +375,12 @@ scoring bge-m3 with mean pooling instead of CLS drops a pair's related/unrelated
 | **bge-m3** (current) | 568M / 1024 | **58%** | **75%** | **0.67** | 0/4 | −0.093 |
 | EmbeddingGemma-300m | 300M / 768 | 58% | 75% | 0.67 | 1/4 | −0.095 |
 | granite-embedding-97m-r2 | 97M / 384 | 8% | 33% | 0.19 | 0/4 | — |
+
+**Rerun 2026-09-06 (v0.27.2, `npm run bench`).** The table above is the embedder alone. With
+the cross-encoder reranker that is now on by default, bge-m3 scores **92% / 97% / 0.93**
+(recall@1 / recall@5 / MRR); `KEYMEM_RERANK=false` reproduces 58% / 72% / 0.65 exactly, so the
+whole gain is the reranker and the embedder comparison above still stands. Not-found stays 0/4
+either way — the absolute gate, not ranking, decides that.
 
 ### Verdict
 
