@@ -6,6 +6,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-09-05
+
+### Added
+
+- `recall()`'s passive Top-1 memory now scores each `connected_keys` entry with `relevance`, the
+  cosine of that key concept to the query/context, sorted high→low. A transcript audit of ~80
+  real sessions found zero second hops: agents take the first memory as the answer and stop.
+  In a controlled test the same agents walked the hop 9/9 times once the question made the first
+  memory look incomplete, so the missing piece is a visible cue, not capability. The score is
+  that cue: it turns "should I hop?" into the same kind of decision as the first hop. Concept
+  vectors only; no extra memory content enters context and no extra embedding call is made.
+- `read_key` with a non-id argument (a concept name, a mistyped id) now explains what a
+  `key_id` looks like and points to `recall(query)`; agents were observed passing concept text.
+
+### Changed
+
+- Tool descriptions, server instructions, and the skill now frame `recall` as answering a
+  question: check whether the Top-1 memory answers it, otherwise take one more hop via the
+  highest-relevance connected key, one call per hop, stop when complete.
+
+### Fixed
+
+- Duplicate detection (supersede) and contradiction detection are scoped to the memory's
+  namespace. The same sentence saved under two namespaces used to make the second write
+  silently supersede the first, and near-paraphrases across namespaces were linked as
+  contradictions. Unscoped only when a caller supplies no namespace at all.
+
 ## [0.26.4] - 2026-09-05
 
 ### Fixed

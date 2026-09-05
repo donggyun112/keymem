@@ -380,7 +380,7 @@ export type DirectHydrateTop1Decision =
           link_weight: number;
           content_relevance: number | null;
           score: number;
-          connected_keys: Array<{ concept: string; key_id: string }>;
+          connected_keys: Array<{ concept: string; key_id: string; relevance: number | null }>;
           content_truncated?: true;
           content_chars?: number;
         };
@@ -786,9 +786,23 @@ export class MemoryGraph {
     };
   }
 
-  private _findDuplicate(embedding: number[]): string | null {
+  // Query/context embeddings from the last few searchKeys calls, so the passive Top-1 hop can
+  // score connected_keys against the same cue without paying a second embed (~200 ms on CPU).
+  private _recentQueryEmb = new Map<string, number[]>();
+  private _rememberQueryEmb(text: string, emb: number[]): void {
+    this._recentQueryEmb.delete(text);
+    this._recentQueryEmb.set(text, emb);
+    while (this._recentQueryEmb.size > 8) this._recentQueryEmb.delete(this._recentQueryEmb.keys().next().value!);
+  }
+
+  // Dedup and contradiction detection are scoped to ONE namespace: the same sentence saved
+  // under two projects is two facts, not a duplicate, and a project note must never be
+  // silently superseded by a look-alike from another project. `namespace` null = unscoped
+  // (only used when the caller has no namespace to offer).
+  private _findDuplicate(embedding: number[], namespace: string | null = null): string | null {
     const activeMems = Object.entries(this.memories).filter(
-      ([mid, mem]) => !(mid in this._supersededBy) && !this._isExpired(mem)
+      ([mid, mem]) =>
+        !(mid in this._supersededBy) && !this._isExpired(mem) && (namespace === null || mem.namespace === namespace)
     );
     if (activeMems.length === 0) return null;
     const matrix = activeMems.map(([, mem]) => mem.embedding);
@@ -808,13 +822,18 @@ export class MemoryGraph {
   // sits in the contradiction band [CONTRADICTION_THRESHOLD, MEMORY_DEDUP_THRESHOLD)
   // AND the two share at least one key (same subject). Heuristic — surfaces a
   // signal, does not block or supersede. Returns the conflicting memory id or null.
-  private _findContradiction(embedding: number[], keyIds: Iterable<string>): string | null {
+  private _findContradiction(
+    embedding: number[],
+    keyIds: Iterable<string>,
+    namespace: string | null = null
+  ): string | null {
     const newKeys = new Set(keyIds);
     if (newKeys.size === 0) return null;
     let bestId: string | null = null;
     let bestSim = -Infinity;
     for (const [mid, mem] of Object.entries(this.memories)) {
       if (mid in this._supersededBy || this._isExpired(mem)) continue;
+      if (namespace !== null && mem.namespace !== namespace) continue;
       const sim = cosineSim(embedding, mem.embedding);
       if (!inContradictionBand(sim, CONTRADICTION_THRESHOLD, MEMORY_DEDUP_THRESHOLD)) continue;
       const shares = [...(this._memToKeys[mid]?.keys() ?? [])].some((kid) => newKeys.has(kid));
@@ -1221,7 +1240,8 @@ export class MemoryGraph {
     let resultMid = "";
     await this._lock.runExclusive(async () => {
       this._checkDim(embedding);
-      dupId = this._findDuplicate(embedding);
+      const namespace = normalizeNamespace(options.namespace) ?? "default";
+      dupId = this._findDuplicate(embedding, namespace);
       if (dupId !== null) return; // defer to supersede() once the lock is released
 
       const mid = uid();
@@ -1241,7 +1261,7 @@ export class MemoryGraph {
         depth: 0.0,
         access_count: 0,
         last_accessed: now,
-        namespace: normalizeNamespace(options.namespace) ?? "default",
+        namespace,
         ttl: expiresAt,
         links: validLinks,
         contradicts: [],
@@ -1267,7 +1287,7 @@ export class MemoryGraph {
 
       const linkedKeyIds = [...(this._memToKeys[mid]?.keys() ?? [])];
       this._autoLinkKeys(mid, embedding);
-      const conflictId = this._findContradiction(embedding, linkedKeyIds);
+      const conflictId = this._findContradiction(embedding, linkedKeyIds, namespace);
       if (conflictId && conflictId !== mid) {
         if (!this.memories[mid].contradicts.includes(conflictId)) {
           this.memories[mid].contradicts.push(conflictId);
@@ -1342,7 +1362,7 @@ export class MemoryGraph {
         // The head was superseded and pruned by a concurrent supersede (grandparent cleanup
         // deletes it). Re-resolve against the current live state so concurrent supersedes of
         // the same content collapse into one chain instead of erroring or forking successors.
-        const reResolved = this._findDuplicate(newEmbedding);
+        const reResolved = this._findDuplicate(newEmbedding, normalizeNamespace(options.namespace) ?? null);
         if (reResolved === null) {
           throw new Error(`Memory ${oldId} not found`);
         }
@@ -1476,7 +1496,7 @@ export class MemoryGraph {
       // including auto-linked ones; the band + shared-key requirement still gates
       // false positives. Do NOT reorder to match add().
       const supKeyIds = [...(this._memToKeys[mid]?.keys() ?? [])];
-      const supConflict = this._findContradiction(newEmbedding, supKeyIds);
+      const supConflict = this._findContradiction(newEmbedding, supKeyIds, this.memories[mid].namespace);
       if (supConflict && supConflict !== mid && supConflict !== oldId) {
         if (!this.memories[mid].contradicts.includes(supConflict)) {
           this.memories[mid].contradicts.push(supConflict);
@@ -1513,6 +1533,8 @@ export class MemoryGraph {
     // as both) — each bge-m3 embed costs ~200 ms on CPU, and this halves the calls.
     const cEmb = ctx && ctx !== cleanQuery ? await embedTextAsync(ctx, "query") : qEmb;
     if (ctx) this._checkDim(cEmb);
+    this._rememberQueryEmb(cleanQuery, qEmb);
+    if (ctx) this._rememberQueryEmb(ctx, cEmb);
     topK = Math.max(1, Math.min(20, Math.floor(topK)));
 
     // Content signal: max cosine of a key's member memories to the query. Lets a key whose
@@ -1803,7 +1825,16 @@ export class MemoryGraph {
     keyId: string,
     options: { namespace?: string | null; limit?: number; offset?: number; query?: string | null } = {}
   ): Promise<object> {
-    if (!(keyId in this.keys)) throw new Error(`Key ${keyId} not found`);
+    if (!(keyId in this.keys)) {
+      // Agents sometimes pass the concept text ("agent-sandbox") or a mistyped id here.
+      // Say what a key_id looks like and how to resolve a concept instead of a bare not-found.
+      if (!/^[0-9a-f]{12}$/.test(keyId)) {
+        throw new Error(
+          `Key ${JSON.stringify(keyId)} not found: key_id must be the 12-character id returned by recall/read_memory/browse_keys (e.g. "c1c8e190b364"), not the concept text. To resolve a concept by name, call recall(query) first.`
+        );
+      }
+      throw new Error(`Key ${keyId} not found`);
+    }
     const namespace = options.namespace ?? null;
     const limit = Math.max(1, Math.min(50, Math.floor(options.limit ?? 10)));
     const offset = Math.max(0, Math.floor(options.offset ?? 0));
@@ -1905,6 +1936,12 @@ export class MemoryGraph {
     const contentLimit = Number.isFinite(maxChars)
       ? Math.max(256, Math.min(20_000, Math.floor(maxChars)))
       : INJECT_MAX_CHARS;
+    // Score each connected key against the question cue. Agents take the first memory as the
+    // answer and stop; a per-branch relevance number is the cheap signal that says "this
+    // neighbouring key still holds what the question asked for" — the second hop shown as a
+    // first-hop decision. Concept vectors only; no memory content leaves the store here.
+    const cue = query.trim();
+    const cueEmb = this._recentQueryEmb.get(cue) ?? (cue ? await embedTextAsync(cue, "query") : null);
 
     return this._lock.runExclusive(async () => {
       const mem = this.memories[handle.memory_id];
@@ -1928,7 +1965,14 @@ export class MemoryGraph {
         link_weight: handle.link_weight,
         content_relevance: handle.content_relevance,
         score: handle.score,
-        connected_keys: this.getKeyRefsForMemory(handle.memory_id),
+        connected_keys: this.getKeyRefsForMemory(handle.memory_id)
+          .map((ref) => ({
+            ...ref,
+            relevance: cueEmb
+              ? Math.round(cosineSim(cueEmb, this.keys[ref.key_id].embedding) * 1000) / 1000
+              : null,
+          }))
+          .sort((a, b) => (b.relevance ?? 0) - (a.relevance ?? 0)),
       }, contentLimit);
       return {
         status: "candidate" as const,

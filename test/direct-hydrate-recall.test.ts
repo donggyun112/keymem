@@ -70,6 +70,12 @@ test("directHydrateTop1 selects the top memory under the supplied key without re
   assert.ok(
     decision.candidate?.memory.connected_keys.every((key) => key.key_id.length > 0),
   );
+  // Each connected key is scored against the cue and sorted high→low: "drinks" is the cue's
+  // direction ([1,0,0]), "profile" is orthogonal.
+  assert.deepEqual(
+    decision.candidate?.memory.connected_keys.map((key) => [key.concept, key.relevance]),
+    [["drinks", 1], ["profile", 0]],
+  );
   assert.deepEqual({
     coffeeAccess: graph.memories[coffeeId].access_count,
     coffeeDepth: graph.memories[coffeeId].depth,

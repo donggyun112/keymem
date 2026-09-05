@@ -12,11 +12,13 @@ description: Use when the conversation reveals or needs durable knowledge about 
   utterance. Keys match keywords, content matches sentences — the two cues take different paths.
 - Split multi-fact questions into several `recall` calls.
 - On `{status:"no_match"}`, retry with one of the returned `nearest_keys`, or `browse_keys(namespace)`.
-- A hit returns ranked keys plus one passive Top-1 memory. Use it directly when relevant, apply its
-  `validity`, and use `connected_keys[].key_id` when another graph hop is useful.
-- For alternatives or fuller context: `read_key(key_id, query, namespace)` →
-  `read_memory(memory_id, via_key_id, namespace)`. This explicit traversal may reinforce the
-  selected path and learn aliases.
+- A hit returns ranked keys plus one passive Top-1 memory. `recall` answers a question — check
+  whether that memory actually answers it before moving on.
+- If it only points elsewhere or is partial, take one more hop. `connected_keys` carries a
+  `relevance` score per key (cosine to your query/context, sorted high→low): pick the top one you
+  did not arrive by, call `read_key(key_id, query, namespace)`, then
+  `read_memory(memory_id, via_key_id, namespace)`. One hop = one call; stop when the answer is
+  complete. Explicit traversal may reinforce the selected path and learn aliases.
 - `<keymem-surfaced>` blocks (the UserPromptSubmit hook) are previews. Load the exact record with
   `read_memory`, apply its `validity` status, and ignore it when irrelevant.
 

@@ -137,8 +137,8 @@ Stats: {stats}
 
 ### Recall (PROACTIVE — do it often)
 1. **MUST recall before your first reply.** Recall returns ranked key clusters plus one passive Top-1 memory by default. Always pass the active project/context \`namespace\` when one is known.
-2. Use the returned memory directly when it is relevant, applying its \`validity\`. It is unconfirmed and non-reinforcing. Its \`matched_key\` records the incoming edge and \`connected_keys\` are ready-to-use next-hop targets.
-2a. For alternatives or more context, follow a \`connected_keys[].key_id\` with \`read_key\`, then call \`read_memory\` on the selected handle. A full read records access, reinforces only the traversed edge, and may learn aliases; it does not confirm currentness.
+2. \`recall\` answers a question: check whether the returned memory actually answers it. Use it directly when it does, applying its \`validity\`. It is unconfirmed and non-reinforcing. Its \`matched_key\` records the incoming edge; \`connected_keys\` are next-hop targets, each with a \`relevance\` score (cosine to your query/context, sorted high→low).
+2a. If the memory only points elsewhere or is partial, take one more hop: pick the highest-relevance \`connected_keys\` entry you did not arrive by, call \`read_key(key_id, query, namespace)\`, then \`read_memory\` on the best handle. One hop = one call; stop when the answer is complete. A full read records access, reinforces only the traversed edge, and may learn aliases; it does not confirm currentness.
 3. Recall again whenever the topic shifts. Never say "I don't know" without navigating first.
 4. **Query = short noun/keyword, NOT a full sentence.**
    - ❌ recall("어디 살아"), recall("뭐 마셔") — 구어체 문장은 매칭 안 됨
@@ -219,8 +219,9 @@ not full sentences (recall("거주지") not recall("어디 살아")), and split 
 into several recall calls. ALSO pass the raw user utterance as context — keys match keywords, content \
 matches sentences, and the two cues are routed to different paths. On {status:"no_match"}, retry with a \
 nearest_keys concept or browse_keys(namespace) before giving up. recall returns matching keys plus one passive Top-1 memory. \
-Use that memory directly when relevant, applying its validity. Follow connected_keys with read_key for another hop, \
-then read_memory when full inspection or explicit path reinforcement is useful. Passive recall changes no graph state; \
+recall answers a question, so check whether that memory actually answers it. If it only points elsewhere or is partial, \
+take one more hop: pick the connected_keys entry with the highest relevance that you did not arrive by, call read_key(key_id, query, namespace), \
+then read_memory on the best handle. One hop = one call; stop as soon as the answer is complete. Use the memory directly when it already answers, applying its validity. Passive recall changes no graph state; \
 a full read may reinforce the traversed key path or learn aliases but does not confirm that content is current. \
 \`fresh\` may be used normally. Qualify \`aging\` facts when currentness matters. Never assert a \`stale\` fact as current. Verify it externally or ask the user. \
 Call confirm_memory only after an explicit current user assertion, an authoritative current source, or direct observation. \
@@ -269,7 +270,7 @@ export function createMcpServer(): Server {
       {
         name: "recall",
         description:
-          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. By default returns {status, query, namespace, keys, memories}: ranked key clusters plus one passive Top-1 memory selected under the top key. The memory includes validity, matched_key, and connected_keys with ready-to-use key IDs for an optional next hop. Passive recall never reinforces links or changes access, depth, aliases, or confirmation. Use the memory directly when relevant; use read_key then read_memory only for alternatives, full inspection, or explicit path reinforcement. inject:true remains a compatibility path for associative multi-memory expansion and is not required for Top-1 hydration. An empty result includes empty keys/memories and nearest_keys.",
+          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. By default returns {status, query, namespace, keys, memories}: ranked key clusters plus one passive Top-1 memory selected under the top key. The memory includes validity, matched_key, and connected_keys, each with a relevance score (cosine of that key to your query/context, sorted high→low). recall answers a question: check whether the Top-1 memory actually answers it. If it only points elsewhere, is partial, or the highest-relevance connected key is not the one you arrived by, take one more hop — read_key(that key_id, query, namespace) then read_memory — and stop as soon as the answer is complete. Each hop is one call; the store never fans out for you. Passive recall never reinforces links or changes access, depth, aliases, or confirmation. inject:true remains a compatibility path for associative multi-memory expansion and is not required for Top-1 hydration. An empty result includes empty keys/memories and nearest_keys.",
         inputSchema: {
           type: "object",
           properties: {
