@@ -89,9 +89,26 @@ reach@10 **100%** (6/6), hit@5 33%, MRR 0.24, with direct unchanged.
 
 This is a genuine trade-off, not a bug: the short gate was calibrated on the live store because
 0.55 rejected 8 of 12 related keyword→memory pairs (§ embedding.ts profile comment). It buys
-first-hop recall on short keywords and pays for it in associative reach. Options, not yet
-chosen: rank hop-2 associations above sub-0.55 direct admits; or apply the short gate to the
-not-found decision only and keep 0.55 for ranking eligibility. n=6, so one query is 17 points.
+first-hop recall on short keywords and pays for it in associative reach.
+
+**Resolved in v0.27.3.** Two candidate fixes were tested against three yardsticks (this bench,
+`npm run bench`, and `bench/real-eval.ts` on a copy of the live store, all reranker-off):
+
+| variant | assoc2 GRAPH reach@10 | real-eval hit@5 | search bench |
+|---|---:|---:|---|
+| v0.27.2 (short gate as-is) | 50% | 11/12 | 58 / 72 / 0.65 |
+| weak admits only when nothing clears 0.55 | 100% | **10/12** | unchanged |
+| weak-only admits kept, fused score ×0.1 (shipped) | **100%** | 11/12 | unchanged |
+
+The first variant lost the real-store query the short gate was built for (`임베딩 모델`: a
+strong-band memory exists, so the weak-band target was never admitted). The shipped variant
+keeps every admit and only demotes weak-only ones below graph associations. One subtlety: the
+weak-only decision must be taken before traversal, or two weak admits sharing a key tag each
+other "(via)" and escape the demotion (`lang` ↔ `job` via `백엔드` held reach at 83% until
+fixed). With the default reranker on, assoc2 stays at 67% — the cross-encoder re-sorts the
+whole pool by direct query relevance, which ranks associations low by construction; that is
+the compatibility `expand` path, not the Key → Memory → Key navigation the agent uses.
+n=6, so one query is 17 points.
 
 ### What this proves (and doesn't)
 

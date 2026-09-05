@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.27.3] - 2026-09-06
+
+### Fixed
+
+- Associative reach regression (bench `assoc2` GRAPH reach@10 83% → 50%, bisected to v0.19.0's
+  short-query content gate). Memories admitted *only* by the lower short-query gate
+  (content cosine 0.46–0.55, no key hit, no lexical hit) used to enter RRF fusion as full
+  hop-1 candidates and, because fusion ranks every hop-1 candidate above every hop-2
+  association, each one pushed a graph association out of the top-K. They are still admitted
+  (the short gate exists because real keyword queries have their only related memory in that
+  band) but their fused score is scaled by 0.1 so they rank after graph associations. The
+  weak-only decision is taken before traversal so two weak admits sharing a key cannot tag each
+  other as graph-backed. Verified: assoc2 GRAPH reach@10 100% (reranker off), real-store eval
+  11/12 unchanged, search-quality bench unchanged, 251 tests. With the default reranker on,
+  assoc2 stays at 67%: the cross-encoder re-sorts the whole pool by direct relevance, which by
+  design ranks associations low — that path is the compatibility `expand` mode, not the
+  Key → Memory → Key navigation the agent uses.
+
 ## [0.27.2] - 2026-09-05
 
 ### Changed

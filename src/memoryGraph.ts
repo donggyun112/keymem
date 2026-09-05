@@ -40,6 +40,8 @@ const CONTENT_RECALL_THRESHOLD = _THRESHOLDS.contentRecall;
 // Calibrated lower content gate for SHORT keyword queries (see embedding.ts profile
 // comment for the measured bands). 0/unset in a profile → falls back to contentRecall.
 const CONTENT_RECALL_SHORT = _THRESHOLDS.contentRecallShort || _THRESHOLDS.contentRecall;
+// Fused-score factor for memories admitted ONLY by the short-query content gate (see recall()).
+const WEAK_ADMIT_FACTOR = 0.1;
 const MIN_SCORE_THRESHOLD = _THRESHOLDS.minScore;
 const GATE_Z_THRESHOLD = _THRESHOLDS.gateZ;
 const GATE_MIN_POPULATION = 8;
@@ -2503,25 +2505,35 @@ export class MemoryGraph {
       // ── Dense Path B: Content batch direct matching ──
       // max-sim: a multi-fact memory is reachable via its best sentence, not only
       // its (diluted) whole-content centroid.
+      const weakContentOnly = new Set<string>(); // admitted only by the short-query gate
       const memIds = Object.keys(this.memories);
       if (memIds.length > 0) {
         const contentSims = this._bestContentSims(cEmb);
+        const admitContent = (mid: string, cSim: number) => {
+          bumpRaw(mid, cSim);
+          const contentScore = cSim * 0.8;
+          if (mid in denseScores) {
+            denseScores[mid] += contentScore * 0.2;
+          } else {
+            denseScores[mid] = contentScore;
+          }
+          if (!memMatchedKeys[mid]) memMatchedKeys[mid] = [];
+          memMatchedKeys[mid].push("(content)");
+          if (!(mid in memHop)) memHop[mid] = 1;
+        };
+        // Weak admits — content cosine between the calibrated short-query gate and the full
+        // gate — stay admitted (the short gate exists because real keyword queries have their
+        // only related memory at 0.46–0.55), but they are tagged: RRF fusion would otherwise
+        // rank every one of them above every hop-2 association, and each weak admit pushes one
+        // association out of the top-K (the assoc2 reach regression bisected to af884a0).
         for (let i = 0; i < memIds.length; i++) {
           const mid = memIds[i];
           if (skip(mid)) continue;
           const cSim = contentSims.get(mid) ?? 0;
           allContentSims.push(cSim);
           if (cSim >= contentGate) {
-            bumpRaw(mid, cSim);
-            const contentScore = cSim * 0.8;
-            if (mid in denseScores) {
-              denseScores[mid] += contentScore * 0.2;
-            } else {
-              denseScores[mid] = contentScore;
-            }
-            if (!memMatchedKeys[mid]) memMatchedKeys[mid] = [];
-            memMatchedKeys[mid].push("(content)");
-            if (!(mid in memHop)) memHop[mid] = 1;
+            if (cSim < CONTENT_RECALL_THRESHOLD && !(mid in denseScores)) weakContentOnly.add(mid);
+            admitContent(mid, cSim);
           }
         }
       }
@@ -2569,6 +2581,12 @@ export class MemoryGraph {
           memScores[memId] = (memScores[memId] ?? 0) + bonus;
         }
       }
+
+      // Snapshot weak-only status BEFORE traversal: expansion tags neighbours "(via)", and two
+      // weak admits that share a key would otherwise launder each other into "graph-backed".
+      const weakOnly = new Set<string>(
+        [...weakContentOnly].filter((mid) => (memMatchedKeys[mid] ?? []).every((v) => v === "(content)"))
+      );
 
       // ── Apply depth/freshness modulation to fused scores ──
       for (const mid of Object.keys(memScores)) {
@@ -2649,6 +2667,11 @@ export class MemoryGraph {
           if ((memHop[mid] ?? 1) >= 2) memScores[mid] *= 0.7;
         }
       }
+      // Weak-only admits rank after graph associations: a memory that merely sits in the
+      // 0.46–0.55 content band, with no key hit and no lexical hit, is a guess; a hop-2
+      // association is graph-backed. The factor drops an RRF-scale score (~0.013) below the
+      // HOP_DECAY-scale association scores (~0.002–0.003) while keeping the memory returned.
+      for (const mid of weakOnly) memScores[mid] *= WEAK_ADMIT_FACTOR;
 
       const sorted = Object.entries(memScores).sort(([, a], [, b]) => b - a);
       // Absolute score gate (anchor-based): the query counts as "found" only if at
