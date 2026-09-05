@@ -6,8 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-09-05
+
+### Added
+
+- `recall()` now completes the first Key → Memory hop in one call: it returns the ranked key
+  clusters plus one passive Top-1 memory under the strongest key, carrying `matched_key`,
+  `validity`, and `connected_keys`. The new optional `context` argument (the raw user utterance)
+  ranks memories within that key. The preview does not touch access/depth, links, aliases, or
+  freshness; `read_key` → `read_memory` remains the explicit traversal path.
+- Prompt-cache A/B benchmarks (`bench:prompt-cache`, `bench:prompt-cache-llm`) with results
+  recorded in `BENCHMARKS.md`.
+
 ### Changed
 
+- `recall()` key payloads are compacted to a fixed field set so the response stays stable and
+  prompt-cache friendly across calls.
 - Cross-encoder reranking is now a core default for both the passive Top-1 returned by `recall()`
   and compatibility `recall_memories()` results. Set `KEYMEM_RERANK=false` to disable it; model
   load failures continue to fall back to fused ranking.
