@@ -126,6 +126,40 @@ test("directHydrateTop1 lets the cross-encoder choose from the top-key candidate
   assert.equal(decision.candidate?.memory.content, "RIGHT candidate");
 });
 
+test("directHydrateTop1 lets dismiss() demote an equally-reranked candidate", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "keymem-direct-dismiss-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  process.env.KEYMEM_DATA_DIR = dir;
+  process.env.EMBEDDING_BACKEND = "local";
+  process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
+
+  const embedding = await import("../src/embedding.ts");
+  embedding.__setTestEmbedder((text: string) => {
+    if (text.includes("QUERY") || text.includes("alpha")) return [1, 0, 0];
+    if (text.includes("beta")) return [0.9, 0.436, 0]; // close to alpha, but below the dedup gate
+    return [0, 0, 1];
+  });
+  t.after(() => embedding.__clearTestEmbedder());
+  const reranker = await import("../src/reranker.ts");
+  // The cross-encoder slightly prefers alpha; only the weakened link can flip that.
+  reranker.__setTestReranker((_query, texts) => texts.map((text) => text.includes("alpha") ? 3.1 : 3));
+  t.after(() => reranker.__clearTestReranker());
+
+  const { MemoryGraph } = await import(`../src/memoryGraph.ts?direct-dismiss=${moduleId++}`);
+  const graph = new MemoryGraph();
+  await graph.load();
+  const [aId] = await graph.add("CAND alpha", ["topic"], {});
+  const [bId] = await graph.add("CAND beta", ["topic"], {});
+  const [topKey] = await graph.searchKeys("topic", 8, null, "QUERY");
+
+  const first = await graph.directHydrateTop1(topKey, "QUERY", null);
+  assert.equal(first.candidate?.memory.id, aId);
+
+  await graph.dismiss(aId, topKey.key_id);
+  const second = await graph.directHydrateTop1(topKey, "QUERY", null);
+  assert.equal(second.candidate?.memory.id, bId, "dismissed pairing must lose the passive Top-1");
+});
+
 test("recall returns the passive top-1 memory by default and no memory on a miss", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "keymem-direct-recall-mcp-"));
   t.after(() => rm(dir, { recursive: true, force: true }));

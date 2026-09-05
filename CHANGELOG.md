@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.26.4] - 2026-09-05
+
+### Fixed
+
+- When `recall()` is given a `context` utterance, the content path now uses the sentence
+  content gate instead of the lower short-keyword gate. The short gate is calibrated for
+  keyword↔sentence cosines, so a sentence context could pull an unrelated key through it and
+  auto-inject an irrelevant Top-1 memory. Applies to both the key search and the compatibility
+  `recall_memories()` path.
+- `dismiss()` now affects the passive Top-1: the cross-encoder score is squashed to (0,1) and
+  weighted by the key→memory link, so a dismissed pairing can lose the preview slot to a sibling.
+
 ## [0.26.3] - 2026-09-05
 
 ### Fixed

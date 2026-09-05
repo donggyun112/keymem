@@ -1525,7 +1525,11 @@ export class MemoryGraph {
     return this._lock.runExclusive(async () => {
       const queryLower = cleanQuery.toLowerCase();
       const isShortQuery = isShortConcept(cleanQuery);
-      const contentGate = this._contentGateFor(cleanQuery);
+      // The content signal is driven by the context utterance when one is given, and
+      // sentence↔sentence cosines run higher than keyword↔sentence — so a context always
+      // takes the sentence gate; the calibrated short gate is for bare keyword queries only.
+      // (Korean utterances are often ≤15 chars, so isShortConcept must not decide this.)
+      const contentGate = ctx ? CONTENT_RECALL_THRESHOLD : this._contentGateFor(cleanQuery);
       const nearMiss = new Map<string, number>(); // gate-dropped keys in the confirmation band
       const keyIds = Object.keys(this.keys);
       const sims = batchCosineSim(qEmb, keyIds.map((kid) => this.keys[kid].embedding));
@@ -1886,8 +1890,14 @@ export class MemoryGraph {
       }));
       const scores = await rerankScores(query, candidates.map((candidate) => candidate.content));
       if (scores) {
+        // Cross-encoder logits are unbounded, so squash to (0,1) before weighting by the
+        // key→memory link — otherwise dismiss() (which lowers link_weight) could never
+        // change which memory the passive Top-1 picks.
         handle = candidates
-          .map((candidate, index) => ({ ...candidate, rerankScore: scores[index] }))
+          .map((candidate, index) => ({
+            ...candidate,
+            rerankScore: (1 / (1 + Math.exp(-scores[index]))) * candidate.handle.link_weight,
+          }))
           .sort((a, b) => b.rerankScore - a.rerankScore)[0]?.handle;
       }
       if (!handle) return { status: "no_memory", candidate: null };
@@ -2312,7 +2322,9 @@ export class MemoryGraph {
     // Short keyword queries get the calibrated lower content gate; when the caller left
     // minScore at the profile default, lower the absolute anchor gate alongside so it
     // does not silently re-drop what the content gate admitted. Explicit overrides win.
-    const contentGate = this._contentGateFor(query);
+    // A context utterance drives the content path with sentence-shaped cosines, so it
+    // always takes the sentence gate (same rule as searchKeys).
+    const contentGate = contextText?.trim() ? CONTENT_RECALL_THRESHOLD : this._contentGateFor(query);
     if (contentGate < CONTENT_RECALL_THRESHOLD && minScore === MIN_SCORE_THRESHOLD) {
       minScore = Math.min(minScore, contentGate);
     }
