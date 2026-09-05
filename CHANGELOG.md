@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.26.3] - 2026-09-05
+
+### Fixed
+
+- The default `recall()` path now honours `inject_max_chars` for the passive Top-1 preview; it was
+  only applied on the `inject:true` path, so long memories were returned untruncated.
+
 ## [0.26.2] - 2026-09-05
 
 ### Fixed

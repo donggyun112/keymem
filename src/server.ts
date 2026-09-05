@@ -630,6 +630,7 @@ export function createMcpServer(): Server {
             results[0] as DirectHydrateKey | undefined,
             context?.trim() || (a.query as string),
             namespace,
+            typeof a.inject_max_chars === "number" ? a.inject_max_chars : undefined,
           );
           const responseKeys = compactRecallKeys(results);
           const memories = decision.status === "candidate"

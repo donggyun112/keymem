@@ -202,4 +202,15 @@ test("recall returns the passive top-1 memory by default and no memory on a miss
   assert.equal(miss.status, "no_match");
   assert.deepEqual(miss.keys, []);
   assert.deepEqual(miss.memories, []);
+
+  // The test embedder is lexical, so add the long memory only after the miss check above.
+  const [novelId] = await graph.add(`the user is writing a novel. ${"plot detail. ".repeat(40)}`, ["novel"], {});
+  const clipped = JSON.parse(textResult(await client.callTool({
+    name: "recall",
+    arguments: { query: "novel", context: "what is the user writing", inject_max_chars: 256 },
+  })));
+  assert.equal(clipped.memories[0].id, novelId);
+  assert.equal(clipped.memories[0].content_truncated, true);
+  assert.ok(clipped.memories[0].content.length <= 256, "preview must respect inject_max_chars");
+  assert.ok(clipped.memories[0].content.endsWith("[truncated; use read_memory for full content]"));
 });
