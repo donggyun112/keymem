@@ -6,7 +6,7 @@
 
 **The associative memory layer for LLM agents — recall by association, not just similarity.**
 
-![keymem demo — asking about the party cake surfaces Mina's peanut allergy via a shared key](docs/keymem-demo.gif)
+![keymem chain recall — one recall() per hop walks Key → Memory → Key; skipped branches stay one call away](docs/keymem-chain-recall.gif)
 
 Most agent memory is a vector store. It surfaces what *sounds like* your query — and misses everything your query is *connected to*.
 
@@ -52,6 +52,8 @@ Memories live in a **Value Space**, reached through a separate **Key Space** —
 `recall("Newton")` returns matching key clusters such as `[Newton]` and `[apple]` plus one passive Top-1 memory under the strongest key. That memory carries `matched_key`, `validity`, and `connected_keys`, so the agent can answer immediately or continue through `read_key(fruit)`.
 
 The default MCP flow remains **Key → Memory → Key**, but its first Key → Memory hop is completed in one call. Only one memory enters context automatically; later hops remain deliberate.
+
+The animation at the top shows this on a real store: three `recall()` calls walk from a profile key to a verification philosophy, loading three memories (~2.4k tokens). The branches the agent skipped are still one call away, and auto-expanding the same 12-memory hub would have cost ~8k tokens. The graph knows the roads; the agent decides the steps. Source: [`docs/demo/chain-walk.html`](docs/demo/chain-walk.html).
 
 ---
 
