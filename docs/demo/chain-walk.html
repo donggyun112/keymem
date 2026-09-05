@@ -1,0 +1,259 @@
+<title>keymem Chain Recall</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --ground: #10151c;
+    --panel: #161d26;
+    --line: #27313d;
+    --text: #e7eaef;
+    --muted: #8b95a4;
+    --key: #5fd3c4;
+    --key-dim: rgba(95, 211, 196, 0.14);
+    --mem: #f2a86b;
+    --warn: #c98a8a;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--text);
+    font-family: var(--sans); font-size: 14px; line-height: 1.5;
+    min-height: 100vh; display: grid; place-items: center; padding: 24px;
+  }
+  .stage {
+    width: min(1280px, 100%); aspect-ratio: 16 / 9; background: var(--ground);
+    display: grid; grid-template-columns: 1.55fr 1fr; grid-template-rows: auto 1fr auto;
+    gap: 0 24px; padding: 28px 32px 22px; border: 1px solid var(--line); border-radius: 6px;
+    position: relative; overflow: hidden;
+  }
+  header { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+  header h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+  header h1 span { color: var(--muted); font-weight: 400; margin-left: 10px; }
+  .legend { display: flex; gap: 18px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .legend .k i { background: var(--key); } .legend .m i { background: var(--mem); }
+  .legend .g i { background: transparent; border: 1px dashed var(--muted); }
+
+  /* graph: edges live in one layer under a separate node layer, so a line never covers a node */
+  .graph { position: relative; min-height: 0; }
+  .graph svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  .edge { stroke: var(--line); stroke-width: 1.5; fill: none; stroke-dasharray: 600; stroke-dashoffset: 600; }
+  .edge.on { animation: draw 500ms ease-out forwards; }
+  .edge.hot { stroke: var(--key); }
+  .edge.ghost { stroke: var(--muted); stroke-dasharray: 3 4; stroke-dashoffset: 0; opacity: 0; transition: opacity 400ms ease; }
+  .edge.ghost.on { animation: none; opacity: 0.55; }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  .node { opacity: 0; transform: translateY(6px); transition: opacity 320ms ease, transform 320ms ease; }
+  .node.on { opacity: 1; transform: none; }
+  .node.faded { opacity: 0.38; }
+  .key-pill rect { fill: var(--key-dim); stroke: var(--key); stroke-width: 1; rx: 14; }
+  .key-pill text { fill: var(--key); font-family: var(--mono); font-size: 12.5px; font-weight: 500; }
+  .key-pill.lit rect { fill: var(--key); }
+  .key-pill.lit text { fill: var(--ground); }
+  .ghost-pill rect { fill: none; stroke: var(--muted); stroke-dasharray: 3 3; stroke-width: 1; rx: 14; }
+  .ghost-pill text { fill: var(--muted); font-family: var(--mono); font-size: 11px; }
+  .mem-card rect { fill: var(--panel); stroke: var(--mem); stroke-width: 1.2; rx: 6; }
+  .mem-card .accent { fill: var(--mem); stroke: none; rx: 0; }
+  .mem-card text { fill: var(--text); font-family: var(--sans); font-size: 12.5px; }
+  .mem-card .id { fill: var(--muted); font-family: var(--mono); font-size: 10.5px; }
+
+  /* side panel */
+  .side { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  .log { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+  .call {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px;
+    opacity: 0; transform: translateY(8px); transition: opacity 280ms ease, transform 280ms ease;
+  }
+  .call.on { opacity: 1; transform: none; }
+  .call.past { opacity: 0.55; }
+  .call .fn { font-family: var(--mono); font-size: 12px; color: var(--key); }
+  .call .fn b { color: var(--text); font-weight: 500; }
+  .call .ret { margin-top: 6px; display: none; }
+  .call.returned .ret { display: block; }
+  .call .mem { border-left: 2px solid var(--mem); padding-left: 8px; font-size: 12.5px; color: var(--text); }
+  .call .mem small { display: block; color: var(--muted); font-family: var(--mono); font-size: 10.5px; margin-bottom: 2px; }
+  .call .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .chip { font-family: var(--mono); font-size: 11px; color: var(--key); background: var(--key-dim); border-radius: 10px; padding: 1px 8px; }
+  .chip.pick { background: var(--key); color: var(--ground); }
+  .call .cost { margin-top: 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .meter { border-top: 1px solid var(--line); padding-top: 10px; display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: baseline; font-variant-numeric: tabular-nums; }
+  .meter .lab { color: var(--muted); font-size: 12px; }
+  .meter .val { font-family: var(--mono); font-size: 20px; font-weight: 500; }
+  .meter .val.ok { color: var(--key); }
+  .meter .val.warn { color: var(--warn); font-size: 14px; }
+  .meter .bar { grid-column: 1 / -1; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  .meter .bar i { display: block; height: 100%; width: 0; background: var(--key); transition: width 400ms ease; }
+
+  footer { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; margin-top: 10px; gap: 16px; }
+  .caption { font-size: 14px; color: var(--text); min-height: 1.5em; }
+  .caption em { color: var(--key); font-style: normal; }
+  .controls { display: flex; gap: 8px; }
+  button {
+    font: 500 12px var(--mono); color: var(--text); background: transparent; border: 1px solid var(--line);
+    border-radius: 4px; padding: 5px 10px; cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  button:focus-visible { outline: 2px solid var(--key); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) {
+    .edge.on { animation: none; stroke-dashoffset: 0; }
+    .node, .call, .meter .bar i, .edge.ghost { transition: none; }
+  }
+</style>
+
+<div class="stage" id="stage">
+  <header>
+    <h1>keymem chain recall<span>Key → Memory → Key, one call per hop</span></h1>
+    <div class="legend"><span class="k"><i></i>key</span><span class="m"><i></i>memory (Top-1)</span><span class="g"><i></i>not loaded, one call away</span></div>
+  </header>
+
+  <div class="graph"><svg id="g" viewBox="0 0 860 410" aria-label="chain recall graph"><g id="E"></g><g id="N"></g></svg></div>
+
+  <aside class="side">
+    <div class="log" id="log"></div>
+    <div class="meter">
+      <span class="lab">tokens loaded into context</span><span class="val ok" id="tok">0</span>
+      <div class="bar"><i id="bar"></i></div>
+      <span class="lab">if the system auto-expanded the 12-memory hub</span><span class="val warn" id="alt">≈ 8,000</span>
+    </div>
+  </aside>
+
+  <footer>
+    <div class="caption" id="cap"></div>
+    <div class="controls"><button id="replay">↻ Replay</button><button id="loop" aria-pressed="true">Loop on</button></div>
+  </footer>
+</div>
+
+<script>
+  // Shape of a real chain from a live store. Each hop = one recall() call.
+  // Satellite keys carry their real linked-memory counts; those are the unexplored branches.
+  const HOPS = [
+    { q: "user", ctx: "what are their work habits?",
+      mem: { id: "8aa1d1", text: ["Prefers working at night.", "Says focus comes easier then."] },
+      keys: [{ k: "work style", n: 5 }, { k: "routine", n: 1 }, { k: "focus", n: 1 }], pick: 0, tokens: 780 },
+    { q: "work style", ctx: "how do they think about testing?",
+      mem: { id: "31839f", text: ["Draws a hard line between", "real-usage tests and stress tests."] },
+      keys: [{ k: "verification", n: 2 }, { k: "real-usage test", n: 2 }, { k: "stress test", n: 1 }], pick: 0, tokens: 810 },
+    { q: "verification", ctx: "what do they demand before building?",
+      mem: { id: "f59577", text: ["Wants an unbiased baseline on a", "realistic corpus before any", "feature gets built."] },
+      keys: [{ k: "bias", n: 1 }, { k: "benchmark", n: 2 }, { k: "confirmation bias", n: 1 }], pick: -1, tokens: 830 },
+  ];
+  const CAPS = [
+    ["A question enters through <em>one key</em>.", "One recall: <em>one</em> memory comes back, with the keys it connects to.", "The <em>agent</em> picks a branch. The system never fans out on its own."],
+    ["recall on the picked key. Still <em>one</em> call.", "Another memory, another set of branches.", "Only go further when the question needs it."],
+    ["Three hops: from a profile to a <em>verification philosophy</em>.", "Context holds three memories, nothing more.", "Chain recall: the graph knows the roads, the agent decides the steps."],
+  ];
+  const FINAL = "Every branch you skipped is still <em>one call away</em>, and each remember() adds new ones.";
+
+  const E = document.getElementById("E"), N = document.getElementById("N"), log = document.getElementById("log"),
+        cap = document.getElementById("cap"), tok = document.getElementById("tok"), bar = document.getElementById("bar");
+  const NS = "http://www.w3.org/2000/svg";
+  const el = (n, a = {}, cls) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); if (cls) e.setAttribute("class", cls); return e; };
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const T = (ms) => reduced ? 0 : ms;
+
+  const COL = [10, 275, 540], KEY_Y = 30, MEM_Y = 125, SAT_Y = [255, 305, 355], CARD_W = 232;
+  const pillW = (label, size = 7.6) => Math.max(60, Math.round(label.length * size + 28));
+  function keyPill(x, y, label, cls) {
+    const w = pillW(label);
+    const g = el("g", {}, "node key-pill " + (cls || ""));
+    g.appendChild(el("rect", { x, y, width: w, height: 28 }));
+    const t = el("text", { x: x + w / 2, y: y + 18.5, "text-anchor": "middle" }); t.textContent = label; g.appendChild(t);
+    g.dataset.w = w; g.dataset.x = x; return g;
+  }
+  function ghostPill(x, y, label) {
+    const w = pillW(label, 6.8);
+    const g = el("g", {}, "node ghost-pill");
+    g.appendChild(el("rect", { x, y, width: w, height: 26 }));
+    const t = el("text", { x: x + w / 2, y: y + 17, "text-anchor": "middle" }); t.textContent = label; g.appendChild(t);
+    return g;
+  }
+  function memCard(x, y, mem) {
+    const h = 30 + mem.text.length * 18;
+    const g = el("g", {}, "node mem-card");
+    g.appendChild(el("rect", { x, y, width: CARD_W, height: h }));
+    g.appendChild(el("rect", { x, y, width: 3, height: h }, "accent"));
+    const id = el("text", { x: x + 12, y: y + 17 }, "id"); id.textContent = "memory " + mem.id + "  ·  Top-1"; g.appendChild(id);
+    mem.text.forEach((line, i) => { const t = el("text", { x: x + 12, y: y + 38 + i * 18 }); t.textContent = line; g.appendChild(t); });
+    g.dataset.h = h; return g;
+  }
+  const vEdge = (x1, y1, x2, y2, cls) => el("path", { d: `M${x1} ${y1} C ${x1} ${(y1 + y2) / 2}, ${x2} ${(y1 + y2) / 2}, ${x2} ${y2}` }, "edge " + (cls || ""));
+  const hEdge = (x1, y1, x2, y2, cls) => { const mx = (x1 + x2) / 2; return el("path", { d: `M${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}` }, "edge " + (cls || "")); };
+  const show = (...els) => requestAnimationFrame(() => els.forEach(e => e.classList.add("on")));
+
+  let run = 0, looping = true;
+  async function play() {
+    const my = ++run, alive = () => my === run;
+    E.replaceChildren(); N.replaceChildren(); log.replaceChildren(); cap.innerHTML = ""; tok.textContent = "0"; bar.style.width = "0";
+    let total = 0, prevPick = null;
+    const unexplored = [];
+
+    for (let h = 0; h < HOPS.length; h++) {
+      const hop = HOPS[h], x = COL[h];
+      // 1. the call
+      const call = document.createElement("div"); call.className = "call";
+      call.innerHTML = `<div class="fn">recall(<b>"${hop.q}"</b>, context: "${hop.ctx}")</div>
+        <div class="ret"><div class="mem"><small>memories[0] · passive_preview</small>${hop.mem.text.join(" ")}</div>
+        <div class="chips">${hop.keys.map(k => `<span class="chip">${k.k}</span>`).join("")}</div>
+        <div class="cost">≈ ${hop.tokens} tokens · 1 call</div></div>`;
+      log.appendChild(call);
+      const kp = keyPill(x, KEY_Y, hop.q, "lit"); N.appendChild(kp);
+      if (prevPick) { const e = hEdge(prevPick.x, prevPick.y, x, KEY_Y + 14, "hot"); E.appendChild(e); show(e); }
+      show(call, kp);
+      cap.innerHTML = CAPS[h][0];
+      await sleep(T(1400)); if (!alive()) return;
+
+      // 2. the return: one memory + its connected keys
+      const kx = x + kp.dataset.w / 2, cx = x + CARD_W / 2;
+      const e1 = vEdge(kx, KEY_Y + 28, cx, MEM_Y); E.appendChild(e1);
+      const mc = memCard(x, MEM_Y, hop.mem); N.appendChild(mc); show(e1, mc);
+      call.classList.add("returned");
+      total += hop.tokens; tok.textContent = total.toLocaleString(); bar.style.width = Math.min(100, total / 8000 * 100) + "%";
+      await sleep(T(900)); if (!alive()) return;
+      const cardBottom = MEM_Y + Number(mc.dataset.h);
+      const sats = hop.keys.map((k, i) => {
+        const sx = x + 16 + i * 10;
+        const sp = keyPill(sx, SAT_Y[i], k.k); N.appendChild(sp);
+        const e = vEdge(cx, cardBottom, sx + sp.dataset.w / 2, SAT_Y[i]); E.appendChild(e);
+        setTimeout(() => show(e, sp), T(120 * i));
+        return sp;
+      });
+      cap.innerHTML = CAPS[h][1];
+      await sleep(T(1500)); if (!alive()) return;
+
+      // 3. the agent picks the next branch; the rest stay reachable
+      if (hop.pick >= 0) {
+        const sp = sats[hop.pick]; sp.classList.add("lit");
+        call.querySelectorAll(".chip")[hop.pick].classList.add("pick");
+        sats.forEach((s, i) => { if (i !== hop.pick) { s.classList.add("faded"); unexplored.push({ pill: s, n: hop.keys[i].n }); } });
+        prevPick = { x: Number(sp.dataset.x) + Number(sp.dataset.w), y: SAT_Y[hop.pick] + 14 };
+        cap.innerHTML = CAPS[h][2];
+        await sleep(T(1300)); if (!alive()) return;
+        call.classList.add("past");
+      } else {
+        sats.forEach((s, i) => unexplored.push({ pill: s, n: hop.keys[i].n }));
+        cap.innerHTML = CAPS[h][2];
+        await sleep(T(2600)); if (!alive()) return;
+      }
+    }
+
+    // 4. expansion: every unexplored branch shows what sits behind it, unloaded
+    cap.innerHTML = FINAL;
+    unexplored.forEach(({ pill, n }, i) => {
+      pill.classList.remove("faded");
+      const x = Number(pill.dataset.x) + Number(pill.dataset.w), y = Number(pill.firstChild.getAttribute("y"));
+      const label = n === 1 ? "1 memory" : `${n} memories`;
+      const gp = ghostPill(x + 14, y + 1, label); N.appendChild(gp);
+      const e = hEdge(x, y + 14, x + 14, y + 14, "ghost"); E.appendChild(e);
+      setTimeout(() => show(e, gp), T(90 * i));
+    });
+    await sleep(T(4200)); if (!alive()) return;
+    if (looping && !reduced) play();
+  }
+  document.getElementById("replay").addEventListener("click", play);
+  document.getElementById("loop").addEventListener("click", (ev) => {
+    looping = !looping; ev.currentTarget.textContent = looping ? "Loop on" : "Loop off"; ev.currentTarget.setAttribute("aria-pressed", String(looping));
+    if (looping) play();
+  });
+  play();
+</script>
