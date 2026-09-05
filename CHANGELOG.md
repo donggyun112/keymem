@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-09-05
+
+### Fixed
+
+- Claude Code plugin failed to load with "Duplicate hooks file detected": `hooks/hooks.json` is
+  loaded automatically, and the manifest's `hooks` entry pointed at the same file. The entry is
+  removed; `manifest.hooks` is only for additional hook files.
+
 ## [0.27.0] - 2026-09-05
 
 ### Added
