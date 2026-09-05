@@ -73,3 +73,33 @@ test("single-flight: concurrent callers share one download per file", async (t) 
   await Promise.all([1, 2, 3, 4, 5].map(() => ensureModelFiles(KNOWN_MODELS.reranker, dir, fetcher)));
   assert.equal(fetched.length, KNOWN_MODELS.reranker.files.length, `each file fetched once, got ${fetched.length}`);
 });
+
+test("httpDownload: a stalled body rejects (no crash) and the next call resumes via Range", async (t) => {
+  const { createServer } = await import("node:http");
+  const { readFileSync } = await import("node:fs");
+  const dir = await mkdtemp(join(tmpdir(), "sm-mdl-resume-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const body = Buffer.from("0123456789");
+  let calls = 0;
+  const srv = createServer((req, res) => {
+    calls++;
+    if (calls === 1) {
+      res.writeHead(200, { "content-length": body.length });
+      res.write(body.subarray(0, 4));
+      setTimeout(() => res.destroy(), 20); // stall, then drop the connection
+      return;
+    }
+    const from = Number(/bytes=(\d+)-/.exec(String(req.headers.range))?.[1] ?? 0);
+    res.writeHead(206);
+    res.end(body.subarray(from));
+  });
+  await new Promise<void>((r) => srv.listen(0, r));
+  t.after(() => srv.close());
+  const url = `http://127.0.0.1:${(srv.address() as { port: number }).port}/model.onnx`;
+  const { httpDownload } = await import(`../src/modelDownload.ts?dl=${n++}`);
+  const dest = join(dir, "model.onnx");
+  await assert.rejects(httpDownload(url, dest), "first attempt must reject, not throw unhandled");
+  await httpDownload(url, dest);
+  assert.equal(readFileSync(dest, "utf8"), "0123456789");
+  assert.equal(calls, 2);
+});

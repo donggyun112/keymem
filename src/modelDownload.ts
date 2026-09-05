@@ -7,6 +7,7 @@
 import { join, dirname } from "node:path";
 import { existsSync, mkdirSync, createWriteStream, renameSync, statSync } from "node:fs";
 import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { homeBaseDir } from "./env.js";
 
 export interface DownloadSpec {
@@ -46,15 +47,17 @@ export function defaultModelDir(name: string): string {
 export type Fetcher = (url: string, destPath: string) => Promise<void>;
 
 // Stream a URL to a file atomically (.tmp → rename) so a crash never leaves a half file.
-async function httpDownload(url: string, destPath: string): Promise<void> {
-  const res = await fetch(url);
-  if (!res.ok || !res.body) throw new Error(`download failed: HTTP ${res.status} for ${url}`);
+// A leftover .tmp from an interrupted run is resumed with a Range request; the CDN can stall
+// on a 570MB body, and `pipeline` surfaces that as a rejection instead of an unhandled
+// 'error' event that would take the whole daemon down.
+export async function httpDownload(url: string, destPath: string): Promise<void> {
   mkdirSync(dirname(destPath), { recursive: true });
   const tmp = `${destPath}.tmp`;
-  await new Promise<void>((resolve, reject) => {
-    const ws = createWriteStream(tmp);
-    Readable.fromWeb(res.body as never).pipe(ws).on("finish", () => resolve()).on("error", reject);
-  });
+  const have = existsSync(tmp) ? statSync(tmp).size : 0;
+  const res = await fetch(url, have > 0 ? { headers: { Range: `bytes=${have}-` } } : undefined);
+  if (!res.ok || !res.body) throw new Error(`download failed: HTTP ${res.status} for ${url}`);
+  const resume = res.status === 206;
+  await pipeline(Readable.fromWeb(res.body as never), createWriteStream(tmp, { flags: resume ? "a" : "w" }));
   renameSync(tmp, destPath);
 }
 

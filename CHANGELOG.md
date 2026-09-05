@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.26.2] - 2026-09-05
+
+### Fixed
+
+- A model download whose body stalls (Hugging Face CDN, `UND_ERR_BODY_TIMEOUT`) no longer
+  crashes the daemon with an unhandled stream `error` event; the failure is caught and recall
+  falls back to fused ranking. The next attempt resumes the leftover `.tmp` with a `Range`
+  request instead of restarting from zero.
+
 ## [0.26.1] - 2026-09-05
 
 ### Fixed
