@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.27.2] - 2026-09-05
+
+### Changed
+
+- Keys attached by write-time auto-linking (embedding proximity, not named by the agent) are no
+  longer offered in `connected_keys` of the passive Top-1 preview or of `inject` results. In the
+  multi-hop experiments they were the main source of wasted `read_key` calls: a memory that
+  mentions "keymem" was auto-linked to five generic keymem-* keys that all led back to itself.
+  `read_memory` still lists every key and now flags these with `auto: true`. The flag is stored
+  per link in graph.json (`auto: true`); links written by older versions load as explicit.
+
 ## [0.27.1] - 2026-09-05
 
 ### Fixed

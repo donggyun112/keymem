@@ -456,6 +456,19 @@ export class MemoryGraph {
     return this._keyToMems[keyId]?.has(memId) ?? false;
   }
 
+  // Links created by _autoLinkKeys (embedding proximity at write time) rather than by the
+  // agent naming the key. They keep a memory reachable from near-synonym keys, but they are
+  // not the agent's statement of what the memory is about, so passive previews hide them as
+  // next-hop suggestions — in the 3-hop experiments they were the main source of wasted hops.
+  private _autoLinks = new Set<string>();
+  private _isAutoLink(keyId: string, memId: string): boolean {
+    return this._autoLinks.has(`${keyId}|${memId}`);
+  }
+  private _setAutoLink(keyId: string, memId: string, auto: boolean): void {
+    if (auto) this._autoLinks.add(`${keyId}|${memId}`);
+    else this._autoLinks.delete(`${keyId}|${memId}`);
+  }
+
   private _getLinkWeight(keyId: string, memId: string): number {
     return this._keyToMems[keyId]?.get(memId) ?? LINK_WEIGHT_DEFAULT;
   }
@@ -475,6 +488,7 @@ export class MemoryGraph {
           mems.delete(memId);
           if (mems.size === 0) delete this._keyToMems[kid];
         }
+        this._autoLinks.delete(`${kid}|${memId}`);
       }
       delete this._memToKeys[memId];
     }
@@ -660,9 +674,13 @@ export class MemoryGraph {
     for (const [mid, w] of this._keyToMems[fromId] ?? new Map<string, number>()) {
       if (this._hasLink(intoId, mid)) {
         this._setLinkWeight(intoId, mid, Math.max(this._getLinkWeight(intoId, mid), w));
+        // An explicit link on either side makes the merged link explicit.
+        if (!this._isAutoLink(fromId, mid)) this._setAutoLink(intoId, mid, false);
       } else {
         this._link(intoId, mid, w);
+        this._setAutoLink(intoId, mid, this._isAutoLink(fromId, mid));
       }
+      this._autoLinks.delete(`${fromId}|${mid}`);
       this._memToKeys[mid]?.delete(fromId);
     }
     this._recordKeyAlias(intoId, this.keys[fromId].concept);
@@ -853,6 +871,7 @@ export class MemoryGraph {
     for (let i = 0; i < keyIds.length; i++) {
       if (sims[i] >= KEY_AUTO_LINK_THRESHOLD && !this._hasLink(keyIds[i], memId)) {
         this._link(keyIds[i], memId, sims[i]);
+        this._setAutoLink(keyIds[i], memId, true);
       }
     }
   }
@@ -876,11 +895,14 @@ export class MemoryGraph {
 
   // Like getKeysForMemory but carries each key's id alongside its concept. Used by passive recall
   // and inject so a consumer can jump straight to read_key(key_id) without concept resolution.
+  // Auto-linked keys are omitted: they are proximity artefacts, not the agent's own keys, and
+  // as next-hop suggestions they mostly cost wasted read_key calls. read_memory still lists
+  // them (flagged `auto`) for exhaustive exploration.
   getKeyRefsForMemory(memId: string): Array<{ concept: string; key_id: string }> {
     const kids = this._memToKeys[memId];
     if (!kids) return [];
     return [...kids.keys()]
-      .filter((kid) => kid in this.keys)
+      .filter((kid) => kid in this.keys && !this._isAutoLink(kid, memId))
       .map((kid) => ({ concept: this.keys[kid].concept, key_id: kid }));
   }
 
@@ -1026,6 +1048,7 @@ export class MemoryGraph {
     for (const lnk of raw.links ?? []) {
       if (lnk.key_id in this.keys && lnk.memory_id in this.memories) {
         this._link(lnk.key_id, lnk.memory_id, lnk.weight ?? LINK_WEIGHT_DEFAULT);
+        if (lnk.auto === true) this._setAutoLink(lnk.key_id, lnk.memory_id, true);
       }
     }
 
@@ -1056,10 +1079,10 @@ export class MemoryGraph {
   }
 
   async save(): Promise<void> {
-    const links: Array<{ key_id: string; memory_id: string; weight: number }> = [];
+    const links: Array<{ key_id: string; memory_id: string; weight: number; auto?: true }> = [];
     for (const [kid, mids] of Object.entries(this._keyToMems)) {
       for (const [mid, weight] of mids) {
-        links.push({ key_id: kid, memory_id: mid, weight });
+        links.push(this._isAutoLink(kid, mid) ? { key_id: kid, memory_id: mid, weight, auto: true } : { key_id: kid, memory_id: mid, weight });
       }
     }
     // Stamp the embedding-space fingerprint so a later same-dimension backend swap
@@ -1487,7 +1510,10 @@ export class MemoryGraph {
             inherited.push([kid, w]);
           }
         }
-        for (const [kid, w] of inherited) this._link(kid, mid, w);
+        for (const [kid, w] of inherited) {
+          this._link(kid, mid, w);
+          this._setAutoLink(kid, mid, this._isAutoLink(kid, oldId));
+        }
       }
 
       this._autoLinkKeys(mid, newEmbedding);
@@ -2162,6 +2188,7 @@ export class MemoryGraph {
           ...this._keyView(kid, mem.namespace),
           link_weight: Math.round(weight * 1000) / 1000,
           traversed_from: kid === viaKeyId,
+          auto: this._isAutoLink(kid, memoryId),
         }))
         .sort((a, b) => b.link_weight - a.link_weight);
 

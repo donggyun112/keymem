@@ -93,6 +93,49 @@ test("directHydrateTop1 selects the top memory under the supplied key without re
   );
 });
 
+test("auto-linked keys are hidden from connected_keys, flagged in read_memory, and survive save/load", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "keymem-direct-autolink-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  process.env.KEYMEM_DATA_DIR = dir;
+  process.env.EMBEDDING_BACKEND = "local";
+  process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
+
+  const embedding = await import("../src/embedding.ts");
+  embedding.__setTestEmbedder((text: string) => vec(text));
+  t.after(() => embedding.__clearTestEmbedder());
+
+  const mod = await import(`../src/memoryGraph.ts?direct-autolink=${moduleId++}`);
+  const graph = new mod.MemoryGraph();
+  await graph.load();
+  // "tea" key exists first ([0.8, 0.6, 0]); the coffee memory ([1, 0, 0]) sits at cos 0.8 to it,
+  // above the bge-m3 auto-link bar (0.62), so it gets auto-linked without the agent naming it.
+  await graph.add("tea time notes", ["tea"], {});
+  const [coffeeId] = await graph.add("the user prefers coffee", ["drinks"], {});
+  const teaKey = (await graph.searchKeys("tea", 8, null))[0] as { key_id: string };
+
+  const [topKey] = await graph.searchKeys("drinks", 8, null, "the user wants coffee");
+  const decision = await graph.directHydrateTop1(topKey, "the user wants coffee", null);
+  assert.equal(decision.candidate?.memory.id, coffeeId);
+  assert.deepEqual(
+    decision.candidate?.memory.connected_keys.map((key) => key.concept),
+    ["drinks"],
+    "auto-linked 'tea' must not be offered as a next hop",
+  );
+
+  const full = await graph.readMemory(coffeeId) as { keys: Array<{ key_id: string; concept: string; auto: boolean }> };
+  assert.deepEqual(
+    full.keys.map((k) => [k.concept, k.auto]).sort(),
+    [["drinks", false], ["tea", true]],
+    "read_memory still lists the auto link, flagged",
+  );
+  assert.ok(full.keys.some((k) => k.key_id === teaKey.key_id));
+
+  // The flag is persisted: a fresh graph over the same files sees the same split.
+  const reloaded = new mod.MemoryGraph();
+  await reloaded.load();
+  assert.deepEqual(reloaded.getKeyRefsForMemory(coffeeId).map((k: { concept: string }) => k.concept), ["drinks"]);
+});
+
 test("directHydrateTop1 lets the cross-encoder choose from the top-key candidate pool", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "keymem-direct-rerank-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
