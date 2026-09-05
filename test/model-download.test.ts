@@ -59,3 +59,17 @@ test("self-heal: a PARTIAL dir (model only) fetches just the missing tokenizer/c
   assert.ok(!fetched.some((d) => d.endsWith("model.onnx")), "model.onnx already present → not re-downloaded");
   assert.ok(fetched.some((d) => d.endsWith("tokenizer.json")), "missing tokenizer must be fetched");
 });
+
+test("single-flight: concurrent callers share one download per file", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "sm-mdl-race-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const { ensureModelFiles, KNOWN_MODELS } = await import(`../src/modelDownload.ts?dl=${n++}`);
+  const fetched: string[] = [];
+  const fetcher = async (_u: string, dest: string) => {
+    fetched.push(dest);
+    await new Promise((r) => setTimeout(r, 20)); // keep the download in flight
+    writeFileSync(dest, "x");
+  };
+  await Promise.all([1, 2, 3, 4, 5].map(() => ensureModelFiles(KNOWN_MODELS.reranker, dir, fetcher)));
+  assert.equal(fetched.length, KNOWN_MODELS.reranker.files.length, `each file fetched once, got ${fetched.length}`);
+});

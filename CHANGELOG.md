@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.26.1] - 2026-09-05
+
+### Fixed
+
+- Model auto-download is now single-flight per file. With reranking on by default, several
+  concurrent `recall()` calls could each start downloading `bge-reranker-v2-m3`, truncate one
+  another's `.tmp` stream, and rename a corrupt half-file into place; the daemon then thrashed
+  on the download indefinitely. Concurrent callers now await the one in-flight download.
+
 ## [0.26.0] - 2026-09-05
 
 ### Added

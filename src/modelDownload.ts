@@ -70,14 +70,24 @@ function present(path: string): boolean {
  * Ensure every file of a spec exists in `dir`, downloading only the missing ones.
  * `fetcher` is injectable for tests (no network). Returns the directory.
  */
+// Single-flight per destination file. Concurrent callers (e.g. several recall() calls racing to
+// lazy-load the reranker) would otherwise each open the same `.tmp` stream, truncate one
+// another, and rename a corrupt half-file into place.
+const inflight = new Map<string, Promise<void>>();
+
 export async function ensureModelFiles(spec: DownloadSpec, dir: string, fetcher: Fetcher = httpDownload): Promise<string> {
   for (const f of spec.files) {
     const dest = join(dir, f.dest);
     if (present(dest)) continue;
-    const repo = f.repo ?? spec.repo;
-    const url = `https://huggingface.co/${repo}/resolve/main/${f.src}`;
-    console.error(`[keymem] model file missing — downloading ${f.dest} from ${repo} (one-time)…`);
-    await fetcher(url, dest);
+    let p = inflight.get(dest);
+    if (!p) {
+      const repo = f.repo ?? spec.repo;
+      const url = `https://huggingface.co/${repo}/resolve/main/${f.src}`;
+      console.error(`[keymem] model file missing — downloading ${f.dest} from ${repo} (one-time)…`);
+      p = fetcher(url, dest).finally(() => inflight.delete(dest));
+      inflight.set(dest, p);
+    }
+    await p;
   }
   return dir;
 }
