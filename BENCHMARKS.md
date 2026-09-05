@@ -76,9 +76,22 @@ reranker: direct hit@5 100% / MRR 1.00 for both DIRECT and GRAPH (up from 80% / 
 assoc2 GRAPH reach@10 67%, hit@5 33%, MRR 0.14. With `KEYMEM_RERANK=false`: direct unchanged
 from June; assoc2 GRAPH reach@10 **50%** (3/6) vs 83% (5/6) in June, hit@5 33%, MRR 0.23. So
 the reranker lifts direct retrieval to ceiling and recovers one assoc2 query, but two assoc2
-queries that the graph reached in June are no longer reached with or without it — a regression
-somewhere in the recall path between v0.14 and v0.27 (candidate suspects: the content-gate and
-phrase-bridge changes). Not yet bisected; n=6, so one query is 17 points.
+queries that the graph reached in June are no longer reached with or without it.
+
+**Bisected (same day):** the drop lands exactly on `af884a0` (v0.19.0, "calibrated content gate
+for short keyword queries") — its parent scores 83%, it scores 50%, every later tag stays at 50%.
+Mechanism: both regressed queries are short (`미나가 키우는 강아지`, `미나 주말에 뭐해`), so they
+take the lower `contentRecallShort` gate (0.46 instead of 0.55). That admits more weak direct
+content matches (cosine 0.46–0.55) into the candidate set, and each of them outranks a hop-2
+association scored with `HOP_DECAY` 0.3 — the target slides from rank 9–10 to rank 12 in a
+14-memory store. Confirmed on v0.27.2: `KEYMEM_CONTENT_RECALL_SHORT=0` gives assoc2 GRAPH
+reach@10 **100%** (6/6), hit@5 33%, MRR 0.24, with direct unchanged.
+
+This is a genuine trade-off, not a bug: the short gate was calibrated on the live store because
+0.55 rejected 8 of 12 related keyword→memory pairs (§ embedding.ts profile comment). It buys
+first-hop recall on short keywords and pays for it in associative reach. Options, not yet
+chosen: rank hop-2 associations above sub-0.55 direct admits; or apply the short gate to the
+not-found decision only and keep 0.55 for ranking eligibility. n=6, so one query is 17 points.
 
 ### What this proves (and doesn't)
 
