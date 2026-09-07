@@ -2,6 +2,17 @@
 # dependency build scripts by default). onnxruntime-node needs its script to place the native
 # binary, or embedding fails at runtime; esbuild is pulled in by tsx. Required for the Glama
 # Docker build (it runs `pnpm install` with pnpm 10.x) and for any pnpm-based install to succeed.
+#
+# The setting is spelled differently per major and each version ignores the other's key:
+#   pnpm 10 -> onlyBuiltDependencies (list)
+#   pnpm 11 -> allowBuilds (map), which is what `pnpm approve-builds` writes
+# Both are kept so a fresh install works either way. Note pnpm 11 still *reports*
+# onlyBuiltDependencies via `pnpm config get` while ignoring it at install time, so the
+# config lookup is not evidence that builds are approved — a clean install is.
+allowBuilds:
+  esbuild: true
+  onnxruntime-node: true
+
 onlyBuiltDependencies:
   - esbuild
   - onnxruntime-node
