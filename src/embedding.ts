@@ -5,7 +5,8 @@ import OpenAI from "openai";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { KNOWN_MODELS, defaultModelDir, ensureModelFiles, type Fetcher } from "./modelDownload.js";
-import { cfgRaw, cfgName, homeBaseDir } from "./env.js";
+import { availableParallelism } from "node:os";
+import { cfgRaw, cfgName, homeBaseDir, modelThreads } from "./env.js";
 
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 export const OPENAI_EMBEDDING_MODEL =
@@ -210,7 +211,13 @@ export function embeddingFingerprint(): string {
   if (backend !== "local") {
     return `openai:${process.env.OPENAI_EMBEDDING_MODEL ?? "text-embedding-3-small"}`;
   }
-  return `local:${normalizeModelName(process.env.LOCAL_EMBEDDING_MODEL ?? "fast-multilingual-e5-large")}`;
+  // bge-m3 now embeds through our own session, without fastembed's 512-padding. Same model,
+  // but the vector moves (cosine ~0.98 against the padded one), so it is a distinct space and
+  // must be named as one — otherwise a graph built on fastembed's padded vectors would be
+  // silently compared against unpadded ones. The suffix is what triggers the one-time
+  // re-embed on first load after upgrading.
+  const suffix = localModelFamily() === "bgem3" ? "+nopad" : "";
+  return `local:${normalizeModelName(process.env.LOCAL_EMBEDDING_MODEL ?? "fast-multilingual-e5-large")}${suffix}`;
 }
 
 export function customModelConfig(): { dir: string; file: string } {
@@ -370,18 +377,80 @@ async function getLocalModel() {
   return _localModel;
 }
 
+// ── bge-m3: our own ONNX session, without fastembed's fixed-512 padding ───────
+// fastembed pads EVERY input to maxLength (fastembed.js:220), then CLS-pools the first token
+// and L2-normalizes (fastembed.js:255) — so a 4-token query costs exactly as much as a full
+// page: 199ms / 1.4 core-seconds / a 9.6-core peak per embed, on every single recall.
+// Tokenizing to the actual length instead measures 15ms / 0.06 core-seconds: 23x less CPU.
+//
+// The pooling below is byte-faithful to fastembed — replicating it *with* the padding scores
+// cosine 1.000000 against fastembed's own output. Dropping the padding does move the vector
+// (cosine 0.980–0.988 against the padded one), so this is a different embedding space and
+// embeddingFingerprint() names it, which makes an existing graph re-embed itself on load.
+// Retrieval is unaffected: bench 92%/97%/0.93, the ablation grid, and real-eval on a copy of
+// a 3018-vector live store all scored identically to the padded path, case for case.
+let _bgeSession: { session: any; tokenizer: any; ort: any } | null = null;
+
+async function getBgeM3Session() {
+  if (_bgeSession) return _bgeSession;
+  const { createRequire } = await import("node:module");
+  const { readFileSync } = await import("node:fs");
+  const { dir, file } = await ensureCustomEmbeddingModel();
+  // onnxruntime-node and the tokenizer are fastembed's own native deps, resolved through it:
+  // if these cannot load, fastembed could not have run either, so there is nothing to fall
+  // back to. Failing loudly beats silently embedding into the padded space, which would be
+  // compared against nopad vectors and quietly degrade every score.
+  const feReq = createRequire(createRequire(import.meta.url).resolve("fastembed"));
+  const ort = feReq("onnxruntime-node");
+  const tk = feReq("@anush008/tokenizers");
+  const tokenizer = tk.Tokenizer.fromFile(join(dir, "tokenizer.json"));
+  tokenizer.setTruncation(512); // no setPadding — that is the whole point
+  // fastembed registers these explicitly; replicating it is part of what makes the padded
+  // variant match at cosine 1.000000, so keep it.
+  const map = JSON.parse(readFileSync(join(dir, "special_tokens_map.json"), "utf-8"));
+  for (const token of Object.values(map)) {
+    if (typeof token === "string") tokenizer.addSpecialTokens([token]);
+  }
+  const session = await ort.InferenceSession.create(join(dir, file), {
+    intraOpNumThreads: modelThreads(availableParallelism(), cfgRaw("EMBED_THREADS")),
+  });
+  _bgeSession = { session, tokenizer, ort };
+  return _bgeSession;
+}
+
+/**
+ * CLS pooling + L2 normalization over a [1, tokens, dim] last_hidden_state.
+ * The CLS vector is the FIRST token, so it is the leading `dim` floats — get this slice
+ * wrong and every vector is quietly wrong in a way no type or test signature would catch.
+ */
+export function clsPool(hidden: ArrayLike<number>, dim: number): number[] {
+  const cls = Array.prototype.slice.call(hidden, 0, dim) as number[];
+  const norm = Math.sqrt(cls.reduce((acc, v) => acc + v * v, 0));
+  return cls.map((v) => v / Math.max(norm, 1e-12));
+}
+
+async function embedBgeM3(text: string): Promise<number[]> {
+  const { session, tokenizer, ort } = await getBgeM3Session();
+  const enc = await tokenizer.encode(text);
+  const ids = enc.getIds() as number[];
+  const n = ids.length;
+  const big = (a: number[]) => BigInt64Array.from(a.map((x) => BigInt(x)));
+  const out = await session.run({
+    input_ids: new ort.Tensor("int64", big(ids), [1, n]),
+    attention_mask: new ort.Tensor("int64", big(enc.getAttentionMask() as number[]), [1, n]),
+    token_type_ids: new ort.Tensor("int64", big(enc.getTypeIds() as number[]), [1, n]),
+  });
+  const hidden = out.last_hidden_state;
+  return clsPool(hidden.data as Float32Array, hidden.dims[2] as number);
+}
+
 async function embedLocal(
   text: string,
   inputType: EmbeddingInputType
 ): Promise<number[]> {
+  // bge-m3 owns its session (no prefix, no padding); every other family stays on fastembed.
+  if (localModelFamily() === "bgem3") return embedBgeM3(text);
   const model = await getLocalModel();
-  const noPrefix = localModelFamily() === "bgem3";
-  if (noPrefix) {
-    for await (const batch of model.embed([text])) {
-      return Array.from(batch[0]) as number[];
-    }
-    throw new Error("fastembed returned no embeddings");
-  }
   if (inputType === "query" && typeof model.queryEmbed === "function") {
     return Array.from(await model.queryEmbed(text)) as number[];
   }

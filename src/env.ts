@@ -17,6 +17,27 @@ export function cfgRaw(suffix: string): string | undefined {
   return process.env[PRIMARY_PREFIX + suffix] ?? process.env[LEGACY_PREFIX + suffix];
 }
 
+/**
+ * ONNX intra-op threads for an in-process model (reranker, bge-m3 embedder).
+ *
+ * These run on every conversational turn, so their CPU burst is something the user feels.
+ * ONNX Runtime picks its own count when given none — about half the cores on an M4 Pro,
+ * measured at 6.9. Capping is a deliberate trade, not a free win: over one 30-candidate
+ * rerank pool on that machine, ORT's default is 503ms wall / 3464ms CPU / 6.9 cores, while
+ * 4 threads is 670ms / 2678ms / 4.0 — a 42% lower peak and 23% less CPU for 33% more
+ * latency. Never go above the performance-core count: at 14 (10P + 4E) it collapses to
+ * 944ms / 12425ms / 13.2 cores, because every intra-op barrier waits on an E-core while
+ * the fast cores spin.
+ *
+ * The default takes a quarter of the machine, capped at 6 — 1 thread on a 4-core laptop,
+ * 4 on a 14-core M4 Pro, 6 on a 24-core desktop or larger. Callers pass
+ * availableParallelism(), which honors cgroup/container limits, so a boxed-in daemon scales
+ * down with its allowance. Model output is identical at any count.
+ */
+export function modelThreads(parallelism: number, override?: string): number {
+  return Math.max(1, Number(override) || Math.min(6, Math.round(parallelism / 4)));
+}
+
 /** Primary env var name for a suffix — used in user-facing warnings. */
 export function cfgName(suffix: string): string {
   return PRIMARY_PREFIX + suffix;

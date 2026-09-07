@@ -473,9 +473,12 @@ LOCAL_EMBEDDING_MODEL=bge-m3
 # optional — point at an existing model dir to skip the download (backward compatible):
 # LOCAL_EMBEDDING_MODEL_PATH=/absolute/path/to/model-dir   # dir with model.onnx + tokenizer files
 # LOCAL_EMBEDDING_MODEL_FILE=model.onnx                    # optional; default is model.onnx
+# optional: KEYMEM_EMBED_THREADS=4                         # ONNX intra-op threads (default: a quarter of the machine, max 6)
 ```
 
 > First run downloads ~570MB once, then reuses the cache. If `LOCAL_EMBEDDING_MODEL_PATH` already holds the model it is used **as-is with no download** (a partial dir is self-healed — only missing files are fetched). Online-API backends (OpenAI) and fastembed built-ins are unaffected.
+
+> **bge-m3 runs on its own ONNX session, not through fastembed.** fastembed pads every input to 512 tokens, so a 4-token query cost as much as a full page — 199ms and a 9.6-core burst on every recall. Tokenizing to the actual length is **23x less CPU** (15ms) at identical retrieval quality: `npm run bench` (92%/97%/0.93), the ablation grid, and `real-eval` over a 3018-vector live store all score the same, case for case. Pooling is unchanged (CLS + L2), but unpadded vectors sit ~0.98 cosine from padded ones, so the embedding fingerprint is `local:bge-m3+nopad` and **an existing graph re-embeds itself once on first load after upgrading** (a `graph.json.bak.local_bge-m3` backup is written first). Other model families still use fastembed.
 
 **Cross-encoder reranking (core):** the default `recall()` Top-1 path re-scores the candidate pool under its strongest key with `bge-reranker-v2-m3`. Compatibility `recall_memories()` results are reranked too. The model (~570MB, quantized) auto-downloads on first use and caches under `~/.keymem/models/reranker`.
 
@@ -483,6 +486,7 @@ LOCAL_EMBEDDING_MODEL=bge-m3
 # optional: KEYMEM_RERANK=false              # disable the core reranker
 # optional: KEYMEM_RERANK_MODEL_PATH=/dir    # use an existing model directory
 # optional: KEYMEM_RERANK_POOL=30            # candidates re-scored (default 30)
+# optional: KEYMEM_RERANK_THREADS=4          # ONNX intra-op threads (default: a quarter of the machine, max 6)
 ```
 
 > On by default. If the model cannot load, recall falls back to fused ranking. Query decomposition remains the caller's responsibility.

@@ -6,6 +6,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-09-08
+
+### Changed
+
+- **bge-m3 embeds through its own ONNX session instead of fastembed.** fastembed pads every
+  input to 512 tokens (`tokenizer.setPadding({maxLength})`), so a 4-token query cost exactly
+  as much as a full page: 199ms, 1.4 CPU-seconds and a 9.6-core burst on *every* recall.
+  Tokenizing to the actual length is 15ms / 0.06 CPU-seconds — **23x less CPU** — and the
+  16-query bench drops from 148.7 to 13.3 CPU-seconds end to end. Pooling is unchanged (CLS +
+  L2, byte-faithful: replicating it *with* the padding reproduces fastembed's vector at cosine
+  1.000000). Other model families still go through fastembed. If onnxruntime cannot load, this
+  now fails loudly rather than falling back to fastembed — the fallback would embed into the
+  padded space and be compared against unpadded vectors, quietly degrading every score.
+
+  **Migration:** unpadded vectors sit ~0.98 cosine from padded ones, so this is a different
+  embedding space and the fingerprint becomes `local:bge-m3+nopad`. An existing graph
+  **re-embeds itself once on first load** after upgrading, writing a
+  `graph.json.bak.local_bge-m3` backup first. A 3018-vector store took about a minute.
+  Retrieval is unaffected: the search bench (92%/97%/0.93), the full ablation grid, and
+  `real-eval` over a copy of that live store scored identically, case for case.
+
+- **ONNX intra-op threads are capped for both in-process models** (`modelThreads` in `env.ts`):
+  a quarter of the machine, max 6 — 1 thread on a 4-core laptop, 4 on a 14-core M4 Pro, 6 on a
+  24-core desktop. `availableParallelism()` honors cgroup limits. recall() runs on every turn,
+  so this deliberately buys a lower CPU peak with latency: on one 30-candidate rerank pool,
+  ORT's own default is 503ms / 3464ms CPU / 6.9 cores versus 670ms / 2678ms / 4.0 capped.
+  Never raise it above the performance-core count — at 14 on a 10P+4E machine it collapses to
+  944ms / 12425ms CPU / 13.2 cores, because every intra-op barrier waits on an E-core while the
+  fast cores spin. Override per model with `KEYMEM_RERANK_THREADS` / `KEYMEM_EMBED_THREADS`.
+  Ranking and embedding output are identical at any thread count.
+
 ## [0.27.3] - 2026-09-06
 
 ### Fixed

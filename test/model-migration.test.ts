@@ -2,7 +2,9 @@
 // e5-large ↔ bge-m3, both 1024-d) must still re-embed: the vectors live in
 // different spaces, so leaving the stored embeddings in place silently corrupts
 // every cosine. The dimension-only guard cannot see this; an embedding-model
-// fingerprint stored in the graph can.
+// fingerprint stored in the graph can. The same applies when one model's own
+// pipeline changes space — bge-m3 dropping fastembed's 512-padding moved its
+// vectors ~0.02 cosine, which is why that suffix exists.
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,6 +12,19 @@ import { join } from "node:path";
 import test from "node:test";
 
 let importCounter = 0;
+
+// Pinned deliberately: this string is what every existing user's graph is compared against,
+// so changing it forces a one-time re-embed of every key and memory on their next load.
+// That is sometimes correct (bge-m3 leaving fastembed's padded space was), but it must never
+// happen by accident — update this only alongside a real change of embedding space.
+const BGEM3_FINGERPRINT = "local:bge-m3+nopad";
+
+test("the bge-m3 fingerprint is stable", async () => {
+  process.env.EMBEDDING_BACKEND = "local";
+  process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
+  const { embeddingFingerprint } = await import("../src/embedding.ts");
+  assert.equal(embeddingFingerprint(), BGEM3_FINGERPRINT);
+});
 
 async function loadModules(dataDir: string) {
   process.env.SUPER_MEMORY_DATA_DIR = dataDir;
@@ -65,7 +80,7 @@ test("re-embeds when the embedding model changes at the same dimension", async (
 
   const persisted = JSON.parse(await readFile(join(dataDir, "graph.json"), "utf-8"));
   assert.equal(
-    persisted.meta?.embeddingFingerprint, "local:bge-m3",
+    persisted.meta?.embeddingFingerprint, BGEM3_FINGERPRINT,
     "persisted fingerprint must reflect the new model"
   );
   // v0.20+: vectors persist in the binary sidecar, graph.json stores embedding: [].
@@ -109,15 +124,16 @@ test("SUPER_MEMORY_FORCE_REEMBED re-embeds a legacy graph (no fingerprint, same 
 
   assert.deepEqual(g.memories.m1.embedding, [0, 1], "forced re-embed must replace the legacy vector");
   const persisted = JSON.parse(await readFile(join(dataDir, "graph.json"), "utf-8"));
-  assert.equal(persisted.meta?.embeddingFingerprint, "local:bge-m3", "fingerprint stamped after forced re-embed");
+  assert.equal(persisted.meta?.embeddingFingerprint, BGEM3_FINGERPRINT, "fingerprint stamped after forced re-embed");
 });
 
 test("does NOT re-embed when the model is unchanged (same fingerprint, same dim)", async (t) => {
   const dataDir = await mkdtemp(join(tmpdir(), "sm-modelmig-noop-"));
   t.after(() => rm(dataDir, { recursive: true, force: true }));
 
+  // Whatever the current space is called, a graph already stamped with it must be left alone.
   const stored = {
-    meta: { embeddingFingerprint: "local:bge-m3" },
+    meta: { embeddingFingerprint: BGEM3_FINGERPRINT },
     keys: { k1: { id: "k1", concept: "딸기", embedding: [1, 0], key_type: "concept" } },
     memories: {
       m1: {

@@ -10,9 +10,10 @@
 // precision pass never makes recall unavailable.
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { KNOWN_MODELS, defaultModelDir, ensureModelFiles } from "./modelDownload.js";
-import { cfgRaw } from "./env.js";
+import { cfgRaw, modelThreads } from "./env.js";
 
 let _testReranker:
   | ((query: string, texts: string[]) => number[] | Promise<number[]>)
@@ -31,6 +32,9 @@ export function rerankEnabled(): boolean {
 
 const MODEL_DIR = cfgRaw("RERANK_MODEL_PATH") ?? defaultModelDir("reranker");
 const MAX_CHARS = 512; // truncate memory text fed to the cross-encoder
+// Thread sizing (and why it is capped) lives in modelThreads — the embedder needs the
+// same rule. KEYMEM_RERANK_THREADS overrides it for this model only.
+const RERANK_THREADS = modelThreads(availableParallelism(), cfgRaw("RERANK_THREADS"));
 
 let _loaded = false;
 let _failed = false;
@@ -51,7 +55,9 @@ async function ensureLoaded(): Promise<boolean> {
     _ort = feReq("onnxruntime-node");
     const tk = feReq("@anush008/tokenizers");
     _tok = tk.Tokenizer.fromFile(`${MODEL_DIR}/tokenizer.json`);
-    _session = await _ort.InferenceSession.create(`${MODEL_DIR}/model.onnx`);
+    _session = await _ort.InferenceSession.create(`${MODEL_DIR}/model.onnx`, {
+      intraOpNumThreads: RERANK_THREADS,
+    });
     _loaded = true;
     return true;
   } catch (err) {
