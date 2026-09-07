@@ -19,9 +19,11 @@ jobs:
 
       - uses: pnpm/action-setup@v4 # version comes from packageManager in package.json
 
+      # 24, not the engines floor: pnpm 11 imports node:sqlite, unflagged only from Node 24.
+      # CI covers the floor separately by running the suite on 20 and 22.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
 

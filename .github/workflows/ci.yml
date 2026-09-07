@@ -24,9 +24,13 @@ jobs:
 
       - uses: pnpm/action-setup@v4 # version comes from packageManager in package.json
 
+      # The toolchain and the package under test need different Node versions, so they get
+      # different steps. pnpm 11 imports node:sqlite, which is only unflagged from Node 24 —
+      # running it on the matrix version fails before install even starts. That says nothing
+      # about what the published package supports: users install dist/ with npm, never pnpm.
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 24
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -34,5 +38,13 @@ jobs:
       - name: Typecheck
         run: pnpm exec tsc --noEmit
 
+      # Switch to the Node actually under test. node_modules carries over: onnxruntime-node
+      # ships a napi-v3 binary, which is ABI-stable across Node majors.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
       - name: Test
-        run: npm test
+        run: |
+          node --version
+          npm test
