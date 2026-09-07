@@ -1,0 +1,80 @@
+name: Release
+
+# Push an annotated tag to cut a release, matching how every version up to v0.27.3 was tagged:
+#   npm version 0.28.0 --no-git-tag-version && npm run build   # build syncs plugin.json
+#   git commit -am "..." && git tag -a v0.28.0 -m v0.28.0 && git push --follow-tags
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the GitHub Release
+  id-token: write # npm provenance attestation
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4 # version comes from packageManager in package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      # A tag that disagrees with package.json publishes the wrong version under the right name,
+      # and npm will not let that number be reused. Cheapest possible guard, so it runs first.
+      - name: Tag must match package.json
+        run: |
+          pkg=$(pnpm pkg get version | tr -d '"')
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$pkg" != "$tag" ]; then
+            echo "::error::tag $GITHUB_REF_NAME implies version $tag but package.json says $pkg"
+            exit 1
+          fi
+          echo "publishing $pkg"
+
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # plugin.json and .claude-plugin/plugin.json are generated from package.json by the build.
+      # If the build changes them, the tagged commit was made without running it, and the plugin
+      # would ship advertising the previous version.
+      - name: Generated plugin manifests must be committed
+        run: git diff --exit-code -- plugin.json .claude-plugin/plugin.json
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Release notes are the CHANGELOG section for this version: everything between its own
+      # "## [x.y.z]" heading and the next "## [" heading.
+      - name: Extract release notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "::warning::no CHANGELOG section found for $version"
+            echo "See CHANGELOG.md." > RELEASE_NOTES.md
+          fi
+
+      - name: Create GitHub Release
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file RELEASE_NOTES.md --verify-tag
+        env:
+          GH_TOKEN: ${{ github.token }}
