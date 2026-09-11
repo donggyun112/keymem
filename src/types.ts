@@ -1,4 +1,5 @@
 import type { ConfirmationEvidence, DecayProfile } from "./decay.js";
+import type { StoredPathRelation } from "./pathRelations.js";
 
 export interface AliasCandidate {
   count: number;
@@ -53,6 +54,7 @@ export interface GraphData {
   keys: Record<string, Key>;
   memories: Record<string, Memory>;
   links: Array<{ key_id: string; memory_id: string; weight?: number; auto?: true }>;
+  path_relations?: StoredPathRelation[];
   // Provenance for the embedding vector space (see embeddingFingerprint). Absent
   // in graphs written before fingerprinting; treated as "unknown" on load.
   meta?: { embeddingFingerprint?: string; schemaVersion?: number };

@@ -24,11 +24,13 @@ import {
   AUTOKEY_PROMOTE_N, AUTOKEY_MAX_ALIASES, AUTOKEY_PRUNE_AGE_SECONDS,
   AUTOKEY_CONFIRM_FLOOR,
 } from "./autokey.js";
+import { PathRelationGraph, type StoredPathRelation } from "./pathRelations.js";
 
 const DATA_DIR = dataDir();
 const GRAPH_FILE = join(DATA_DIR, "graph.json");
 const CONVERSATIONS_DIR = join(DATA_DIR, "conversations");
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+const PATH_NAVIGATION_CAPACITY = 256;
 
 // Thresholds are calibrated per embedding backend/model (see embedding.ts).
 const _THRESHOLDS = getThresholdProfile();
@@ -365,6 +367,19 @@ export interface DirectHydrateKey {
   match_type: string;
 }
 
+interface PendingPathOpportunity {
+  sourceKeyId: string;
+  bridgeMemoryId: string;
+  namespace: string;
+}
+
+interface SearchPathRoute extends PendingPathOpportunity {
+  targetKeyId: string;
+  weight: number;
+  evidenceCount: number;
+  rankScore: number;
+}
+
 export type DirectHydrateTop1Decision =
   | {
       status: "candidate";
@@ -382,7 +397,13 @@ export type DirectHydrateTop1Decision =
           link_weight: number;
           content_relevance: number | null;
           score: number;
-          connected_keys: Array<{ concept: string; key_id: string; relevance: number | null }>;
+          connected_keys: Array<{
+            concept: string;
+            key_id: string;
+            relevance: number | null;
+            relation_strength?: number;
+            relation_evidence?: number;
+          }>;
           content_truncated?: true;
           content_chars?: number;
         };
@@ -418,9 +439,15 @@ export class MemoryGraph {
     capacity: AUTOKEY_BUFFER_CAPACITY,
     ttlSeconds: AUTOKEY_BUFFER_TTL_SECONDS,
   });
+  private _pathRelations: PathRelationGraph;
+  private _pendingPath = new Map<string, PendingPathOpportunity>();
+  private _searchPathRoutes = new Map<string, Map<string, SearchPathRoute>>();
+  private _pathEvidenceSeq = 0;
+  private readonly _pathEvidenceEpoch = randomBytes(6).toString("hex");
 
   constructor(options: MemoryGraphOptions = {}) {
     this._now = options.now ?? (() => Date.now() / 1000);
+    this._pathRelations = new PathRelationGraph(this._now);
     this._bm25 = new MiniSearch({
       fields: ["content"],
       storeFields: [],
@@ -469,6 +496,72 @@ export class MemoryGraph {
   private _setAutoLink(keyId: string, memId: string, auto: boolean): void {
     if (auto) this._autoLinks.add(`${keyId}|${memId}`);
     else this._autoLinks.delete(`${keyId}|${memId}`);
+  }
+
+  private _validPathRelation(record: StoredPathRelation): boolean {
+    const bridge = this.memories[record.bridge_memory_id];
+    return Boolean(
+      this.keys[record.source_key_id] &&
+      this.keys[record.target_key_id] &&
+      bridge &&
+      !this._isExpired(bridge) &&
+      !(record.bridge_memory_id in this._supersededBy) &&
+      bridge.namespace === record.namespace &&
+      this._hasLink(record.source_key_id, record.bridge_memory_id) &&
+      this._hasLink(record.target_key_id, record.bridge_memory_id) &&
+      !this._isAutoLink(record.source_key_id, record.bridge_memory_id) &&
+      !this._isAutoLink(record.target_key_id, record.bridge_memory_id)
+    );
+  }
+
+  private _prunePathRelations(): void {
+    if (this._pathRelations.prune((record) => this._validPathRelation(record))) this.markDirty();
+  }
+
+  private _navigationId(id?: string | null): string {
+    return id?.trim() || "default";
+  }
+
+  private _trimPathNavigationState(): void {
+    while (this._pendingPath.size > PATH_NAVIGATION_CAPACITY) {
+      const oldest = this._pendingPath.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this._pendingPath.delete(oldest);
+      this._searchPathRoutes.delete(oldest);
+    }
+    while (this._searchPathRoutes.size > PATH_NAVIGATION_CAPACITY) {
+      const oldest = this._searchPathRoutes.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this._searchPathRoutes.delete(oldest);
+    }
+  }
+
+  private _finishPathOpportunity(
+    navigationId: string,
+    nextMemoryId: string | null,
+    viaKeyId: string | null,
+  ): void {
+    const pending = this._pendingPath.get(navigationId);
+    if (!pending) return;
+    this._pendingPath.delete(navigationId);
+    this._searchPathRoutes.delete(navigationId);
+    const target =
+      viaKeyId &&
+      nextMemoryId !== pending.bridgeMemoryId &&
+      this.memories[nextMemoryId ?? ""]?.namespace === pending.namespace &&
+      viaKeyId !== pending.sourceKeyId &&
+      this._hasLink(viaKeyId, pending.bridgeMemoryId) &&
+      !this._isAutoLink(viaKeyId, pending.bridgeMemoryId)
+        ? viaKeyId
+        : null;
+    this._pathRelations.observe({
+      namespace: pending.namespace,
+      sourceKeyId: pending.sourceKeyId,
+      bridgeMemoryId: pending.bridgeMemoryId,
+      targetKeyId: target,
+      evidenceId: `${this._pathEvidenceEpoch}:${navigationId}:${++this._pathEvidenceSeq}`,
+    });
+    this.markDirty();
   }
 
   private _getLinkWeight(keyId: string, memId: string): number {
@@ -533,6 +626,7 @@ export class MemoryGraph {
         mem.contradicts = mem.contradicts.filter((id) => id in this.memories && !deleted.has(id));
       }
     }
+    this._prunePathRelations();
   }
 
   private _pruneDanglingExplicitLinks(): void {
@@ -546,6 +640,7 @@ export class MemoryGraph {
       const mems = this._keyToMems[kid];
       if (!mems || mems.size === 0) delete this.keys[kid];
     }
+    this._prunePathRelations();
   }
 
   private _checkDim(embedding: number[]): void {
@@ -687,6 +782,7 @@ export class MemoryGraph {
     }
     this._recordKeyAlias(intoId, this.keys[fromId].concept);
     for (const a of this.keys[fromId].aliases ?? []) this._recordKeyAlias(intoId, a);
+    this._pathRelations.rewriteKey(fromId, intoId);
     delete this._keyToMems[fromId];
     delete this.keys[fromId];
   }
@@ -1054,6 +1150,10 @@ export class MemoryGraph {
       }
     }
 
+    if (this._pathRelations.load(raw.path_relations, (record) => this._validPathRelation(record))) {
+      this.markDirty();
+    }
+
     this._pruneDanglingExplicitLinks();
 
     // Heal keys fragmented across key_types in stores written before cross-type reconciliation.
@@ -1069,6 +1169,7 @@ export class MemoryGraph {
         this._supersededBy[mem.supersedes] = mid;
       }
     }
+    this._prunePathRelations();
 
     await this._ensureEmbeddingDim();
 
@@ -1111,7 +1212,8 @@ export class MemoryGraph {
       keys: strippedKeys,
       memories: strippedMems,
       links,
-      meta: { embeddingFingerprint: fingerprint, schemaVersion: 2 },
+      path_relations: this._pathRelations.serialize(),
+      meta: { embeddingFingerprint: fingerprint, schemaVersion: 3 },
     };
     // Snapshot is built synchronously above (callers mutate under _lock without
     // awaiting mid-mutation, so this read is consistent). Serialize the actual I/O
@@ -1453,6 +1555,7 @@ export class MemoryGraph {
           ? old.depth * 0.8
           : old.depth * 0.3;
       this._supersededBy[oldId] = mid;
+      this._prunePathRelations();
       // Remove stale contradiction back-references to the now-superseded oldId.
       // read-at-time already skips superseded memories, so this is cleanup only.
       for (const mem of Object.values(this.memories)) {
@@ -1545,7 +1648,8 @@ export class MemoryGraph {
     query: string,
     topK = 8,
     namespace?: string | null,
-    contextText?: string | null
+    contextText?: string | null,
+    navigationId?: string | null,
   ): Promise<object[]> {
     const cleanQuery = query.trim();
     if (!cleanQuery || Object.keys(this.keys).length === 0) return [];
@@ -1573,6 +1677,8 @@ export class MemoryGraph {
     const memSim = this._bestContentSims(cEmb);
 
     return this._lock.runExclusive(async () => {
+      // Starting another recall closes the previous bridge opportunity without a followed key.
+      this._finishPathOpportunity(this._navigationId(navigationId), null, null);
       const queryLower = cleanQuery.toLowerCase();
       const isShortQuery = isShortConcept(cleanQuery);
       // The content signal is driven by the context utterance when one is given, and
@@ -1672,7 +1778,7 @@ export class MemoryGraph {
       }
 
       const claimedContentMids = new Set<string>();
-      const result = candidates
+      const directResult = candidates
         // Rank by relevance first; literal is only a tiebreak (entity literals already carry
         // relevance 1, so they still surface at the top — without burying a stronger semantic hit).
         .sort((a, b) => b.score - a.score || Number(b._literal) - Number(a._literal) || b.specificity - a.specificity)
@@ -1692,12 +1798,86 @@ export class MemoryGraph {
         // confirmation band) are both learning signals: a later confirmed read via any of
         // these keys lets autokey fold the query in.
         const weakKeyScores = new Map<string, number>(nearMiss);
-        for (const c of result) if (c.match_type === "semantic") weakKeyScores.set(c.key_id, c.score);
+        for (const c of directResult) if (c.match_type === "semantic") weakKeyScores.set(c.key_id, c.score);
         if (weakKeyScores.size > 0) {
           this._recallBuffer.push({ queryText: cleanQuery, weakKeyScores });
         }
       }
-      return result;
+
+      const navId = this._navigationId(navigationId);
+      const discovered: SearchPathRoute[] = [];
+      for (const source of directResult) {
+        const namespaces = namespace
+          ? [namespace]
+          : [...new Set(this._activeMemoryIdsForKey(source.key_id, null).map((mid) => this.memories[mid].namespace))];
+        for (const relationNamespace of namespaces) for (const route of this._pathRelations.routesForSource(relationNamespace, source.key_id)) {
+          const bridge = this.memories[route.bridge_memory_id];
+          if (
+            !this.keys[route.target_key_id] ||
+            !bridge ||
+            this._isExpired(bridge) ||
+            route.bridge_memory_id in this._supersededBy
+          ) continue;
+          discovered.push({
+            sourceKeyId: source.key_id,
+            bridgeMemoryId: route.bridge_memory_id,
+            targetKeyId: route.target_key_id,
+            namespace: relationNamespace,
+            weight: route.weight,
+            evidenceCount: route.evidence_count,
+            rankScore: source.score * 1.25 * Math.min(1, route.weight / 2.5),
+          });
+        }
+      }
+      discovered.sort((left, right) => right.rankScore - left.rankScore || right.weight - left.weight);
+      const selected = discovered[0];
+      this._searchPathRoutes.delete(navId);
+      if (!selected || topK <= 1) return directResult;
+      this._searchPathRoutes.set(navId, new Map([[selected.targetKeyId, selected]]));
+      this._trimPathNavigationState();
+
+      const target = this.keys[selected.targetKeyId];
+      const relationView = {
+        key_id: selected.targetKeyId,
+        concept: target.concept,
+        aliases: target.aliases ?? [],
+        key_type: target.key_type,
+        score: Math.round(selected.rankScore * 1000) / 1000,
+        score_kind: "path_relation",
+        match_type: "relation",
+        memory_count: this._activeMemoryIdsForKey(selected.targetKeyId, namespace).length,
+        is_hub: (this._keyToMems[selected.targetKeyId]?.size ?? 0) >= KEY_HUB_MIN_LINKS,
+        specificity: Math.round((1 / Math.max(1, this._keyToMems[selected.targetKeyId]?.size ?? 0)) * 1000) / 1000,
+        cluster_size: 1 + (target.aliases?.length ?? 0),
+        evidence: "learned_path",
+        suggested_tool: "read_key",
+        relation_strength: Math.round(selected.weight * 1000) / 1000,
+        relation_evidence: selected.evidenceCount,
+        relation_path: {
+          source_key_id: selected.sourceKeyId,
+          bridge_memory_id: selected.bridgeMemoryId,
+        },
+      };
+      const existing = directResult.findIndex((candidate) => candidate.key_id === selected.targetKeyId);
+      const relationIndex = Math.min(4, topK - 1);
+      if (existing >= 0) {
+        const withRelation = [...directResult];
+        Object.assign(withRelation[existing], {
+          relation_strength: relationView.relation_strength,
+          relation_evidence: relationView.relation_evidence,
+          relation_path: relationView.relation_path,
+        });
+        if (existing > relationIndex) {
+          const [candidate] = withRelation.splice(existing, 1);
+          withRelation.splice(relationIndex, 0, candidate);
+        }
+        return withRelation;
+      }
+      return [
+        ...directResult.slice(0, relationIndex),
+        relationView,
+        ...directResult.slice(relationIndex, Math.max(relationIndex, topK - 1)),
+      ];
     });
   }
 
@@ -1851,7 +2031,14 @@ export class MemoryGraph {
 
   async readKey(
     keyId: string,
-    options: { namespace?: string | null; limit?: number; offset?: number; query?: string | null } = {}
+    options: {
+      namespace?: string | null;
+      limit?: number;
+      offset?: number;
+      query?: string | null;
+      navigationId?: string | null;
+      useRelationPath?: boolean;
+    } = {}
   ): Promise<object> {
     if (!(keyId in this.keys)) {
       // Agents sometimes pass the concept text ("agent-sandbox") or a mistyped id here.
@@ -1874,7 +2061,39 @@ export class MemoryGraph {
     const qEmb = cleanQuery ? await embedTextAsync(cleanQuery, "query") : null;
     if (qEmb) this._checkDim(qEmb);
 
-    const ranked = this._activeMemoryIdsForKey(keyId, namespace)
+    const navId = this._navigationId(options.navigationId);
+    const pending = options.useRelationPath === false ? undefined : this._pendingPath.get(navId);
+    const pendingRoute = pending
+      ? this._pathRelations.routes(pending.namespace, pending.sourceKeyId, pending.bridgeMemoryId)
+          .find((route) => route.target_key_id === keyId)
+      : undefined;
+    const searchRoute = options.useRelationPath === false
+      ? undefined
+      : this._searchPathRoutes.get(navId)?.get(keyId);
+    const activeRoute = pendingRoute ?? (searchRoute
+      ? {
+          target_key_id: searchRoute.targetKeyId,
+          bridge_memory_id: searchRoute.bridgeMemoryId,
+          weight: searchRoute.weight,
+          evidence_count: searchRoute.evidenceCount,
+        }
+      : undefined);
+    const routeSource = pendingRoute ? pending : searchRoute;
+    if (searchRoute) {
+      this._pendingPath.delete(navId);
+      this._pendingPath.set(navId, {
+        sourceKeyId: searchRoute.sourceKeyId,
+        bridgeMemoryId: searchRoute.bridgeMemoryId,
+        namespace: searchRoute.namespace,
+      });
+      this._trimPathNavigationState();
+    }
+    const activeMemoryIds = this._activeMemoryIdsForKey(keyId, namespace);
+    const routedMemoryIds = activeRoute && activeMemoryIds.some((mid) => mid !== activeRoute.bridge_memory_id)
+      ? activeMemoryIds.filter((mid) => mid !== activeRoute.bridge_memory_id)
+      : activeMemoryIds;
+
+    const ranked = routedMemoryIds
       .map((mid) => {
         const mem = this.memories[mid];
         const linkWeight = this._getLinkWeight(keyId, mid);
@@ -1903,6 +2122,17 @@ export class MemoryGraph {
       memories: page,
       total: ranked.length,
       next_offset: offset + limit < ranked.length ? offset + limit : null,
+      ...(activeRoute
+        ? {
+            relation_path: {
+              source_key_id: routeSource!.sourceKeyId,
+              bridge_memory_id: activeRoute.bridge_memory_id,
+              strength: Math.round(activeRoute.weight * 1000) / 1000,
+              evidence_count: activeRoute.evidence_count,
+              bridge_excluded: routedMemoryIds.length < activeMemoryIds.length,
+            },
+          }
+        : {}),
       scoring: {
         content_relevance: qEmb
           ? "cosine similarity; comparable to recall key relevance"
@@ -1918,7 +2148,8 @@ export class MemoryGraph {
     topKey: DirectHydrateKey | null | undefined,
     query: string,
     namespace: string | null = null,
-    maxChars = INJECT_MAX_CHARS
+    maxChars = INJECT_MAX_CHARS,
+    navigationId?: string | null,
   ): Promise<DirectHydrateTop1Decision> {
     if (!topKey) return { status: "no_key", candidate: null };
     const shouldRerank = rerankEnabled();
@@ -1926,6 +2157,7 @@ export class MemoryGraph {
       query,
       namespace,
       limit: shouldRerank ? RERANK_POOL : 1,
+      useRelationPath: false,
     }) as {
       memories: Array<{
         memory_id: string;
@@ -1981,6 +2213,20 @@ export class MemoryGraph {
       ) {
         return { status: "no_memory", candidate: null };
       }
+      const relationRoutes = new Map(
+        this._pathRelations.routes(mem.namespace, topKey.key_id, handle.memory_id)
+          .map((route) => [route.target_key_id, route]),
+      );
+      if (!this._isAutoLink(topKey.key_id, handle.memory_id)) {
+        const navId = this._navigationId(navigationId);
+        this._pendingPath.delete(navId);
+        this._pendingPath.set(navId, {
+          sourceKeyId: topKey.key_id,
+          bridgeMemoryId: handle.memory_id,
+          namespace: mem.namespace,
+        });
+        this._trimPathNavigationState();
+      }
       const memory = truncateInjectedContent({
         id: handle.memory_id,
         content: mem.content,
@@ -1999,8 +2245,17 @@ export class MemoryGraph {
             relevance: cueEmb
               ? Math.round(cosineSim(cueEmb, this.keys[ref.key_id].embedding) * 1000) / 1000
               : null,
+            ...(relationRoutes.has(ref.key_id)
+              ? {
+                  relation_strength: Math.round(relationRoutes.get(ref.key_id)!.weight * 1000) / 1000,
+                  relation_evidence: relationRoutes.get(ref.key_id)!.evidence_count,
+                }
+              : {}),
           }))
-          .sort((a, b) => (b.relevance ?? 0) - (a.relevance ?? 0)),
+          .sort((a, b) =>
+            (b.relation_strength ?? 0) - (a.relation_strength ?? 0) ||
+            (b.relevance ?? 0) - (a.relevance ?? 0)
+          ),
       }, contentLimit);
       return {
         status: "candidate" as const,
@@ -2156,7 +2411,8 @@ export class MemoryGraph {
   async readMemory(
     memoryId: string,
     viaKeyId?: string | null,
-    namespace?: string | null
+    namespace?: string | null,
+    navigationId?: string | null,
   ): Promise<object> {
     return this._lock.runExclusive(async () => {
       const mem = this.memories[memoryId];
@@ -2169,6 +2425,14 @@ export class MemoryGraph {
       if (viaKeyId && !this._hasLink(viaKeyId, memoryId)) {
         throw new Error(`Key ${viaKeyId} is not linked to memory ${memoryId}`);
       }
+      const navId = this._navigationId(navigationId);
+      const pending = this._pendingPath.get(navId);
+      const repeatedBridgeRead = Boolean(
+        pending &&
+        pending.bridgeMemoryId === memoryId &&
+        pending.sourceKeyId === viaKeyId
+      );
+      if (!repeatedBridgeRead) this._finishPathOpportunity(navId, memoryId, viaKeyId ?? null);
 
       mem.access_count += 1;
       mem.last_accessed = this._now();
@@ -2184,6 +2448,25 @@ export class MemoryGraph {
         await this._maybeLearnAlias(viaKeyId, memoryId);
       }
 
+      const explicitVia = viaKeyId && !this._isAutoLink(viaKeyId, memoryId) ? viaKeyId : null;
+      if (explicitVia) {
+        this._pendingPath.delete(navId);
+        this._pendingPath.set(navId, {
+          sourceKeyId: explicitVia,
+          bridgeMemoryId: memoryId,
+          namespace: mem.namespace,
+        });
+        this._trimPathNavigationState();
+      } else {
+        this._pendingPath.delete(navId);
+      }
+      const relationRoutes = new Map(
+        explicitVia
+          ? this._pathRelations.routes(mem.namespace, explicitVia, memoryId)
+              .map((route) => [route.target_key_id, route])
+          : [],
+      );
+
       const connectedKeys = [...(this._memToKeys[memoryId] ?? new Map())]
         .filter(([kid]) => kid in this.keys)
         .map(([kid, weight]) => ({
@@ -2191,8 +2474,17 @@ export class MemoryGraph {
           link_weight: Math.round(weight * 1000) / 1000,
           traversed_from: kid === viaKeyId,
           auto: this._isAutoLink(kid, memoryId),
+          ...(relationRoutes.has(kid)
+            ? {
+                relation_strength: Math.round(relationRoutes.get(kid)!.weight * 1000) / 1000,
+                relation_evidence: relationRoutes.get(kid)!.evidence_count,
+              }
+            : {}),
         }))
-        .sort((a, b) => b.link_weight - a.link_weight);
+        .sort((a, b) =>
+          (b.relation_strength ?? 0) - (a.relation_strength ?? 0) ||
+          b.link_weight - a.link_weight
+        );
 
       // Defer persistence: reinforcement is soft and a full save() here is O(graph)
       // (measured ~263ms @ 3k memories). markDirty() holds it in RAM; flush()/the next
