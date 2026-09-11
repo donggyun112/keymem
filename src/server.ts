@@ -86,15 +86,6 @@ export function buildSource(
 
 type ReqHeaders = Record<string, string | string[] | undefined> | undefined;
 
-function navigationId(headers: ReqHeaders, transportSessionId?: string): string {
-  const host = hostSessionFromHeaders(headers);
-  if (host) return `${host.agent}:${host.session_id}`;
-  if (transportSessionId) return `mcp:${transportSessionId}`;
-  if (process.env.CODEX_THREAD_ID) return `codex:${process.env.CODEX_THREAD_ID}`;
-  if (process.env.CLAUDE_CODE_SESSION_ID) return `claude:${process.env.CLAUDE_CODE_SESSION_ID}`;
-  return `server:${SERVER_SESSION}`;
-}
-
 // Resolve the host transcript link for one request. Header path (daemon) is
 // authoritative and needs no ambient env trust. Env path (stdio in-process
 // fallback) keeps the old gated behavior, including the mtime heuristic.
@@ -147,7 +138,7 @@ Stats: {stats}
 ### Recall (PROACTIVE — do it often)
 1. **MUST recall before your first reply.** Recall returns ranked key clusters plus one passive Top-1 memory by default. Always pass the active project/context \`namespace\` when one is known.
 2. \`recall\` answers a question: check whether the returned memory actually answers it. Use it directly when it does, applying its \`validity\`. It is unconfirmed and non-reinforcing. Its \`matched_key\` records the incoming edge; \`connected_keys\` are next-hop targets, each with a \`relevance\` score (cosine to your query/context, sorted high→low).
-2a. If the memory only points elsewhere or is partial, take one more hop: prefer a \`connected_keys\` entry carrying \`relation_strength\` (a repeatedly used path), otherwise pick the highest-relevance entry you did not arrive by. Call \`read_key(key_id, query, namespace)\`, then \`read_memory\` on the best handle. One hop = one call; stop when the answer is complete. A full read records access, reinforces only the traversed edge, and may learn aliases or a repeated path; it does not confirm currentness.
+2a. If the memory only points elsewhere or is partial, take one more hop: pick the highest-relevance \`connected_keys\` entry you did not arrive by, call \`read_key(key_id, query, namespace)\`, then \`read_memory\` on the best handle. One hop = one call; stop when the answer is complete. A full read records access, reinforces only the traversed edge, and may learn aliases; it does not confirm currentness.
 3. Recall again whenever the topic shifts. Never say "I don't know" without navigating first.
 4. **Query = short noun/keyword, NOT a full sentence.**
    - ❌ recall("어디 살아"), recall("뭐 마셔") — 구어체 문장은 매칭 안 됨
@@ -279,7 +270,7 @@ export function createMcpServer(): Server {
       {
         name: "recall",
         description:
-          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. By default returns {status, query, namespace, keys, memories}: ranked key clusters plus one passive Top-1 memory selected under the top key. The memory includes validity, matched_key, and connected_keys. Prefer a connected key carrying relation_strength (a repeatedly used path), otherwise use relevance. If the memory only points elsewhere or is partial, call read_key(that key_id, query, namespace) then read_memory and stop as soon as the answer is complete. Each hop is one call; the store never fans out for you. Passive recall never reinforces content links or changes access, depth, aliases, or confirmation; unused learned paths may weaken. inject:true remains a compatibility path for associative multi-memory expansion and is not required for Top-1 hydration. An empty result includes empty keys/memories and nearest_keys.",
+          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. By default returns {status, query, namespace, keys, memories}: ranked key clusters plus one passive Top-1 memory selected under the top key. The memory includes validity, matched_key, and connected_keys, each with a relevance score (cosine of that key to your query/context, sorted high→low). recall answers a question: check whether the Top-1 memory actually answers it. If it only points elsewhere, is partial, or the highest-relevance connected key is not the one you arrived by, take one more hop — read_key(that key_id, query, namespace) then read_memory — and stop as soon as the answer is complete. Each hop is one call; the store never fans out for you. Passive recall never reinforces links or changes access, depth, aliases, or confirmation. inject:true remains a compatibility path for associative multi-memory expansion and is not required for Top-1 hydration. An empty result includes empty keys/memories and nearest_keys.",
         inputSchema: {
           type: "object",
           properties: {
@@ -340,7 +331,7 @@ export function createMcpServer(): Server {
       {
         name: "read_memory",
         description:
-          "Read the full content and validity of one stored memory (selected via read_key). Returns the memory and all connected key clusters so exploration can continue Key → Memory → Key. Pass via_key_id from the selected key: the read records access and only that traversed edge is Hebbian-reinforced. Repeated Source Key → Bridge Memory → Target Key traversals are learned internally; only paths that cross the repeat threshold appear as relation_strength, and unused paths weaken. Reading does not change content depth or confirm that the content is current.",
+          "Read the full content and validity of one stored memory (selected via read_key). Returns the memory and all connected key clusters so exploration can continue Key → Memory → Key. Pass via_key_id from the selected key: the read records access and only that traversed edge is Hebbian-reinforced. Reading does not change content depth or confirm that the content is current.",
         inputSchema: {
           type: "object",
           properties: {
@@ -605,7 +596,6 @@ export function createMcpServer(): Server {
     const { name, arguments: args } = request.params;
     const a = (args ?? {}) as Record<string, unknown>;
     const headers = extra.requestInfo?.headers;
-    const navId = navigationId(headers, extra.sessionId);
 
     try {
       switch (name) {
@@ -635,15 +625,13 @@ export function createMcpServer(): Server {
             a.query as string,
             typeof a.top_k === "number" ? a.top_k : 8,
             namespace,
-            context,
-            navId,
+            context
           ) as RecallKeyCandidate[];
           const decision = await graph.directHydrateTop1(
             results[0] as DirectHydrateKey | undefined,
             context?.trim() || (a.query as string),
             namespace,
             typeof a.inject_max_chars === "number" ? a.inject_max_chars : undefined,
-            navId,
           );
           const responseKeys = compactRecallKeys(results);
           const memories = decision.status === "candidate"
@@ -704,7 +692,6 @@ export function createMcpServer(): Server {
             namespace: typeof a.namespace === "string" ? a.namespace : null,
             limit: typeof a.limit === "number" ? a.limit : 10,
             offset: typeof a.offset === "number" ? a.offset : 0,
-            navigationId: navId,
           });
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
         }
@@ -713,8 +700,7 @@ export function createMcpServer(): Server {
           const result = await graph.readMemory(
             a.memory_id as string,
             typeof a.via_key_id === "string" ? a.via_key_id : null,
-            typeof a.namespace === "string" ? a.namespace : null,
-            navId,
+            typeof a.namespace === "string" ? a.namespace : null
           );
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
         }

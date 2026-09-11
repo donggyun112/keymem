@@ -328,50 +328,49 @@ and the fixture had no resolution at all.
 
 ---
 
-## 7. Learned key paths — co-match graph removed, traversed paths retained
+## 7. Hebbian key associations — built, measured, removed
 
-The first implementation paired every key that co-matched a query. It formed 30–96 broad,
-undirected edges without moving the real-store or fixture metrics, so it was removed. The failure
-was useful: co-occurrence says keys appeared together, but does not say which way the agent moved
-or which memory acted as the bridge.
+Recorded because the negative result is the useful part: it costs a day to rebuild this
+and rediscover the same thing.
 
-The replacement learns only an actual directed traversal:
+**The idea.** keymem's graph is bipartite — keys connect only through the memories they
+share, so two key clusters with no memory in common are unreachable from each other at
+*any* hop count, however related they are. A user's queries carry knowledge the data does
+not: asking about `배포` and `릴리스` in the same breath, repeatedly, is evidence they belong
+together even when no single memory carries both. So: keys that co-match a query and then get
+a confirmed read accrue an association, and after three confirmations it becomes a traversable
+edge, scored below `HOP_DECAY` so it can never outrank a real shared memory.
 
-`source key → bridge memory → target key → different memory`
+It worked, in the sense that the edges formed and recall traversed them — a unit test on a
+purpose-built fixture confirmed it. **It was removed anyway, because no non-circular
+measurement could show it helping.**
 
-The bridge identity is retained. When the path is active, `read_key(target)` excludes that bridge
-if another memory is available; without this exclusion the agent simply rereads the first memory
-and the apparent key relation produces no recall gain.
+| instrument | OFF | ON | edges formed |
+|---|---|---|---|
+| §6 fixture (60 memories), after a recall→read training phase | bridge/direct/precision/notfound all at ceiling | **identical, every cell** | 30 traversable |
+| Owner's real store (530 memories), real-eval queries, train/held-out split | train 5/6, held-out 6/6 | **train 5/6, held-out 6/6** | 36 traversable |
 
-### Promotion and decay gate
+### Why it was removed rather than shipped behind a flag
 
-| policy | value | measured reason |
-|---|---:|---|
-| promotion | 2 traversal events / weight 1.5 | one-shot noise lowered assoc Hit@5 from 0.333 to 0.167; two-event gating hid it |
-| opportunity half-life | 8 | at 20% true-path use: active 0.931, visible-edge precision 0.944 |
-| demotion | weight ≤ 1 | a two-use path disappears after 8 misses; a four-use path remains at weight 2 |
-| wall half-life | 3 days | prevents paths with no further opportunities from remaining permanent |
+- **Three independent measurements, no movement in either direction.** Not better, not worse.
+  For a mechanism whose entire job is adding edges to a graph, "no effect" is not a neutral
+  result — it means the edges are not load-bearing.
+- **The only place the benefit appeared was a fixture built to show it.** The synthetic
+  training trace hand-writes "the user asked about A and B together" and then checks that A
+  reaches B — that re-proves the implementation, not the idea. The held-out split on the real
+  store was the honest instrument, and it moved nothing. (Its held-out half already sat at 6/6
+  before training, so strictly it could only have detected harm — which is itself a finding:
+  on this store there is no reachability gap for associations to fill.)
+- **Edges formed promiscuously.** Pairing every key a query matched accrued 96 traversable
+  edges from 12 queries in 3 rounds; capping the co-match set to a query's top 3 keys cut it to
+  30 with identical metrics. A mechanism that needs a cap to avoid connecting everything to
+  everything, and that shows no benefit once capped, is carrying risk for nothing.
+- **A default-off flag is not a resolution.** It ships the maintenance cost and the reader's
+  question ("should I turn this on?") without ever answering it.
 
-The 5,000-run Monte Carlo used 100 opportunities per run and a 10% total random-path rate.
-Half-life 4 over-forgot (`true active = 0.619`); half-life 16 retained too much noise
-(`precision = 0.836`).
-
-### End-to-end gate
-
-The 14-query association fixture was trained with two explicit traversals per expected path and
-then evaluated through the production `searchKeys → readKey` route with one learned-path slot in
-the Top-5:
-
-| metric | baseline | learned path |
-|---|---:|---:|
-| direct Hit@5 | 1.000 | **1.000** |
-| association Hit@5 | 0.333 | **0.667** |
-| not-found accuracy | 0.333 | **0.333** |
-
-This passes the original association gate without the direct regression of the co-match graph.
-The remaining limitation is evidence volume: 49 recorded real reads contained four directional
-transitions and no repeated transition, so organic promotion frequency is not yet measurable.
-The feature therefore exposes nothing on a one-off path and requires no opt-in switch.
+**What would change the verdict:** a store with a genuine reachability gap — disjoint key
+clusters where the answer is unreachable at any hop — plus a real usage trace (host transcripts,
+not a synthetic one) showing those clusters get queried together. Neither exists here yet.
 
 ---
 

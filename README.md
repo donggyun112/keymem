@@ -328,16 +328,9 @@ Sparse and dense rank lists are merged by RRF, then modulated by depth and confi
 
 ### Hebbian Link Learning
 
-Reading a full memory is a **write**, not just a read. `read_memory(memory_id, via_key_id)` reshapes the selected path:
+Reading a full memory is a **write**, not just a read. In the default flow, `recall()` and `read_key()` are read-only; `read_memory(memory_id, via_key_id)` reshapes the selected path:
 
 - The traversed `via_key_id → memory_id` link is **reinforced** (`+0.1`, capped at `3.0`).
-- Consecutive full reads can learn a directed `source key → bridge memory → target key` path.
-  One traversal remains internal; after two independent traversal events it appears as
-  `relation_strength` on recall/read results.
-- Following an active relation with `read_key(target)` excludes the bridge memory when another
-  target memory exists, so the hop advances instead of returning to the bridge.
-- An unused path loses half its weight over eight source/bridge opportunities. A weak two-use
-  path therefore disappears after eight misses, while a four-use path remains active.
 - A full read increments access metadata but changes neither depth nor `last_confirmed_at`, so it
   never refreshes freshness. Freshness continues to decay as elapsed time grows. Evidence-backed
   `confirm_memory()` increases depth and refreshes freshness by advancing `last_confirmed_at`.
@@ -445,10 +438,10 @@ servers hide the two transcript tools (`list_sessions`, `get_conversation`):
 
 | Tool | Description |
 | --- | --- |
-| `recall(query, top_k?, namespace?, context?, explain?)` | Return ranked keys plus one passive Top-1 memory with `validity`, `matched_key`, and `connected_keys`. Repeatedly used paths appear as `relation_strength` within the Top-5. `explain:true` also returns namespace counts. |
+| `recall(query, top_k?, namespace?, context?, explain?)` | Return ranked keys plus one passive Top-1 memory with `validity`, `matched_key`, and `connected_keys`. `explain:true` also returns namespace counts. |
 | `browse_keys(namespace, hubs_only?, limit?, offset?)` | Browse a namespace's active key vocabulary, hubs first, when recall has no entry hit. |
-| `read_key(key_id, query?, namespace?, limit?, offset?)` | List ranked memory IDs and metadata connected to one key. Active learned paths skip their bridge memory when another destination exists. Pass the original query for relevance ordering; supports pagination for hubs. |
-| `read_memory(memory_id, via_key_id?, namespace?)` | Read full memory content, connected keys, and `validity`. Updates access and, when `via_key_id` is supplied, that traversed edge; repeated directed paths are learned but never confirm or deepen content. |
+| `read_key(key_id, query?, namespace?, limit?, offset?)` | List ranked memory IDs and metadata connected to one key. Pass the original query for relevance ordering; supports pagination for hubs. |
+| `read_memory(memory_id, via_key_id?, namespace?)` | Read full memory content, connected keys, and `validity`. Updates access and, when `via_key_id` is supplied, that traversed edge; never confirms or deepens content. |
 | `confirm_memory(memory_id, evidence, namespace?, source?)` | Refresh freshness and deepen a current memory after explicit user evidence, an authoritative source, or direct observation. A read alone is not evidence. |
 | `remember(content, keys, key_types?, namespace?, ttl_seconds?, decay_profile?, related_to?)` | Save memory with key concepts, optional TTL, and a `transient`, `standard`, `stable`, or `permanent` decay profile. |
 | `correct(memory_id, content, keys?, key_types?, ttl_seconds?, decay_profile?, related_to?)` | Versioned update. The immediate predecessor is preserved but inactive; omitted TTL/profile inherit from it. |
