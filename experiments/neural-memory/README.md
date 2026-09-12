@@ -248,3 +248,34 @@ This is the first outcome in the curriculum that cannot be classified from the f
 It remains a one-file, next-version proxy rather than a complete causal account of which agent
 action helped a task. Reverts are rare, so the current model is useful as a ranking signal but is
 not safe as an automatic deletion policy.
+
+## Phase 9: prospective causal episodes
+
+Phase 9 adds an observation-only Claude Code hook around real work in this repository. It records
+the stable relationship that retrospective transcripts lose: a candidate action ID, workspace
+state before and after it, later verification, subsequent repair, user acceptance/correction, and
+exact state restoration. `tool_use_id` joins pre- and post-tool events; a bounded recent-action set
+lets one global test outcome point to several eligible traces instead of assuming the immediately
+preceding edit caused it. Each later prompt also carries up to 32 opaque candidate action IDs plus
+its feature sketch, so later-reuse selection can be trained without storing the prompt itself.
+
+The logger persists no prompt, path, command, source code, assistant response, or tool output.
+Session/path/tool identifiers and file contents use per-installation keyed digests, and
+language-bearing fields become keyed, normalized 256-dimensional signed character n-gram sketches
+before the hook writes anything. Its event file, salt, and state ledger live under ignored `local-data/`.
+The hook always exits successfully and never returns a permission or stop decision.
+
+`.claude/settings.local.json` enables the observer only for this project. New Claude sessions pick
+up the hook automatically. To inspect whether enough outcomes have accumulated:
+
+```bash
+uv run python analyze_prospective_events.py
+uv run python analyze_prospective_events.py \
+  --examples local-data/prospective-credit.jsonl
+```
+
+The derived labels are deliberately temporal actions rather than a single final class: a failing
+verification or correction yields `revise`, a later pass or acceptance yields `strengthen`, and an
+exact restoration of an earlier workspace state yields a separate action-specific `forget` event.
+No Phase 9 model should be trained until multiple sessions contain all three labels and enough
+multi-action outcomes for a whole-session holdout.

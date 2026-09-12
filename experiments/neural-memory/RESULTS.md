@@ -430,3 +430,30 @@ The next investment should collect richer causal episodes prospectively: record 
 memory/action ID, test outcome, subsequent fix, final accepted diff, and later reuse. Training can
 then assign a global outcome across multiple traces and distinguish revise from permanent forget
 without relying on file adjacency heuristics.
+
+# Phase 9: prospective causal logging
+
+Date: 2026-09-13
+
+An observation-only project hook is now installed for future Claude Code sessions. `PreToolUse` and
+the two post-tool events join candidate mutations and verifications by `tool_use_id`; `Stop` records
+the turn-final workspace fingerprint; the following `UserPromptSubmit` can attach explicit
+accept/revise evidence to the previous turn's candidate set. A failed verification also becomes the
+parent of the next workspace-changing action, preserving a direct repair edge.
+
+The replay builder emits multi-candidate `strengthen`/`revise` examples from tests and feedback. If
+a later post-action or turn snapshot exactly equals a candidate's pre-action workspace digest, it
+also emits a single-candidate `forget` transition at that later time. This prevents permanent
+forgetting from being conflated with the earlier, recoverable request to revise an action.
+
+Privacy reduction happens before persistence: only keyed opaque IDs and content digests, file
+sizes, and keyed quantized 256-dimensional signed character n-gram sketches reach disk. These
+sketches remain trainable signals rather than a cryptographic anonymization guarantee, but the raw
+hook payload is never logged. The event stream, salt, and mutable join ledger are ignored by git
+and created with user-only permissions. Unit tests use embedded secret markers and private
+filenames to verify neither appears in the JSONL output.
+
+Current status: instrumentation only, with no scientific metric claimed. The full suite has 60
+passing tests. The next decision gate is empirical: wait for multi-session prospective data, report
+label counts and multi-action coverage, then train a trace selector/action head with whole-session
+holdout. Until then, the Phase 8 relational result remains the last model result.
