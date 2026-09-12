@@ -296,7 +296,7 @@ uv run python train_repair_credit_cv.py \
   --architecture decoupled --steps 600 --seed 7 --summary
 ```
 
-The evaluation leaves out one entire project at a time and concatenates predictions from all six
+The evaluation leaves out one entire project at a time and concatenates predictions from all
 held-out folds. The coupled model predicts `ignore/strengthen/revise` directly. The decoupled
 control first decides whether to activate each trace, then chooses strengthen versus revise. Both
 retain a 64-dimensional state per candidate and receive one shared later outcome.
@@ -305,3 +305,20 @@ Neither architecture clears the gate. The outcome adds only a small, shuffle-sen
 balanced accuracy, while overall accuracy remains below the majority class and exact episode
 accuracy is approximately zero. This control therefore supports waiting for prospective causal
 links rather than manufacturing more labels from transcript order.
+
+### Claude + Codex history expansion
+
+The user separately authorized local training use of their `~/.codex` conversation history. The
+Codex adapter reads rollout `function_call`/`function_call_output` and
+`custom_tool_call`/`custom_tool_call_output` pairs, including wrapped `exec` and `apply_patch`
+events. Session metadata supplies the canonical working directory so the same project stays in one
+holdout group across Claude and Codex formats.
+
+The combined corpus contains 370 repair episodes from 61 sessions and 18 projects. Codex adds 251
+episodes to Claude's 119. The same privacy boundary applies: source text is consumed locally to
+build ignored hashed features and is not copied into git.
+
+Adding Codex makes the outcome relation more reproducible, but does not make the weak temporal
+labels causal ground truth. Both coupled and decoupled models improve when the real outcome is
+available and regress when outcomes are shuffled; neither achieves reliable whole-episode action
+assignment. See `RESULTS.md` for the leave-one-project-out measurements.

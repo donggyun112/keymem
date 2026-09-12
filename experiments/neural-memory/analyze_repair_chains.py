@@ -7,12 +7,16 @@ from collections import Counter
 from pathlib import Path
 
 from neural_memory.claude_logs import stable_eval_split
+from neural_memory.codex_repair_chains import iter_codex_repair_episodes
 from neural_memory.repair_chains import iter_repair_episodes
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze retrospective verification repair chains")
     parser.add_argument("--root", type=Path, default=Path.home() / ".claude" / "projects")
+    parser.add_argument(
+        "--codex-root", type=Path, default=Path.home() / ".codex" / "sessions"
+    )
     parser.add_argument("--max-per-action", type=int, default=4)
     parser.add_argument("--distractors", type=int, default=2)
     return parser.parse_args()
@@ -20,13 +24,21 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    episodes = list(
+    claude_episodes = list(
         iter_repair_episodes(
             args.root,
             max_per_action=args.max_per_action,
             distractors=args.distractors,
         )
     )
+    codex_episodes = list(
+        iter_codex_repair_episodes(
+            args.codex_root,
+            max_per_action=args.max_per_action,
+            distractors=args.distractors,
+        )
+    )
+    episodes = [*claude_episodes, *codex_episodes]
     labels = Counter(
         candidate.action for episode in episodes for candidate in episode.candidates
     )
@@ -41,6 +53,7 @@ def main() -> None:
     }
     payload = {
         "episodes": len(episodes),
+        "sources": {"claude": len(claude_episodes), "codex": len(codex_episodes)},
         "projects": len({episode.project for episode in episodes}),
         "sessions": len({episode.session_id for episode in episodes}),
         "train_episodes": sum(not stable_eval_split(episode.project) for episode in episodes),

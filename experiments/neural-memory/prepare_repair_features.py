@@ -8,6 +8,7 @@ from pathlib import Path
 import torch
 
 from neural_memory.claude_logs import stable_eval_split
+from neural_memory.codex_repair_chains import iter_codex_repair_episodes
 from neural_memory.outcome_labels import hashed_text_features
 from neural_memory.repair_chains import iter_repair_episodes
 
@@ -18,6 +19,9 @@ LABELS = {"ignore": 0, "strengthen": 1, "revise": 2}
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prepare repair-chain trace features")
     parser.add_argument("--root", type=Path, default=Path.home() / ".claude" / "projects")
+    parser.add_argument(
+        "--codex-root", type=Path, default=Path.home() / ".codex" / "sessions"
+    )
     parser.add_argument("--output", type=Path, default=Path("artifacts/repair_chains.pt"))
     parser.add_argument("--feature-dim", type=int, default=512)
     parser.add_argument("--max-per-action", type=int, default=4)
@@ -30,6 +34,13 @@ def main() -> None:
     episodes = list(
         iter_repair_episodes(
             args.root,
+            max_per_action=args.max_per_action,
+            distractors=args.distractors,
+        )
+    )
+    episodes.extend(
+        iter_codex_repair_episodes(
+            args.codex_root,
             max_per_action=args.max_per_action,
             distractors=args.distractors,
         )

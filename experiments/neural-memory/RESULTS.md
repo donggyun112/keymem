@@ -453,7 +453,7 @@ hook payload is never logged. The event stream, salt, and mutable join ledger ar
 and created with user-only permissions. Unit tests use embedded secret markers and private
 filenames to verify neither appears in the JSONL output.
 
-Current status: instrumentation only, with no prospective scientific metric claimed. The full suite has 68
+Current status: instrumentation only, with no prospective scientific metric claimed. The full suite has 70
 passing tests. The next decision gate is empirical: wait for multi-session prospective data, report
 label counts and multi-action coverage, then train a trace selector/action head with whole-session
 holdout. Until then, the Phase 8 relational result remains the last model result.
@@ -495,3 +495,41 @@ mutations share the same bag-level result. The outcome contains weak relational 
 historical transcripts cannot tell which edit actually caused the fix. Further architecture tuning
 on these labels would optimize teacher noise. The next valid investment remains accumulation of
 prospective action IDs, repair edges, accepted final states, and exact later reverts.
+
+## Claude + Codex history expansion
+
+The user explicitly authorized training use of both their local Claude and Codex conversation
+histories. A Codex rollout adapter added structured `function_call` and `custom_tool_call` events,
+including `exec` wrappers and direct `apply_patch` calls. Working directories from session metadata
+canonicalize project identity across the two log formats.
+
+The combined extractor found 370 episodes across 61 sessions and 18 projects: 119 from Claude and
+251 from Codex. The 2,871 candidate labels comprised 637 ignore, 796 strengthen, and 1,438 revise.
+There were 293 pytest, 28 JavaScript-test, 35 lint, eight build, and six type-check episodes. Of the
+370 episodes, 365 had more than two candidates.
+
+The feature preparation and evaluation protocol remained unchanged: no raw text in the artifact,
+deterministically shuffled candidate slots, 512-dimensional character hashes, 64-dimensional
+persistent traces, and leave-one-project-out evaluation over every episode. Five seeds used 600
+steps per fold.
+
+| Architecture / evidence | Balanced accuracy |
+| --- | ---: |
+| Majority revise | 0.3333 |
+| Coupled, candidate only | 0.3553 +/- 0.0028 |
+| **Coupled, candidate + outcome** | **0.3748 +/- 0.0046** |
+| Coupled joint, shuffled outcomes | 0.3630 +/- 0.0085 |
+| Decoupled, candidate only | 0.3635 +/- 0.0037 |
+| **Decoupled, candidate + outcome** | **0.3757 +/- 0.0072** |
+| Decoupled joint, shuffled outcomes | 0.3606 +/- 0.0088 |
+
+The larger corpus changes the confidence more than the absolute ceiling. Joint evidence beat the
+matching candidate-only control in both architectures, and shuffling outcomes removed most of the
+gain. In the decoupled model, mean selected-action accuracy rose from about 0.263 to 0.394 and
+activation recall from 0.454 to 0.669 when the outcome was added. This is clearer evidence that a
+small memory layer can use a later global event to alter old action traces.
+
+It is still below a deployment gate. Coupled joint accuracy averaged about 0.409 versus 0.501 for
+the majority class, and exact whole-episode accuracy remained below 1%. Temporal repair labels
+remain ambiguous about which mutation caused a pass. The combined result supports the existence of
+the delayed relational phenomenon, not autonomous memory deletion or trustworthy causal credit.

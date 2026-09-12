@@ -178,6 +178,9 @@ def load_repair_episodes(
             raw_session = item.get("sessionId") or item.get("session_id")
             if isinstance(raw_session, str):
                 session_id = raw_session
+            raw_project = item.get("cwd")
+            if isinstance(raw_project, str):
+                project = str(Path(raw_project).expanduser().resolve())
             message = item.get("message")
             if not isinstance(message, dict) or not isinstance(message.get("content"), list):
                 continue
