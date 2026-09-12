@@ -16,6 +16,12 @@ from .eviction import (
 )
 from .eligibility import ConsolidationMode, EligibilityState, EligibilityTraceMemory
 from .model import FastWeightMemory, MemoryState, WriteTelemetry
+from .global_feedback import (
+    GlobalFeedbackBanks,
+    GlobalFeedbackSelector,
+    GlobalTraceState,
+    load_global_feedback_banks,
+)
 from .online_data import (
     OnlineEpisodeBatch,
     OnlineTextBanks,
@@ -23,6 +29,13 @@ from .online_data import (
     load_online_text_banks,
 )
 from .online import OnlineMemoryState, OnlinePrototypeMemory, OnlineRoutingTelemetry
+from .outcome_memory import (
+    DelayedOutcomeGate,
+    GateMode as OutcomeGateMode,
+    OutcomeBanks,
+    OutcomeTraceState,
+    load_outcome_banks,
+)
 from .semantic import (
     GateMode,
     SemanticAllocationMode,
@@ -44,11 +57,15 @@ __all__ = [
     "CompetitiveMemoryState",
     "ConsolidationMode",
     "DelayedUtilityBatch",
+    "DelayedOutcomeGate",
     "EpisodeBatch",
     "EvictionEpisodeBatch",
     "EligibilityState",
     "EligibilityTraceMemory",
     "FastWeightMemory",
+    "GlobalFeedbackBanks",
+    "GlobalFeedbackSelector",
+    "GlobalTraceState",
     "FrozenTextBanks",
     "GateMode",
     "MemoryState",
@@ -56,6 +73,9 @@ __all__ = [
     "OnlineMemoryState",
     "OnlinePrototypeMemory",
     "OnlineRoutingTelemetry",
+    "OutcomeBanks",
+    "OutcomeGateMode",
+    "OutcomeTraceState",
     "OnlineTextBanks",
     "PriorityEvictionMemory",
     "PriorityMemoryState",
@@ -74,4 +94,6 @@ __all__ = [
     "generate_semantic_episode_batch",
     "load_text_banks",
     "load_online_text_banks",
+    "load_outcome_banks",
+    "load_global_feedback_banks",
 ]

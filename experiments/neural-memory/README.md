@@ -164,3 +164,52 @@ straight-through mask carries future recall gradients into the linear priority s
 This is an explicit short-term trace, not a biological timing model. It has enough slots for all
 six candidate contexts, does not decay with wall-clock time, and receives feedback paired with the
 relevant context. Later work must learn that credit assignment from implicit outcomes.
+
+## Phase 6: global feedback over real conversation traces
+
+Phase 6 removes the explicit context pointer and replaces synthetic observations with the user's
+local Claude prompt history. The loader sessionizes `~/.claude/history.jsonl` by project and idle
+gap, strips tool and internal metadata, and weak-labels cases where a later user turn uniquely
+reuses specific anchors from one of eight older turns. Raw text is never written to the repository
+or embedding artifact.
+
+```bash
+uv run python analyze_claude_logs.py --summary
+HF_HUB_OFFLINE=1 uv run python prepare_claude_log_embeddings.py
+uv run python train_global_feedback.py --steps 1000 --seed 7 --summary
+```
+
+`GlobalFeedbackSelector` observes eight frozen 384-dimensional BGE features and stores only eight
+learned 64-dimensional traces. A later global feedback embedding is projected into the same memory
+space and scores every trace; there is no trace ID, target label, or context pointer in the forward
+path. Its top-k mask is the consolidation action.
+
+The current weak label is deliberately only a bootstrap target. It is constructed from lexical
+anchor recurrence, and full-dimensional frozen cosine remains a stronger baseline. The next label
+must come from outcomes independent of semantic recurrence, such as later corrections, accepted
+actions, or task success, before this can support a claim that the model learns what is worth
+storing rather than which old utterance resembles the present one.
+
+## Phase 7: natural delayed strengthen/revise outcomes
+
+Phase 7 extracts explicit acceptance and correction events from the same local history. Short
+feedback such as `ㅇㅇ`, `좋아`, and `ㄱㄱ` is weak-labeled as accept/strengthen; high-precision
+correction forms such as `ㄴㄴ`, `아니`, `잘못`, and `되돌려` are revise/weaken. These rules are the
+teacher only. The learned gate receives frozen signed character n-gram features and never receives
+the action label.
+
+```bash
+uv run python analyze_claude_outcomes.py --summary
+uv run python prepare_claude_outcome_features.py
+uv run python train_outcome_gate.py --steps 1000 --seed 7 --summary
+```
+
+`DelayedOutcomeGate.observe()` first writes a 64-dimensional provisional request trace. Its later
+`act()` call compares three conditions: request-only, feedback-only, and request-plus-feedback.
+`apply_outcome()` converts the action logits to a differentiable strength update. Accepted traces
+remain strong; correction traces are weakened and marked for revision.
+
+The immediate-previous-interaction association is still an architectural assumption, and regex
+weak labels are not ground truth. Phase 6 and 7 together now implement the two halves needed for a
+real memory update—select a responsible old trace and choose strengthen versus revise—but they have
+not yet been trained jointly from downstream task reward.

@@ -263,3 +263,99 @@ corrections, or later behavior without restating the original context.
 The next experiment should remove the explicit context pointer from feedback. A global outcome
 must then update the responsible recent traces through learned eligibility weights, which is the
 first condition that genuinely tests temporal credit assignment rather than delayed ranking.
+
+# Phase 6: global feedback on local Claude conversation logs
+
+Date: 2026-09-12
+
+The user authorized local use of the full `~/.claude` conversation history. No raw prompt text is
+copied into this repository or persisted in the generated tensor artifact. The global history was
+sessionized per project with a six-hour idle boundary. After filtering short/internal turns it
+contained 75 projects, 495 conversations, and 16,622 user turns.
+
+A weak delayed-revisit target was emitted when a later user turn uniquely reused specific lexical
+anchors from one of eight candidates ending at least two turns earlier. This produced 1,349
+examples. A stable project hash reserved entire projects for evaluation: 775 train and 574 eval.
+Median target delay was five turns and the 90th percentile was eight turns.
+
+Commands:
+
+```bash
+uv run python analyze_claude_logs.py --summary
+HF_HUB_OFFLINE=1 uv run python prepare_claude_log_embeddings.py
+uv run python train_global_feedback.py --steps 1000 --seed <seed> --summary
+```
+
+| Selector | Stored trace width | Top-1 | Top-2 | MRR |
+| --- | ---: | ---: | ---: | ---: |
+| Random candidate | N/A | 0.1376 | 0.2485 | 0.3471 |
+| Recency | N/A | 0.2178 | 0.3885 | 0.4299 |
+| Untrained random projection | 64 | 0.7863 +/- 0.0109 | 0.8728 +/- 0.0079 | 0.8616 +/- 0.0073 |
+| **Learned shared projection** | **64** | **0.8002 +/- 0.0036** | **0.8722 +/- 0.0030** | **0.8676 +/- 0.0022** |
+| Full frozen BGE cosine | 384 | 0.8206 | 0.8990 | 0.8851 |
+
+Values are means and population standard deviations over seeds 7, 17, and 29. The learned model
+has 24,577 trainable parameters. It compresses each candidate from 384 to 64 scalars, so eight
+retained traces require 512 rather than 3,072 scalars. Training improved top-1 by 1.39 percentage
+points over the untrained compressed projection, and the learned trace remained 2.03 points below
+full-dimensional cosine.
+
+## Interpretation boundary
+
+This is the first experiment in the series where a single later event must choose among multiple
+old traces without receiving the responsible context or trace ID. Its large advantage over recency
+shows that relevant past state can be activated reliably from natural, delayed conversation data,
+and most of the frozen semantic geometry survives sixfold trace compression.
+
+It is not yet evidence that the layer discovers what is intrinsically worth remembering. The weak
+teacher defines relevance using lexical recurrence, full frozen cosine still wins, and training
+adds only a modest gain over a random shared projection. The next experiment should label memory
+utility using downstream events that are not semantic restatements: corrections, accepted versus
+reverted actions, or later task success. That would separate delayed causal credit from ordinary
+similarity retrieval.
+
+# Phase 7: natural delayed outcome gating
+
+Date: 2026-09-12
+
+The full global history was re-sessionized while retaining short acknowledgements and corrections.
+Across 557 conversations and 23,240 usable turns, high-precision weak rules found 2,940 explicit
+outcomes: 1,677 accept/strengthen and 1,263 correct/revise. Stable project-level splitting yielded
+1,721 train and 1,219 held-out-project evaluation examples. No raw text is stored in the feature
+artifact; a frozen 512-dimensional signed character n-gram hash supports both Korean shorthand and
+English feedback without downloading another encoder.
+
+Commands, repeated with seeds 7, 17, and 29:
+
+```bash
+uv run python analyze_claude_outcomes.py --summary
+uv run python prepare_claude_outcome_features.py
+uv run python train_outcome_gate.py --steps 1000 --seed <seed> --summary
+```
+
+| Available evidence at decision time | Accuracy | Balanced accuracy | Accept recall | Correction recall |
+| --- | ---: | ---: | ---: | ---: |
+| Majority accept | 0.5874 | 0.5000 | 1.0000 | 0.0000 |
+| Request at initial write only | 0.5562 +/- 0.0158 | 0.5429 +/- 0.0073 | 0.6192 | 0.4665 |
+| Later feedback only | 0.9773 +/- 0.0004 | 0.9790 +/- 0.0003 | 0.9693 | 0.9887 |
+| **Request trace + later feedback** | **0.9776 +/- 0.0010** | **0.9796 +/- 0.0009** | **0.9679** | **0.9914** |
+
+The joint gate assigned mean retention 0.9652 to accepted traces and 0.0110 to correction traces.
+The full training module has 66,310 parameters; its persistent per-interaction state is one
+64-dimensional request trace plus one strength scalar. `apply_outcome()` uses the learned retention
+as an actual model-state update rather than returning a diagnostic class alone.
+
+## Interpretation boundary
+
+This experiment answers the original storage bottleneck more directly: these conversations do not
+contain enough evidence at initial observation to predict future utility reliably. Request-only
+balanced accuracy was just 54.3%. Once delayed user feedback arrived, the same small gate made a
+stable strengthen/revise decision at 98.0%. The useful architecture is therefore provisional write
+followed by retroactive consolidation, not a supposedly omniscient write gate at input time.
+
+The result is still imitation learning from explicit surface forms. The weak-label rules define the
+classes, feedback usually belongs to the immediately preceding interaction, and a character hash
+can expose those forms easily. A stronger next test must use implicit outcomes—whether a code change
+survived, was reverted, passed tests, or was reused later—and jointly train trace selection plus the
+strengthen/revise/forget action. That is the point where delayed utility becomes causal rather than
+linguistic.
