@@ -453,7 +453,45 @@ hook payload is never logged. The event stream, salt, and mutable join ledger ar
 and created with user-only permissions. Unit tests use embedded secret markers and private
 filenames to verify neither appears in the JSONL output.
 
-Current status: instrumentation only, with no scientific metric claimed. The full suite has 60
+Current status: instrumentation only, with no prospective scientific metric claimed. The full suite has 68
 passing tests. The next decision gate is empirical: wait for multi-session prospective data, report
 label counts and multi-action coverage, then train a trace selector/action head with whole-session
 holdout. Until then, the Phase 8 relational result remains the last model result.
+
+## Retrospective repair-chain bootstrap: negative control
+
+Because the prospective stream initially contained zero events, a separate bootstrap extractor
+searched the authorized historical transcripts for verification-failure, mutation, and subsequent
+same-family verification-pass chains. It found 119 episodes across 17 sessions and six projects;
+all 119 had more than two candidate actions. The 930 candidate labels comprised 220 ignore, 237
+strengthen, and 473 revise examples. Pytest dominated with 92 episodes, followed by 16 JavaScript
+tests, eight builds, and three lint runs.
+
+Features were frozen 512-dimensional signed character n-gram hashes; raw commands, code, and tool
+output were not stored in the artifact. Candidate order was deterministically shuffled. Evaluation
+used six-fold leave-one-project-out predictions, covering every episode out of project. Each result
+below is the mean and population standard deviation over seeds 7, 17, 29, 41, and 53 with 600
+training steps per fold.
+
+| Architecture / evidence | Balanced accuracy |
+| --- | ---: |
+| Majority revise | 0.3333 |
+| Coupled head, candidate only | 0.3519 +/- 0.0059 |
+| Coupled head, outcome only | 0.3337 |
+| **Coupled head, candidate + outcome** | **0.3650 +/- 0.0062** |
+| Coupled joint, shuffled outcomes | 0.3552 +/- 0.0045 |
+| Decoupled activation/action, candidate only | 0.3578 +/- 0.0049 |
+| Decoupled activation/action, candidate + outcome | 0.3632 +/- 0.0078 |
+| Decoupled joint, shuffled outcomes | 0.3489 +/- 0.0045 |
+
+The small joint gain is real enough to be shuffle-sensitive but not useful. Coupled joint accuracy
+averaged about 0.413 versus 0.509 for the majority class, its activation recall fell relative to
+candidate-only, and no coupled seed classified every action in any held-out episode correctly.
+Separating activation from strengthen/revise did not rescue the task.
+
+This is a negative control, not a failed prospective experiment. Temporal position created the
+teacher labels, so mutations on either side of a test can be unrelated to its outcome, and several
+mutations share the same bag-level result. The outcome contains weak relational information, but
+historical transcripts cannot tell which edit actually caused the fix. Further architecture tuning
+on these labels would optimize teacher noise. The next valid investment remains accumulation of
+prospective action IDs, repair edges, accepted final states, and exact later reverts.

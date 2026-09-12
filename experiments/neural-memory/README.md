@@ -279,3 +279,29 @@ verification or correction yields `revise`, a later pass or acceptance yields `s
 exact restoration of an earlier workspace state yields a separate action-specific `forget` event.
 No Phase 9 model should be trained until multiple sessions contain all three labels and enough
 multi-action outcomes for a whole-session holdout.
+
+### Retrospective repair-chain bootstrap control
+
+While the prospective stream is empty, `repair_chains.py` provides a deliberately separate weak
+control from existing Claude transcripts. It finds a failed verification, the mutations before
+that failure, later mutations, and a subsequent pass in the same test/build family. Older actions
+become `ignore`, pre-failure actions become `revise`, and post-failure/pre-pass actions become
+`strengthen`. This is a temporal teacher, not causal ground truth.
+
+```bash
+uv run python analyze_repair_chains.py
+uv run python prepare_repair_features.py
+uv run python train_repair_credit_cv.py --steps 600 --seed 7 --summary
+uv run python train_repair_credit_cv.py \
+  --architecture decoupled --steps 600 --seed 7 --summary
+```
+
+The evaluation leaves out one entire project at a time and concatenates predictions from all six
+held-out folds. The coupled model predicts `ignore/strengthen/revise` directly. The decoupled
+control first decides whether to activate each trace, then chooses strengthen versus revise. Both
+retain a 64-dimensional state per candidate and receive one shared later outcome.
+
+Neither architecture clears the gate. The outcome adds only a small, shuffle-sensitive gain in
+balanced accuracy, while overall accuracy remains below the majority class and exact episode
+accuracy is approximately zero. This control therefore supports waiting for prospective causal
+links rather than manufacturing more labels from transcript order.
