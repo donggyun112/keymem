@@ -1,0 +1,21 @@
+[project]
+name = "keymem-neural-memory-experiment"
+version = "0.1.0"
+description = "Graph-free fast-weight neural memory experiments for keymem"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "numpy>=2.1",
+  "torch>=2.4",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+]
+text = [
+  "sentence-transformers>=5.6,<6",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
