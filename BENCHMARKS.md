@@ -157,9 +157,10 @@ in isolation over only its 10 paragraphs. Run: `tsx bench/hotpot.ts`.
   both gold paragraphs retrieved **78%** of the time vs **60%** (flat semantic) and **49%**
   (lexical) — +18pp / +29pp, on real external data with gold labels, n=96. This is a stronger
   result than §1 (here the bridge-reached support lands inside top-5 because the pool is only 10).
-- ⚠️ **On comparison questions the graph slightly *hurts*** (both@5 54% vs DIRECT's 63%) — expected:
-  both entities are already in the query, so there's no bridge to traverse and expansion just adds
-  noise. An honest negative that confirms the gain is *specifically* the multi-hop case, not free.
+- ⚠️ **On comparison questions global GRAPH top-k slightly *hurts*** (both@5 54% vs DIRECT's
+  63%). This does not mean the associations are wrong: both entities are already in the query, but
+  the same global top-k policy consumes associative activation as if every task needed the same
+  evidence shape. The follow-up below separates activation from task-specific selection.
 - This is **retrieval-recall of the gold paragraphs, not end-task answer accuracy** — getting both
   supports is necessary, not sufficient, for a correct answer (no LLM judge here).
 
@@ -168,6 +169,68 @@ gold bridge structure — so it risks measuring a graph I keyed to match the ans
 conditions share those keys (the ablation is internally fair), but the absolute gain could be
 inflated. The next check removes exactly that doubt. (Also: one dataset, one embedder, document
 multi-hop not conversational memory; retrieval-recall not end-task accuracy.)
+
+### Follow-up: activation vs task-conditioned evidence selection
+
+To test whether comparison failures are caused by bad graph activation or by downstream
+under-selection, `bench/evidence-projection.ts` holds the GRAPH activation pool fixed and compares:
+
+- `GRAPH_GLOBAL`: the existing global top-5;
+- `GRAPH_POOL`: whether the gold supports are reachable anywhere in the activated top-10;
+- `TASK_PROJECTED`: the same top-10 projected to cover the entity titles named in a comparison
+  question, then filled in original graph-rank order.
+
+The projection does not use gold support labels and does not change traversal, association scores,
+or hub behavior. For experimental isolation it does use HotpotQA's gold question type, and paragraph
+titles stand in for entity keys. Both reinforcement and the optional reranker are disabled, so the
+conditions are pure and order-independent.
+
+| question type | metric | DIRECT | GRAPH_GLOBAL | TASK_PROJECTED | GRAPH_POOL |
+|---|---|---:|---:|---:|---:|
+| bridge (96) | support-recall@5 | 77% | 86% | 86% | 99%@10 |
+| | both@5 | 57% | 76% | 76% | 99%@10 |
+| comparison (24) | support-recall@5 | 82% | 76% | **98%** | 100%@10 |
+| | both@5 | 63% | 50% | **96%** | 100%@10 |
+
+All 12 comparison failures under global GRAPH top-5 still had both gold supports in the activated
+top-10. Projection recovered 11/12, improving 11 paired cases and regressing none versus
+`GRAPH_GLOBAL` (two-sided exact McNemar p=0.00098). It also improved 8 and regressed none versus
+`DIRECT` (p=0.0078). The remaining failure was entity resolution, not activation: the question says
+`Hayden`, while the paragraph/key title is `Hayden (musician)`.
+
+This supports the narrower claim: **the observed comparison failure is over-activation only if the
+activation set itself is mistaken; here it is primarily under-selection from a useful activation
+set.** In short, association is not bias. The production hypothesis should be task-conditioned
+evidence projection over broad associative recall, not generic graph pruning or a universal hub
+penalty. Full per-query outputs are in `bench/evidence-projection-results.json`.
+
+### Production validation: task-conditioned evidence selection (N=300)
+
+`bench/task-selection-eval.ts` evaluates the shipped controller without Hotpot task labels or gold
+supports. It detects two literal named entities, removes them from the query to obtain the comparison
+dimension, evaluates only the activated pool on that residual, and keeps the original associative
+scores, membership, and reinforcement winner.
+
+| split / category | surface | both baseline | both selected | paired wins / losses |
+|---|---|---:|---:|---:|
+| dev comparison (24) | graph recall @5 | 54.2% | **66.7%** | 3 / 0 |
+| dev comparison | inject @5 | 16.7% | **29.2%** | 3 / 0 |
+| dev comparison | inject @2 | 12.5% | **20.8%** | 2 / 0 |
+| holdout comparison (28) | graph recall @5 | 82.1% | **89.3%** | 2 / 0 |
+| holdout comparison | inject @5 | 28.6% | **50.0%** | 6 / 0 |
+| holdout comparison | inject @2 | 21.4% | **39.3%** | 5 / 0 |
+| all bridge (248) | graph recall @5 | 74.6% | 74.6% | 0 / 0 |
+| all bridge | inject @5 | 28.6% | **29.0%** | 1 / 0 |
+| all bridge | inject @2 | 19.4% | **19.8%** | 1 / 0 |
+
+All rank-sensitive comparison metrics also improve on holdout: recall nDCG@5 0.876 → 0.886,
+inject@5 0.462 → 0.591, and inject@2 0.411 → 0.580. Three bridge rows change order; one is an
+explicit comparison mislabelled as bridge and improves, while two retain identical gold metrics.
+The 14-query direct/assoc2/not-found fixture is byte-identical. Eligible comparison queries add one
+task-residual embedding over the small activated pool (warm mean: +2.3 ms recall, +5.4 ms inject).
+Full per-query results are in `bench/task-selection-eval-results.json`.
+Because an earlier candidate's loss cases were inspected before the final policy was frozen, treat
+the holdout numbers as regression validation rather than an unbiased generalization estimate.
 
 ### Validity check: blind agent-generated keys
 

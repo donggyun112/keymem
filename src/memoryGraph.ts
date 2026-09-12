@@ -4,6 +4,7 @@ import { join } from "path";
 import { Mutex } from "async-mutex";
 import { cfgRaw, dataDir } from "./env.js";
 import { selectInject } from "./inject.js";
+import { analyzeTaskEvidence, projectTaskEvidence } from "./evidenceSelection.js";
 import MiniSearch from "minisearch";
 import { embedTextAsync, EMBEDDING_BACKEND, embeddingFingerprint, getThresholdProfile, isShortConcept, inContradictionBand } from "./embedding.js";
 import { rerankEnabled, rerankScores } from "./reranker.js";
@@ -69,6 +70,7 @@ const KEY_HUB_MIN_LINKS = Number.isFinite(_hubMinLinks)
 // joint (query, memory) relevance, then keeps the requested top_k. KEYMEM_RERANK=false disables it.
 // A wider pool than top_k lets the reranker rescue a right answer the fused score buried.
 const RERANK_POOL = Number(cfgRaw("RERANK_POOL") ?? 30);
+const TASK_EVIDENCE_SELECTION = cfgRaw("TASK_EVIDENCE_SELECTION") !== "false";
 
 const _injectMinRelScore = Number(cfgRaw("INJECT_MIN_REL_SCORE") ?? 0.2);
 const INJECT_MIN_REL_SCORE = Number.isFinite(_injectMinRelScore)
@@ -1704,8 +1706,10 @@ export class MemoryGraph {
   // Best content similarity per memory: max(whole-content vector, best sentence vector).
   // Multi-fact notes' whole vectors are diluted centroids; the sentence pack (when
   // present) lets a sub-fact query reach the memory. Synchronous — safe inside a lock.
-  private _bestContentSims(qVec: number[]): Map<string, number> {
-    const memIds = Object.keys(this.memories);
+  private _bestContentSims(qVec: number[], candidateIds?: Iterable<string>): Map<string, number> {
+    const memIds = candidateIds
+      ? [...new Set(candidateIds)].filter((mid) => Boolean(this.memories[mid]))
+      : Object.keys(this.memories);
     const sims = batchCosineSim(qVec, memIds.map((mid) => this.memories[mid].embedding));
     const out = new Map<string, number>();
     for (let i = 0; i < memIds.length; i++) out.set(memIds[i], sims[i]);
@@ -2304,6 +2308,7 @@ export class MemoryGraph {
       exploreShallow?: boolean;
       maxChars?: number;
       minRelScore?: number;
+      taskSelection?: boolean;
     } = {},
     contextText: string | null = null
   ): Promise<{ keys: object[]; memories: object[] }> {
@@ -2327,12 +2332,31 @@ export class MemoryGraph {
       keys?: Array<string | { concept?: string }>;
       matched_via?: string[];
       score: number;
+      relevance_score?: number;
+      content_relevance_score?: number;
     };
     const pool = (await this.recall(
       query, Math.max(topK * 3, 15), namespace, true, 2, 0, MIN_SCORE_THRESHOLD,
       GATE_Z_THRESHOLD, KEY_GATE_THRESHOLD, 0, false, // reinforce=false: injection is passive
-      contextText
+      contextText,
+      false, // project after inject-specific filtering, using the caller's topK
+      true // retain content utility only inside this private candidate pool
     )) as InjectMemory[];
+    const taskSelection = opts.taskSelection ?? TASK_EVIDENCE_SELECTION;
+    const poolKeys = new Map<string, Key>();
+    for (const memory of pool) {
+      for (const kid of this._memToKeys[memory.id]?.keys() ?? []) {
+        const key = this.keys[kid];
+        if (key) poolKeys.set(kid, key);
+      }
+    }
+    const taskAnalysis = taskSelection ? analyzeTaskEvidence(query, [...poolKeys.values()]) : null;
+    let taskContentSims: Map<string, number> | null = null;
+    if (taskAnalysis?.taskQuery) {
+      const taskEmbedding = await embedTextAsync(taskAnalysis.taskQuery, "query");
+      this._checkDim(taskEmbedding);
+      taskContentSims = this._bestContentSims(taskEmbedding, pool.map((memory) => memory.id));
+    }
     // Inject is associative/semantic expansion, so only memories with DENSE or GRAPH support belong
     // in it: a content/key cosine match, or a (via)/(linked) hop from a genuine anchor. Once any
     // anchor clears the gate, recall keeps the WHOLE fused set — which includes memories pulled in
@@ -2341,20 +2365,53 @@ export class MemoryGraph {
     // scores sit in the same noise band as real cross-lingual hits, so a relative floor can't tell
     // them apart — the matched_via provenance can. Drop candidates whose ONLY signal is "(bm25)".
     // Plain recall (deliberate navigation) still returns BM25 hits; this exclusion is inject-scoped.
-    const supported = pool
+    const toTaskCandidate = (m: InjectMemory) => ({
+      id: m.id,
+      keys: [...(this._memToKeys[m.id]?.keys() ?? [])]
+        .map((kid) => this.keys[kid])
+        .filter((key): key is Key => Boolean(key)),
+      utility: taskContentSims?.get(m.id) ?? m.content_relevance_score ?? m.relevance_score ?? 0,
+      value: m,
+    });
+    const activationProjection = taskSelection
+      ? projectTaskEvidence(query, pool.map(toTaskCandidate), topK)
+      : { applied: false, entities: [], selected: pool.map(toTaskCandidate) };
+    const protectedEvidence = new Set(
+      activationProjection.applied
+        ? activationProjection.selected
+            .slice(0, activationProjection.entities.length)
+            .map((candidate) => candidate.id)
+        : []
+    );
+    const orderedPool = activationProjection.selected.map((candidate) => candidate.value);
+    const supported = orderedPool
       .filter((m) => (m.matched_via ?? []).some((v) => v !== "(bm25)"))
-      .filter((m) => hasStructuredTokenCoverage(query, m))
-      .filter((m) => minRelScore <= 0 || hasLexicalQueryCoverage(query, m));
+      // Comparison evidence is normally split across one memory per entity, so requiring
+      // every named query token in every memory would discard both halves before selection.
+      .filter((m) => protectedEvidence.has(m.id) || hasStructuredTokenCoverage(query, m))
+      .filter(
+        (m) => protectedEvidence.has(m.id) || minRelScore <= 0 || hasLexicalQueryCoverage(query, m)
+      );
     const relativeFloor = supported.length ? supported[0].score * minRelScore : 0;
-    const precise = supported.filter((m) => m.score >= relativeFloor);
-    const cands = precise.map((m) => ({ id: m.id, depth: this.memories[m.id]?.depth ?? 0 }));
-    const byId = new Map(precise.map((m) => [m.id, m]));
+    const precise = supported.filter((m) => protectedEvidence.has(m.id) || m.score >= relativeFloor);
+    const projected = taskSelection
+      ? projectTaskEvidence(
+          query,
+          precise.map(toTaskCandidate),
+          topK
+        ).selected.map((candidate) => candidate.value)
+      : precise;
+    const cands = projected.map((m) => ({ id: m.id, depth: this.memories[m.id]?.depth ?? 0 }));
+    const byId = new Map(projected.map((m) => [m.id, m]));
     const memories = selectInject(cands, topK, opts)
       .map((id) => byId.get(id))
       .filter((m): m is InjectMemory => Boolean(m))
       // Enrich keys with key_id so the agent can read_key() directly — inject's whole point is
       // skipping round trips, and a bare concept would force a resolution step right back in.
-      .map((m) => ({ ...m, keys: this.getKeyRefsForMemory(m.id) }))
+      .map((m) => {
+        const { content_relevance_score: _selectionUtility, ...publicMemory } = m;
+        return { ...publicMemory, keys: this.getKeyRefsForMemory(m.id) };
+      })
       .map((m) => truncateInjectedContent(m, maxChars));
     return { keys, memories };
   }
@@ -2378,7 +2435,9 @@ export class MemoryGraph {
     reinforce = true,
     // Dual-path cue: raw utterance/sentence driving the CONTENT similarity path (Dense
     // Path B) while `query` keeps driving keys/BM25/literal matching. See searchKeys.
-    contextText: string | null = null
+    contextText: string | null = null,
+    taskSelection = TASK_EVIDENCE_SELECTION,
+    includeSelectionUtility = false
   ): Promise<object[]> {
     if (Object.keys(this.memories).length === 0) return [];
 
@@ -2418,6 +2477,7 @@ export class MemoryGraph {
     const memMatchedKeys: Record<string, string[]> = {};
     const memHop: Record<string, number> = {};
     const memRawSim: Record<string, number> = {};
+    const memContentSim: Record<string, number> = {};
     let keyScores: [number, string][] = [];
 
     // Hoisted to method scope so Phase 3 (a separate locked section) can reuse it.
@@ -2530,6 +2590,7 @@ export class MemoryGraph {
           const mid = memIds[i];
           if (skip(mid)) continue;
           const cSim = contentSims.get(mid) ?? 0;
+          memContentSim[mid] = cSim;
           allContentSims.push(cSim);
           if (cSim >= contentGate) {
             if (cSim < CONTENT_RECALL_THRESHOLD && !(mid in denseScores)) weakContentOnly.add(mid);
@@ -2746,6 +2807,42 @@ export class MemoryGraph {
       }
     }
 
+    // Association remains broad and its scores remain untouched. For comparison-shaped
+    // queries, project the activated pool into a balanced evidence order only at the
+    // consumption boundary. The original association winner is retained for reinforcement.
+    const associationTopMid = ranked.find(([mid]) => !skip(mid))?.[0];
+    if (taskSelection && expand && ranked.length > topK) {
+      const rankedKeys = new Map<string, Key>();
+      for (const [mid] of ranked) {
+        for (const kid of this._memToKeys[mid]?.keys() ?? []) {
+          const key = this.keys[kid];
+          if (key) rankedKeys.set(kid, key);
+        }
+      }
+      const taskAnalysis = analyzeTaskEvidence(query, [...rankedKeys.values()]);
+      let taskContentSims: Map<string, number> | null = null;
+      if (taskAnalysis?.taskQuery) {
+        const taskEmbedding = await embedTextAsync(taskAnalysis.taskQuery, "query");
+        this._checkDim(taskEmbedding);
+        taskContentSims = this._bestContentSims(taskEmbedding, ranked.map(([mid]) => mid));
+      }
+      ranked = projectTaskEvidence(
+        query,
+        ranked.map((entry) => {
+          const [mid] = entry;
+          return {
+            id: mid,
+            keys: [...(this._memToKeys[mid]?.keys() ?? [])]
+              .map((kid) => this.keys[kid])
+              .filter((key): key is Key => Boolean(key)),
+            utility: taskContentSims?.get(mid) ?? memContentSim[mid] ?? 0,
+            value: entry,
+          };
+        }),
+        topK
+      ).selected.map((candidate) => candidate.value).slice(0, actualTopK);
+    }
+
     // ── Phase 3 (locked, fully synchronous) ── commit reinforcement + assemble the
     // result payload. Re-validate every id with skip(): a concurrent forget/supersede/
     // expiry may have landed during the unlocked rerank above.
@@ -2766,6 +2863,9 @@ export class MemoryGraph {
           score: Math.round(score * 1000) / 1000,
           rank_score: Math.round(score * 1000) / 1000,
           relevance_score: Math.round((memRawSim[mid] ?? 0) * 1000) / 1000,
+          ...(includeSelectionUtility
+            ? { content_relevance_score: Math.round((memContentSim[mid] ?? 0) * 1000) / 1000 }
+            : {}),
           score_kind: "rrf_fused_rank",
           depth: Math.round(mem.depth * 1000) / 1000,
           access_count: mem.access_count,
@@ -2790,7 +2890,7 @@ export class MemoryGraph {
         // time (the rank-N tail scores near the RRF noise floor). Scoping to the single
         // strongest hit captures the real query→memory association without that pollution.
         // Also scoped to matched keys only, mirroring the decay side below.
-        const topMid = ranked.find(([mid]) => !skip(mid))?.[0];
+        const topMid = associationTopMid;
         if (topMid) {
           for (const kid of this._memToKeys[topMid]?.keys() ?? []) {
             if (!matchedKeyIds.has(kid)) continue;

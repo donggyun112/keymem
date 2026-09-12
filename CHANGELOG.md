@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-09-13
+
+### Added
+
+- Task-conditioned evidence selection for comparison-shaped expanded recall and injection. Broad
+  graph activation is preserved; a conservative named-entity controller projects the activated pool
+  onto the residual comparison dimension and protects per-entity evidence from generic inject
+  filters. It is default-on and can be disabled with `KEYMEM_TASK_EVIDENCE_SELECTION=false`.
+
 ## [0.28.0] - 2026-09-08
 
 ### Changed

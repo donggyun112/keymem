@@ -1,6 +1,6 @@
 {
   "name": "keymem",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "mcpName": "io.github.donggyun112/keymem",
   "type": "module",
   "description": "Associative memory for LLM agents — a key-graph memory layer (MCP server) that recalls by association, not just vector similarity. A graph-based alternative to vector-store agent memory.",
@@ -56,6 +56,8 @@
     "shim": "node dist/shim.js",
     "test": "KEYMEM_RERANK=false tsx --test test/*.test.ts",
     "bench": "tsx bench/run.ts",
+    "bench:evidence-projection": "tsx bench/evidence-projection.ts",
+    "bench:task-selection": "tsx bench/task-selection-eval.ts",
     "bench:prompt-cache": "tsx bench/prompt-cache-ab.ts",
     "bench:prompt-cache-llm": "tsx bench/prompt-cache-llm.ts",
     "bench:keynav": "tsx bench/keynav.ts",

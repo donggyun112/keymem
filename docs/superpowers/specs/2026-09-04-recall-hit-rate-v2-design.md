@@ -4,6 +4,11 @@
 **Status:** Proposed  
 **Goal:** Improve the chance that keymem surfaces the right memory near the top, especially through passive injection, without increasing false injections or adding a default runtime model.
 
+> **2026-09-13 update:** H1's conditional-expansion proposal is superseded by
+> `2026-09-13-task-conditioned-associative-recall.md`. The follow-up experiment supports keeping
+> associative activation broad and separating it from task-conditioned evidence selection. H2-H4
+> remain independent hypotheses.
+
 ## Problem
 
 Keymem already reaches known memories well, but reachability is not the same as a useful hit. The current real-workload check reached all 12 known facts, while two landed below the top three. Separate live checks also found unrelated queries scoring in the same broad cosine band as valid queries. Lowering a global threshold therefore trades misses for false positives instead of cleanly improving quality.
@@ -25,14 +30,19 @@ Guardrails are:
 - **negative false-inject rate:** fraction of unanswerable prompts that inject any memory;
 - **recall hit@3:** expected memory appears in the first three direct-recall results;
 - **associative both@5:** both gold supports appear for blind-key HotpotQA bridge cases;
-- **comparison both@5:** direct/comparison queries do not regress when graph expansion adds noise;
+- **comparison both@5:** task-conditioned selection prevents activated associations from displacing
+  one side of the comparison evidence;
 - **p50/p95 latency:** no material regression from the current local bge-m3 path.
 
 The benchmark will record the baseline before tuning. A candidate ships only if the held-out set improves positive inject hit@1, does not reduce recall hit@3, does not increase negative false-inject rate, does not regress either associative or comparison controls, and keeps p95 latency within 10% of baseline. If positive inject hit@1 is already 100% on the expanded baseline, it must stay at 100% while recall hit@3 or negative false-inject rate improves. Latency is compared using the median p95 from five runs to reduce local CPU noise. Tune and holdout cases are split by target memory, so paraphrases of one memory cannot appear on both sides.
 
 ## Hypotheses
 
-### H1: Conditional graph expansion improves direct-query ranking
+### H1 (superseded): Conditional graph expansion improves direct-query ranking
+
+**Superseded:** The observed comparison regression is better explained as a selection failure over
+a useful activation pool, not as evidence that graph activation itself should be suppressed. See
+the 2026-09-13 task-conditioned associative recall experiment.
 
 **Claim:** When a query has a strong direct anchor, unconditional two-hop expansion introduces associated but less relevant memories. Skipping expansion for those queries will improve inject hit@1 and comparison-query ranking without hurting direct recall.
 

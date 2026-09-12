@@ -491,6 +491,13 @@ LOCAL_EMBEDDING_MODEL=bge-m3
 
 > On by default. If the model cannot load, recall falls back to fused ranking. Query decomposition remains the caller's responsibility.
 
+**Task-conditioned evidence selection:** expanded recall stays associative, but comparison-shaped
+queries are projected at the final evidence boundary so both named entities receive task-relevant
+support. KeyMem derives the comparison dimension after removing the entity names (for example,
+`nationality` or `founded`), keeps the graph candidate pool and association scores intact, and
+preserves the original associative winner for reinforcement. This is on by default; disable it with
+`KEYMEM_TASK_EVIDENCE_SELECTION=false`.
+
 **Reranker not-found gate (`KEYMEM_RERANK_MIN_SCORE`):** in direct compatibility mode, reject the complete `recall_memories()` result when the top cross-encoder logit is below this floor.
 
 ```
