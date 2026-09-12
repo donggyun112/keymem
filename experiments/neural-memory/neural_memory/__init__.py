@@ -42,6 +42,7 @@ from .semantic import (
     SemanticFastWeightMemory,
     SemanticTelemetry,
 )
+from .survival_memory import ChangeSurvivalGate, SurvivalTraceState
 from .semantic_data import (
     FrozenTextBanks,
     SemanticEpisodeBatch,
@@ -55,6 +56,7 @@ __all__ = [
     "CompetitionBatch",
     "CompetitiveFastWeightMemory",
     "CompetitiveMemoryState",
+    "ChangeSurvivalGate",
     "ConsolidationMode",
     "DelayedUtilityBatch",
     "DelayedOutcomeGate",
@@ -85,6 +87,7 @@ __all__ = [
     "SemanticEpisodeBatch",
     "SemanticFastWeightMemory",
     "SemanticTelemetry",
+    "SurvivalTraceState",
     "WriteTelemetry",
     "generate_competition_batch",
     "generate_delayed_utility_batch",

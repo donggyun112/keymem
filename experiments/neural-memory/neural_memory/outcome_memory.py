@@ -64,6 +64,8 @@ class DelayedOutcomeGate(nn.Module):
         self.request_head = nn.Linear(memory_dim, 2)
         self.feedback_head = nn.Linear(memory_dim, 2)
         self.joint_head = nn.Linear(memory_dim * 3, 2)
+        nn.init.zeros_(self.joint_head.weight)
+        nn.init.zeros_(self.joint_head.bias)
 
     def observe(self, request_features: Tensor) -> OutcomeTraceState:
         trace = torch.tanh(self.request_projection(request_features))
@@ -83,7 +85,7 @@ class DelayedOutcomeGate(nn.Module):
             return self.feedback_head(feedback)
         if mode == "joint":
             combined = torch.cat((state.trace, feedback, state.trace * feedback), dim=-1)
-            return self.joint_head(combined)
+            return self.feedback_head(feedback) + self.joint_head(combined)
         raise ValueError(f"unknown gate mode: {mode}")
 
     def forward(

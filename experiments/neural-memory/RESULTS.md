@@ -359,3 +359,74 @@ can expose those forms easily. A stronger next test must use implicit outcomes�
 survived, was reverted, passed tests, or was reused later—and jointly train trace selection plus the
 strengthen/revise/forget action. That is the point where delayed utility becomes causal rather than
 linguistic.
+
+# Phase 8: implicit tool outcomes and file survival
+
+Date: 2026-09-13
+
+## Test and build outcomes
+
+The project-session logs contained 917 high-confidence verification outcomes across 11 projects
+and 33 sessions: 496 passes and 421 failures. Of these, 525 followed one or more Edit, Write,
+apply-patch, or formatter mutations. Stable project-level splitting produced 835 train and 82 eval
+events. Raw commands, code, and tool output were used only to build ignored 512-dimensional hashed
+feature artifacts and were not persisted in git.
+
+Five-seed results on all held-out-project events:
+
+| Evidence | Accuracy | Balanced accuracy | Pass / fail strength |
+| --- | ---: | ---: | ---: |
+| Majority pass | 0.6707 | 0.5000 | 0.731 / 0.731 |
+| Action and command before result | 0.6268 | 0.6370 | varies by seed |
+| Test result only | 0.9829 | 0.9741 | 0.956 / 0.068 |
+| **Action trace + test result** | **0.9927** | **0.9889** | **0.994 / 0.034** |
+
+On the mutation-only subset (471 train / 54 eval), feedback-only balanced accuracy was 0.8761 and
+joint accuracy was 0.8708. The action context did not add reliable causal attribution once the
+dataset was restricted to real mutations. Test output is therefore a strong update signal, but this
+experiment alone cannot identify which one of several changes caused the result.
+
+## File-change survival
+
+Claude file history contained 430 multi-version file chains from 35 sessions and 1,679 versions.
+There were only 11 exact `A -> B -> A` restorations. Line-survival scoring expanded this to 672
+high-confidence next-version outcomes: 637 retained and 35 reverted, with revert labels spread over
+13 sessions. A stratified whole-session split yielded 566 train examples (23 reverted) and 106 eval
+examples (12 reverted).
+
+Commands, repeated with seeds 7, 17, 29, 41, and 53:
+
+```bash
+uv run python analyze_file_survival.py --summary
+uv run python prepare_file_survival_features.py
+uv run python train_survival_gate.py --steps 2000 --seed <seed> --summary
+```
+
+| Decision path | Balanced accuracy | Revert recall | Revert precision | ROC-AUC |
+| --- | ---: | ---: | ---: | ---: |
+| Change at observation only | 0.4798 | 0.0000 | 0.0000 | 0.520 |
+| Future file delta only | 0.5567 | 0.1667 | 0.2857 | 0.561 |
+| Generic concatenation gate | 0.5716 | 0.1667 | about 0.48 | 0.659 |
+| Raw 512d cosine threshold | 0.6711 | 0.4167 | 0.4167 | 0.8954 |
+| **Learned 64d relational gate** | **0.8340 +/- 0.0021** | **1.0000** | **0.2778** | **0.9021 +/- 0.0012** |
+| Relational gate, train-F1 threshold | 0.6090 | 0.2500 | 0.5000 | 0.9021 |
+
+The relational gate has a fixed 512-to-64 projection and only six trainable decision parameters.
+Its persistent state is a 64-dimensional change trace plus one strength scalar. Freezing the
+projection removed seed collapse. The large gap between request-only, outcome-only, and relational
+comparison is positive evidence that the delayed state relation—not a surface outcome token—is the
+useful signal.
+
+## Interpretation boundary
+
+This is the strongest phenomenon result so far: an old model-state trace is necessary to interpret
+a later external event, and the learned policy ranks all 12 held-out reverts above most retained
+changes. It is nevertheless not ready to delete memories. At the high-recall threshold it flags too
+many retained changes, while a precision-oriented threshold misses most reverts. Only 35 negative
+examples and 13 negative-bearing sessions exist, and next-version line survival is a proxy rather
+than end-task utility.
+
+The next investment should collect richer causal episodes prospectively: record each candidate
+memory/action ID, test outcome, subsequent fix, final accepted diff, and later reuse. Training can
+then assign a global outcome across multiple traces and distinguish revise from permanent forget
+without relying on file adjacency heuristics.

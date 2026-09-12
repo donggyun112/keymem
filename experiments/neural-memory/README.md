@@ -213,3 +213,38 @@ The immediate-previous-interaction association is still an architectural assumpt
 weak labels are not ground truth. Phase 6 and 7 together now implement the two halves needed for a
 real memory update—select a responsible old trace and choose strengthen versus revise—but they have
 not yet been trained jointly from downstream task reward.
+
+## Phase 8: implicit tool outcomes and file-change survival
+
+Phase 8 replaces user feedback labels with external state. `tool_outcomes.py` pairs test, build,
+lint, and type-check commands with their later tool results. The observation trace contains recent
+mutations plus the verification command; the delayed outcome is the actual result. The extractor
+found 917 high-confidence outcomes, including 525 with preceding code mutations.
+
+```bash
+uv run python analyze_tool_outcomes.py --summary
+uv run python prepare_tool_outcome_features.py
+uv run python train_tool_outcome_gate.py --summary
+```
+
+The stronger survival task uses Claude's local file-history snapshots. For every consecutive
+`A -> B -> C` chain, it asks whether the line delta introduced by `A -> B` is still present in `C`.
+Only high-confidence retention scores at or above 0.8 or at or below 0.2 become labels. The model
+must compare the old change trace with the future delta: either input alone is insufficient.
+
+```bash
+uv run python analyze_file_survival.py --summary
+uv run python prepare_file_survival_features.py
+uv run python train_survival_gate.py --steps 2000 --seed 7 --summary
+```
+
+`ChangeSurvivalGate` stores a fixed 64-dimensional random projection of the original change. When
+the next file delta arrives it computes two relational features—cosine alignment and mean absolute
+distance—and a six-parameter learned head chooses retain versus revert. Freezing the projection is
+important because only 23 reverted train examples exist; learning the projection made some seeds
+collapse to the majority class.
+
+This is the first outcome in the curriculum that cannot be classified from the future event alone.
+It remains a one-file, next-version proxy rather than a complete causal account of which agent
+action helped a task. Reverts are rare, so the current model is useful as a ranking signal but is
+not safe as an automatic deletion policy.
