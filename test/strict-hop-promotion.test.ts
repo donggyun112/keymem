@@ -74,3 +74,99 @@ test("findStrictHopCandidate picks the highest-scoring eligible candidate when s
   const result = findStrictHopCandidate(gated, memHop, memToKeys, keyToMems, 3);
   assert.equal(result, "target_strong");
 });
+
+test("recall() promotes a narrow-key hop-2 candidate past a flood of same-topic noise", async (t) => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = await mkdtemp(join(tmpdir(), "sm-stricthop-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  process.env.KEYMEM_DATA_DIR = dir;
+  process.env.EMBEDDING_BACKEND = "local";
+  process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
+
+  // Deterministic vectors: QQ/ANCHOR are identical (cos=1.0, definite fused #1). TARGET is
+  // orthogonal to the query (cos=0, never found by content alone). NOISEn all sit at
+  // cos≈0.60-0.72 with the query — enough to clear bge-m3's contentRecall/minScore admit
+  // gate on topic overlap alone, exactly the corpus-density flooding this feature targets.
+  // Each NOISEn gets its OWN orthogonal axis (not a repeating cycle) so no two are ever
+  // >=memoryDedup(0.94) similar to each other — a repeating cycle would make write-time
+  // dedup silently supersede most of them, defeating the point of this test.
+  const DIM = 52;
+  function zeros(): number[] { return new Array(DIM).fill(0); }
+  function vec(t: string): number[] {
+    if (t === "QQ" || t === "ANCHOR") { const v = zeros(); v[0] = 1; return v; }
+    if (t === "TARGET") { const v = zeros(); v[1] = 1; return v; }
+    const m = /^NOISE(\d+)$/.exec(t);
+    if (m) {
+      const i = Number(m[1]);
+      const c = 0.6 + (i % 5) * 0.03;
+      const v = zeros();
+      v[0] = c;
+      v[2 + i] = Math.sqrt(1 - c * c);
+      return v;
+    }
+    return zeros();
+  }
+  const emb = await import("../src/embedding.ts");
+  emb.__setTestEmbedder((text: string) => vec(text));
+  t.after(() => emb.__clearTestEmbedder());
+  const rer = await import("../src/reranker.ts");
+  rer.__setTestReranker((_q: string, texts: string[]) => texts.map(() => 0)); // no reordering
+  t.after(() => rer.__clearTestReranker());
+
+  const mg = await import(`../src/memoryGraph.ts?stricthop=${Date.now()}`);
+  const g = new mg.MemoryGraph();
+  await g.load();
+  await g.add("ANCHOR", ["anchorNarrowKey"], {});
+  await g.add("TARGET", ["anchorNarrowKey"], {}); // shares a 2-member key with ANCHOR only
+  for (let i = 0; i < 50; i++) {
+    await g.add(`NOISE${i}`, [`noiseKey${i}`], {}); // each on its own key — pure content noise
+  }
+
+  const before = (await g.recall("QQ", 10, null, true, 2, 0, 0, 0, 0)) as Array<{ content: string }>;
+  assert.equal(
+    before.some((m) => m.content === "TARGET"),
+    true,
+    `expected TARGET to be promoted into the top10, got: ${before.map((m) => m.content).join(",")}`
+  );
+});
+
+test("recall() never evicts a confident direct hit to make room for a strict-hop candidate", async (t) => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = await mkdtemp(join(tmpdir(), "sm-stricthop-safe-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  process.env.KEYMEM_DATA_DIR = dir;
+  process.env.EMBEDDING_BACKEND = "local";
+  process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
+
+  function vec(t: string): number[] {
+    if (t === "QQ") return [1, 0, 0, 0];
+    if (t === "ANCHOR") return [1, 0, 0, 0]; // definite fused anchor, cos=1.0
+    if (t === "CONFIDENT") return [0.99, 0.1, 0, 0]; // strong, near-definite direct hit
+    if (t === "TARGET") return [0, 1, 0, 0];
+    return [0, 0, 1, 0];
+  }
+  const emb = await import("../src/embedding.ts");
+  emb.__setTestEmbedder((text: string) => vec(text));
+  t.after(() => emb.__clearTestEmbedder());
+  const rer = await import("../src/reranker.ts");
+  rer.__setTestReranker((_q: string, texts: string[]) => texts.map(() => 0));
+  t.after(() => rer.__clearTestReranker());
+
+  const mg = await import(`../src/memoryGraph.ts?stricthop-safe=${Date.now()}`);
+  const g = new mg.MemoryGraph();
+  await g.load();
+  await g.add("ANCHOR", ["anchorNarrowKey"], {});
+  await g.add("TARGET", ["anchorNarrowKey"], {});
+  await g.add("CONFIDENT", ["confidentKey"], {}); // top5 filler, but a genuinely strong hit
+
+  const result = (await g.recall("QQ", 3, null, true, 2, 0, 0, 0, 0)) as Array<{ content: string }>;
+  assert.equal(
+    result.some((m) => m.content === "CONFIDENT"),
+    true,
+    `CONFIDENT must not be evicted, got: ${result.map((m) => m.content).join(",")}`
+  );
+});

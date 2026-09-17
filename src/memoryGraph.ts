@@ -72,6 +72,17 @@ const KEY_HUB_MIN_LINKS = Number.isFinite(_hubMinLinks)
 const RERANK_POOL = Number(cfgRaw("RERANK_POOL") ?? 30);
 const TASK_EVIDENCE_SELECTION = cfgRaw("TASK_EVIDENCE_SELECTION") !== "false";
 
+// Strict-hop promotion (see findStrictHopCandidate below). Default-on when the caller already
+// opted into expand=true — this does not add a new opt-in surface, it strengthens the existing
+// one. KEYMEM_STRICT_HOP=false kills it in one env var if it misbehaves on a real store.
+const STRICT_HOP_ENABLED = cfgRaw("STRICT_HOP") !== "false";
+// A key shared by more memories than this is a hub topic word, not a specific connector —
+// bench/edge-experiments.ts calibrated 3 as "narrow" on a 49-memory fixture; re-tune per corpus.
+const STRICT_HOP_MAX_KEY_MEMBERS = Number(cfgRaw("STRICT_HOP_MAX_KEY_MEMBERS") ?? 3);
+// Only evict the final slot for a strict-hop candidate when its current occupant's raw
+// similarity is below this AND it is itself hop>=2 (i.e. also just noise, not a confident hit).
+const STRICT_HOP_EVICT_BELOW = Number(cfgRaw("STRICT_HOP_EVICT_BELOW") ?? 0.75);
+
 const _injectMinRelScore = Number(cfgRaw("INJECT_MIN_REL_SCORE") ?? 0.2);
 const INJECT_MIN_REL_SCORE = Number.isFinite(_injectMinRelScore)
   ? Math.max(0, Math.min(0.9, _injectMinRelScore))
@@ -2813,13 +2824,25 @@ export class MemoryGraph {
         .filter(([mid]) => minDepth <= 0 || (this.memories[mid]?.depth ?? 0) >= minDepth);
     });
 
+    const strictHopId = STRICT_HOP_ENABLED && expand
+      ? findStrictHopCandidate(gated, memHop, this._memToKeys, this._keyToMems, STRICT_HOP_MAX_KEY_MEMBERS)
+      : null;
+
     // ── Phase 2 (UNLOCKED) ── default-on cross-encoder rerank. Model inference is the
     // only slow, I/O-like await in recall; running it outside the lock lets other
     // recalls and writes proceed meanwhile. It only READS immutable memory content
     // (all reads happen synchronously before the await) and mutates nothing shared.
     let ranked: [string, number][] = gated.slice(0, actualTopK);
     if (rerankEnabled() && gated.length > 0) {
-      const pool = gated.slice(0, Math.max(actualTopK, RERANK_POOL));
+      let pool = gated.slice(0, Math.max(actualTopK, RERANK_POOL));
+      // Guarantee the strict-hop candidate reaches the cross-encoder even when its fused
+      // score would have put it outside RERANK_POOL — the corpus-density bug this feature
+      // fixes (bench/edge-experiments-results.json measured a real hop-2 hit ranked ~15-18th
+      // of 49 and never reaching the rerank pool at all).
+      if (strictHopId && !pool.some(([mid]) => mid === strictHopId)) {
+        const entry = gated.find(([mid]) => mid === strictHopId);
+        if (entry) pool = [...pool, entry];
+      }
       const scores = await rerankScores(
         query,
         pool.map(([mid]) => this.memories[mid]?.content ?? "")
@@ -2839,6 +2862,23 @@ export class MemoryGraph {
           ranked = [];
         } else {
           ranked = reordered.map((x) => x.entry).slice(0, actualTopK);
+          // Safety-checked promotion: only bump the strict-hop candidate into the final
+          // window if it survived rerank but landed just outside it, AND the item it would
+          // evict is itself weak (low raw similarity — a confident hit is high-similarity
+          // regardless of hop, and the noise this feature targets is routinely hop=1 weak
+          // content-admits, so hop is not part of "weak"). Never displace a confident
+          // direct/key hit. This is the guard the bench ceiling probe lacked
+          // (bench/edge-experiments-llm-results.json measured it evicting an
+          // already-correct rank-5 answer for "미나 취미").
+          if (strictHopId && !ranked.some(([mid]) => mid === strictHopId)) {
+            const fullIdx = reordered.findIndex((r) => r.entry[0] === strictHopId);
+            const lastMid = ranked[ranked.length - 1]?.[0];
+            const lastIsWeak = lastMid !== undefined
+              && (memRawSim[lastMid] ?? 0) < STRICT_HOP_EVICT_BELOW;
+            if (fullIdx !== -1 && lastIsWeak) {
+              ranked = [...ranked.slice(0, -1), reordered[fullIdx].entry];
+            }
+          }
         }
       }
     }
