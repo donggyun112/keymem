@@ -39,7 +39,7 @@
 **Interfaces:**
 - Produces: `export function findStrictHopCandidate(gated: Array<[string, number]>, memHop: Record<string, number>, memToKeys: Record<string, Map<string, unknown>>, keyToMems: Record<string, Map<string, unknown>>, maxMembers: number): string | null` — used by Task 2.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `test/strict-hop-promotion.test.ts`:
 
@@ -122,12 +122,12 @@ test("findStrictHopCandidate picks the highest-scoring eligible candidate when s
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx tsx --test test/strict-hop-promotion.test.ts`
 Expected: FAIL — `findStrictHopCandidate is not a function` (or module has no export of that name), since `src/memoryGraph.ts` doesn't define it yet.
 
-- [ ] **Step 3: Implement the function**
+- [x] **Step 3: Implement the function**
 
 In `src/memoryGraph.ts`, insert immediately before the `// ── Utils ──` comment (currently line 276):
 
@@ -169,12 +169,12 @@ export function findStrictHopCandidate(
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx tsx --test test/strict-hop-promotion.test.ts`
 Expected: PASS (4/4 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/memoryGraph.ts test/strict-hop-promotion.test.ts
@@ -194,7 +194,7 @@ git commit -m "feat: add findStrictHopCandidate, a structural hop-2 promotion he
 - Consumes: `findStrictHopCandidate` from Task 1; `gated: [string, number][]`, `memHop: Record<string, number>`, `memRawSim: Record<string, number>`, `this._memToKeys`, `this._keyToMems`, `RERANK_POOL`, `RERANK_MIN_SCORE`, `rerankEnabled()`, `rerankScores()` — all already in scope in `recall()`.
 - Produces: no new public interface; changes `recall()`'s returned result set when `expand=true` and a narrow-key hop-2 candidate exists.
 
-- [ ] **Step 1: Write the failing integration test**
+- [x] **Step 1: Write the failing integration test**
 
 Append to `test/strict-hop-promotion.test.ts`:
 
@@ -287,12 +287,12 @@ test("recall() never evicts a confident direct hit to make room for a strict-hop
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx tsx --test test/strict-hop-promotion.test.ts`
 Expected: the two new tests FAIL (TARGET/promotion not yet implemented in `recall()`); the four Task 1 tests still PASS.
 
-- [ ] **Step 3: Add the module constants**
+- [x] **Step 3: Add the module constants**
 
 In `src/memoryGraph.ts`, right after the `RERANK_POOL` line (currently line 72), add:
 
@@ -309,7 +309,7 @@ const STRICT_HOP_MAX_KEY_MEMBERS = Number(cfgRaw("STRICT_HOP_MAX_KEY_MEMBERS") ?
 const STRICT_HOP_EVICT_BELOW = Number(cfgRaw("STRICT_HOP_EVICT_BELOW") ?? 0.75);
 ```
 
-- [ ] **Step 4: Compute the candidate right after Phase 1 (before Phase 2)**
+- [x] **Step 4: Compute the candidate right after Phase 1 (before Phase 2)**
 
 In `src/memoryGraph.ts`, immediately after the closing `});` of the Phase 1 `_lock.runExclusive` block (currently line 2778) and before the `// ── Phase 2` comment (currently line 2780), insert:
 
@@ -319,7 +319,7 @@ In `src/memoryGraph.ts`, immediately after the closing `});` of the Phase 1 `_lo
       : null;
 ```
 
-- [ ] **Step 5: Guarantee the candidate reaches the rerank pool and apply the safety-checked promotion**
+- [x] **Step 5: Guarantee the candidate reaches the rerank pool and apply the safety-checked promotion**
 
 Replace the existing Phase 2 block (currently lines 2780-2808):
 
@@ -411,17 +411,17 @@ with:
     }
 ```
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [x] **Step 6: Run tests to verify they pass**
 
 Run: `npx tsx --test test/strict-hop-promotion.test.ts`
 Expected: PASS (6/6 tests: 4 from Task 1, 2 new integration tests).
 
-- [ ] **Step 7: Run the full test suite to check for regressions**
+- [x] **Step 7: Run the full test suite to check for regressions**
 
 Run: `npm test` (or the project's existing test command — check `package.json`'s `"test"` script before running; do not guess a different command).
 Expected: PASS, same count as before this change plus the 6 new tests. Pay particular attention to any existing `recall`/`rerank`/`hop`/`expand`-related test file from the earlier `ctx_glob` listing (e.g. `agentic-navigation.test.ts`, `content-aware-nav.test.ts`, `maxsim-recall.test.ts`, `recall-inject.test.ts`) — if any of those fail, it means a real store shape trips `findStrictHopCandidate` in a way this plan's synthetic tests didn't cover; stop and re-diagnose rather than loosening the safety check to force a pass.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/memoryGraph.ts test/strict-hop-promotion.test.ts
@@ -438,17 +438,17 @@ git commit -m "feat: promote structurally-confirmed hop-2 associations past corp
 
 **Interfaces:** none new.
 
-- [ ] **Step 1: Re-run the ablation bench with the change in place**
+- [x] **Step 1: Re-run the ablation bench with the change in place**
 
 Run: `npx tsx bench/ablation.ts`
 
 This exercises the new code through the SAME `GRAPH` condition (`expand=true, hops=2`) already in that script — no bench code change is needed, only a re-run now that `recall()` itself carries the fix.
 
-- [ ] **Step 2: Compare against the pre-change baseline**
+- [x] **Step 2: Compare against the pre-change baseline**
 
 The pre-change `GRAPH` numbers are already committed in `bench/assoc-results.json` (from the session that produced this plan): `assoc2 hit@5 = 27%` (tied with `DIRECT`, i.e. no measurable graph benefit — the bug this plan fixes). After Task 2, `GRAPH`'s `assoc2 hit@5` should move toward the bench/edge-experiments.ts `STRICT_HOP` ceiling of 60%, though likely not reach it exactly — that ceiling used a maximal always-force-top5 rule with no eviction safety check, and used a simpler standalone top-cosine-anchor pipeline rather than `recall()`'s full BM25+key+content fusion. Record whatever number actually comes out; do not adjust `STRICT_HOP_EVICT_BELOW`/`STRICT_HOP_MAX_KEY_MEMBERS` to hit a target number without first checking (via the same per-query rank inspection method used earlier in this session) *why* any given query still fails.
 
-- [ ] **Step 3: Commit the updated bench results**
+- [x] **Step 3: Commit the updated bench results**
 
 ```bash
 git add bench/assoc-results.json
