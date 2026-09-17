@@ -316,15 +316,15 @@ The default MCP API crosses from Key Space to one Value while preserving explici
 
 Semantically merged keys are preserved as aliases on one canonical key cluster (for example `Python` + `파이썬`). The recommended `bge-m3` profile enables conservative short-key merging by default; override or disable it with `KEYMEM_SHORT_KEY_MERGE`. A key linked to at least three active memories is surfaced as a hub with `is_hub`, `memory_count`, and `specificity` metadata rather than being hidden by IDF. Override the hub threshold with `KEYMEM_KEY_HUB_MIN_LINKS`.
 
-### Direct Hybrid Retrieval (optional compatibility mode)
+### Associative Recall Engine (library API, used internally by `recallInject`)
 
-Set `KEYMEM_DIRECT_RECALL=true` to expose `recall_memories()`, a one-call memory retrieval path. Three signals run in parallel and are fused with **Reciprocal Rank Fusion** (`RRF_K = 60`):
+`MemoryGraph.recall()` is a one-call ranked retrieval path, not exposed as its own MCP tool — `recallInject()` (the auto-injection hook in `daemon.ts`) is its production caller, and it's available directly if you use keymem as a library. Three signals run in parallel and are fused with **Reciprocal Rank Fusion** (`RRF_K = 60`):
 
 - **BM25 (sparse):** lexical full-text search over memory content (MiniSearch, fuzzy + prefix). Catches exact terms, names, and rare tokens that embeddings blur.
 - **Dense Path A (key matching):** query embedding → match keys → follow links → memories. Score = `keySim × IDF × linkWeight`, summed across all matching keys.
 - **Dense Path B (content matching):** query embedding → directly compare against memory content embeddings. Finds memories even when they weren't tagged with the right keys.
 
-Sparse and dense rank lists are merged by RRF, then modulated by depth and confirmation freshness before configurable multi-hop expansion (`hops=1–5`, default `2`). This compatibility tool is hidden by default so agents use explicit key navigation instead of collapsing the graph into one search call.
+Sparse and dense rank lists are merged by RRF, then modulated by depth and confirmation freshness before configurable multi-hop expansion (`hops=1–5`, default `2`). The default MCP `recall` tool uses explicit key navigation (above) instead of this engine, so agents drive expansion deliberately rather than collapsing the graph into one search call.
 
 ### Hebbian Link Learning
 
@@ -337,7 +337,7 @@ Reading a full memory is a **write**, not just a read. In the default flow, `rec
 
 Reinforcement is scoped to the key the agent actually traversed — not every key attached to the memory. This is the literal Hebbian rule ("fire together, wire together") and prevents unrelated associations from growing when the memory is reached through a different concept. Weights are clamped to `[0.1, 3.0]`.
 
-Link weights feed back into `read_key()` ranking, so repeatedly selected paths become easier to reach. Optional `recall_memories()` retains the previous matched-link reinforcement and explored-link decay behavior.
+Link weights feed back into `read_key()` ranking, so repeatedly selected paths become easier to reach. `recall()`/`recallInject()` retain the previous matched-link reinforcement and explored-link decay behavior.
 
 ---
 
@@ -364,7 +364,7 @@ Link weights feed back into `read_key()` ranking, so repeatedly selected paths b
 4. Return full content and adjacent key clusters from `read_memory()`; reinforce the traversed edge only when `via_key_id` is supplied.
 5. Repeat `read_key(next_key_id)` to walk the graph deliberately.
 
-**Optional `recall_memories()` algorithm (hybrid, configurable 1–5 hops; default 2):**
+**`recall()` algorithm (hybrid, configurable 1–5 hops; default 2; used internally by `recallInject()`):**
 
 Three retrieval signals run in parallel, then get fused and expanded:
 
@@ -403,9 +403,9 @@ KEYMEM_MEMORY_DEDUP=0.99
 
 | Env var | Default (profile) | Description |
 | --- | --- | --- |
-| `KEYMEM_MIN_SCORE` | per-model (e.g. `0.55` for bge-m3) | Absolute cosine floor for optional `recall_memories()`. Set to `0` to disable. |
-| `KEYMEM_GATE_Z` | `0` by default | Opt-in distribution gate for `recall_memories()` (robust-z, median/MAD). Values around 2–5 are typical; `0` disables it. |
-| `KEYMEM_CONTRADICTION` | per-model (e.g. `0.80` for bge-m3) | Contradiction-band lower bound. Memory pairs whose cosine similarity falls in `[contradiction, memoryDedup)` are flagged as contradictions. `read_memory()`, `related()`, and optional `recall_memories()` expose conflicting IDs. |
+| `KEYMEM_MIN_SCORE` | per-model (e.g. `0.55` for bge-m3) | Absolute cosine floor for `recall()`/`recallInject()`. Set to `0` to disable. |
+| `KEYMEM_GATE_Z` | `0` by default | Opt-in distribution gate for `recall()`/`recallInject()` (robust-z, median/MAD). Values around 2–5 are typical; `0` disables it. |
+| `KEYMEM_CONTRADICTION` | per-model (e.g. `0.80` for bge-m3) | Contradiction-band lower bound. Memory pairs whose cosine similarity falls in `[contradiction, memoryDedup)` are flagged as contradictions. `read_memory()` and `related()` expose conflicting IDs. |
 | `KEYMEM_AUTOKEY` | `true` | Auto-key self-healing: learn missing search terms from real usage. Set `false` to disable. |
 | `KEYMEM_AUTOKEY_PROMOTE_N` | `3` | Routing-confirmed selections of a `(key, query)` pair before the query is folded into the key space. |
 | `KEYMEM_AUTOKEY_CONFIRM_FLOOR` | `0.45` | Lowest query↔key cosine eligible for routing-confirmation learning. Repeated selections through the same key can teach a below-gate query alias; this confirms routing only, never content freshness. Lower (e.g. `0.40`) to catch more borderline paraphrases; set `≥` the recall threshold to disable. |
@@ -418,7 +418,7 @@ KEYMEM_MEMORY_DEDUP=0.99
 **Why e5 gates are opt-in:** multilingual-e5's narrow cosine band (~0.86–0.99) makes a static floor unreliable, while held-out tests showed distribution and key-proximity gates can also overfit. Both are disabled by default to avoid hiding real memories. Use bge-m3 for reliable not-found behavior, or calibrate e5 gates on your own corpus.
 
 Distribution gate parameters:
-- **`gateZ`** — set via `KEYMEM_GATE_Z` or the `min_z` parameter of optional `recall_memories()`.
+- **`gateZ`** — set via `KEYMEM_GATE_Z`, or pass `min_z` directly if you call `recall()` as a library.
 - **`0` disables** the gate (default for bge-m3, bge, openai, minilm — where `min_score` already works).
 - Both gates **compose (AND)**: a result must clear both `min_score` and `gateZ` to be returned.
 - A **literal name/proper-noun key match** (e.g. querying a stored `name`-typed key exactly) is always a definite anchor and bypasses the distribution gate.
@@ -457,8 +457,6 @@ servers hide the two transcript tools (`list_sessions`, `get_conversation`):
 
 Scores carry `score_kind`. Key recall exposes cosine-like `key_relevance`; `read_key` exposes `content_relevance` plus a within-key rank score; injected/direct memories expose `relevance_score` separately from their small RRF `rank_score`. Compare thresholds only within the same score kind.
 
-Set `KEYMEM_DIRECT_RECALL=true` to expose a seventeenth compatibility tool, `recall_memories(...)`, with BM25+dense+RRF multi-hop behavior.
-
 A system prompt template is also available via the `memory_system_prompt` MCP prompt — include it to instruct the agent to recall silently, use diverse keys, and never mention the memory system to users.
 
 ---
@@ -480,7 +478,7 @@ LOCAL_EMBEDDING_MODEL=bge-m3
 
 > **bge-m3 runs on its own ONNX session, not through fastembed.** fastembed pads every input to 512 tokens, so a 4-token query cost as much as a full page — 199ms and a 9.6-core burst on every recall. Tokenizing to the actual length is **23x less CPU** (15ms) at identical retrieval quality: `npm run bench` (92%/97%/0.93), the ablation grid, and `real-eval` over a 3018-vector live store all score the same, case for case. Pooling is unchanged (CLS + L2), but unpadded vectors sit ~0.98 cosine from padded ones, so the embedding fingerprint is `local:bge-m3+nopad` and **an existing graph re-embeds itself once on first load after upgrading** (a `graph.json.bak.local_bge-m3` backup is written first). Other model families still use fastembed.
 
-**Cross-encoder reranking (core):** the default `recall()` Top-1 path re-scores the candidate pool under its strongest key with `bge-reranker-v2-m3`. Compatibility `recall_memories()` results are reranked too. The model (~570MB, quantized) auto-downloads on first use and caches under `~/.keymem/models/reranker`.
+**Cross-encoder reranking (core):** the default `recall` MCP tool's Top-1 path re-scores the candidate pool under its strongest key with `bge-reranker-v2-m3`. `recall()`/`recallInject()` results are reranked too. The model (~570MB, quantized) auto-downloads on first use and caches under `~/.keymem/models/reranker`.
 
 ```
 # optional: KEYMEM_RERANK=false              # disable the core reranker
@@ -498,10 +496,9 @@ support. KeyMem derives the comparison dimension after removing the entity names
 preserves the original associative winner for reinforcement. This is on by default; disable it with
 `KEYMEM_TASK_EVIDENCE_SELECTION=false`.
 
-**Reranker not-found gate (`KEYMEM_RERANK_MIN_SCORE`):** in direct compatibility mode, reject the complete `recall_memories()` result when the top cross-encoder logit is below this floor.
+**Reranker not-found gate (`KEYMEM_RERANK_MIN_SCORE`):** in `recall()`/`recallInject()`, reject the complete result when the top cross-encoder logit is below this floor.
 
 ```
-KEYMEM_DIRECT_RECALL=true
 KEYMEM_RERANK_MIN_SCORE=0   # reject when top rerank logit < 0 (bge-reranker-v2-m3 scale)
 ```
 

@@ -21,7 +21,6 @@ import {
   hostLinkFromSession,
   type Agent,
 } from "./nativeTranscripts.js";
-import { cfgRaw } from "./env.js";
 import { parseDecayProfile, type ConfirmationEvidence } from "./decay.js";
 import type { DirectHydrateKey } from "./memoryGraph.js";
 import { compactRecallKeys, type RecallKeyCandidate } from "./recallView.js";
@@ -55,7 +54,6 @@ function parseNumber(v: unknown): number | null {
   return null;
 }
 
-const DIRECT_RECALL_ENABLED = cfgRaw("DIRECT_RECALL") === "true";
 
 // Provenance: stamp every saved/corrected memory with the server session that wrote it,
 // the tool used, and a timestamp. Callers may attach extra context (e.g. a conversation
@@ -270,7 +268,7 @@ export function createMcpServer(): Server {
       {
         name: "recall",
         description:
-          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. By default returns {status, query, namespace, keys, memories}: ranked key clusters plus one passive Top-1 memory selected under the top key. The memory includes validity, matched_key, and connected_keys, each with a relevance score (cosine of that key to your query/context, sorted high→low). recall answers a question: check whether the Top-1 memory actually answers it. If it only points elsewhere, is partial, or the highest-relevance connected key is not the one you arrived by, take one more hop — read_key(that key_id, query, namespace) then read_memory — and stop as soon as the answer is complete. Each hop is one call; the store never fans out for you. Passive recall never reinforces links or changes access, depth, aliases, or confirmation. inject:true remains a compatibility path for associative multi-memory expansion and is not required for Top-1 hydration. An empty result includes empty keys/memories and nearest_keys.",
+          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. Returns {status, query, namespace, keys, memories}: ranked key clusters plus one passive Top-1 memory selected under the top key. The memory includes validity, matched_key, and connected_keys, each with a relevance score (cosine of that key to your query/context, sorted high→low). recall answers a question: check whether the Top-1 memory actually answers it. If it only points elsewhere, is partial, or the highest-relevance connected key is not the one you arrived by, take one more hop — read_key(that key_id, query, namespace) then read_memory — and stop as soon as the answer is complete. Each hop is one call; the store never fans out for you. Passive recall never reinforces links or changes access, depth, aliases, or confirmation. An empty result includes empty keys/memories and nearest_keys.",
         inputSchema: {
           type: "object",
           properties: {
@@ -287,12 +285,7 @@ export function createMcpServer(): Server {
               description:
                 "When true, also return namespace_memory_count; status distinguishes found, no_match, and empty_namespace.",
             },
-            inject: { type: "boolean" },
-            inject_top_k: { type: "number" },
-            inject_max_chars: { type: "number" },
-            inject_min_rel_score: { type: "number" },
-            inject_prefer_depth: { type: "boolean" },
-            inject_explore_shallow: { type: "boolean" },
+            max_chars: { type: "number", description: "Truncate the returned memory's content to this length." },
           },
           required: ["query"],
         },
@@ -357,31 +350,6 @@ export function createMcpServer(): Server {
           required: ["memory_id", "evidence"],
         },
       },
-      ...(DIRECT_RECALL_ENABLED
-        ? [
-            {
-              name: "recall_memories",
-              description:
-                "Optional compatibility mode: directly return ranked memories using BM25+dense+RRF and graph expansion. Disabled unless KEYMEM_DIRECT_RECALL=true. Prefer recall → read_key → read_memory for agent-driven navigation.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  query: { type: "string" },
-                  top_k: { type: "number" },
-                  namespace: { type: "string" },
-                  expand: { type: "boolean" },
-                  hops: { type: "number" },
-                  min_rel_score: { type: "number" },
-                  min_score: { type: "number" },
-                  min_z: { type: "number" },
-                  min_key_gate: { type: "number" },
-                  min_depth: { type: "number" },
-                },
-                required: ["query"],
-              },
-            },
-          ]
-        : []),
       {
         name: "remember",
         description:
@@ -602,25 +570,6 @@ export function createMcpServer(): Server {
         case "recall": {
           const namespace = typeof a.namespace === "string" ? a.namespace : null;
           const context = typeof a.context === "string" ? a.context : null;
-          if (a.inject === true) {
-            const injected = await graph.recallInject(
-              a.query as string,
-              typeof a.inject_top_k === "number" ? a.inject_top_k : 1,
-              namespace,
-              {
-                preferDepth: a.inject_prefer_depth === true,
-                exploreShallow: a.inject_explore_shallow === true,
-                maxChars:
-                  typeof a.inject_max_chars === "number" ? a.inject_max_chars : undefined,
-                minRelScore:
-                  typeof a.inject_min_rel_score === "number"
-                    ? a.inject_min_rel_score
-                    : undefined,
-              },
-              context
-            );
-            return { content: [{ type: "text", text: JSON.stringify(injected, null, 0) }] };
-          }
           const results = await graph.searchKeys(
             a.query as string,
             typeof a.top_k === "number" ? a.top_k : 8,
@@ -631,7 +580,7 @@ export function createMcpServer(): Server {
             results[0] as DirectHydrateKey | undefined,
             context?.trim() || (a.query as string),
             namespace,
-            typeof a.inject_max_chars === "number" ? a.inject_max_chars : undefined,
+            typeof a.max_chars === "number" ? a.max_chars : undefined,
           );
           const responseKeys = compactRecallKeys(results);
           const memories = decision.status === "candidate"
@@ -722,23 +671,6 @@ export function createMcpServer(): Server {
             confirmationId,
           });
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
-        }
-
-        case "recall_memories": {
-          if (!DIRECT_RECALL_ENABLED) throw new Error("recall_memories is disabled");
-          const results = await graph.recall(
-            a.query as string,
-            typeof a.top_k === "number" ? a.top_k : 5,
-            typeof a.namespace === "string" ? a.namespace : null,
-            typeof a.expand === "boolean" ? a.expand : false,
-            typeof a.hops === "number" ? a.hops : 2,
-            typeof a.min_rel_score === "number" ? a.min_rel_score : 0,
-            typeof a.min_score === "number" ? a.min_score : undefined,
-            typeof a.min_z === "number" ? a.min_z : undefined,
-            typeof a.min_key_gate === "number" ? a.min_key_gate : undefined,
-            typeof a.min_depth === "number" ? a.min_depth : 0
-          );
-          return { content: [{ type: "text", text: JSON.stringify(results) }] };
         }
 
         case "remember": {
