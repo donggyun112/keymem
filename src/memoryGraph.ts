@@ -2862,21 +2862,32 @@ export class MemoryGraph {
           ranked = [];
         } else {
           ranked = reordered.map((x) => x.entry).slice(0, actualTopK);
-          // Safety-checked promotion: only bump the strict-hop candidate into the final
-          // window if it survived rerank but landed just outside it, AND the item it would
-          // evict is itself weak (low raw similarity — a confident hit is high-similarity
-          // regardless of hop, and the noise this feature targets is routinely hop=1 weak
-          // content-admits, so hop is not part of "weak"). Never displace a confident
-          // direct/key hit. This is the guard the bench ceiling probe lacked
-          // (bench/edge-experiments-llm-results.json measured it evicting an
+          // Safety-checked promotion: only bump the strict-hop candidate into a small
+          // confidence window if it survived rerank but landed just outside it, AND the item
+          // it would evict is itself weak (low raw similarity — a confident hit is
+          // high-similarity regardless of hop, and the noise this feature targets is
+          // routinely hop=1 weak content-admits, so hop is not part of "weak"). Never
+          // displace a confident direct/key hit. The window is a FIXED small size (5, the
+          // bench-validated STRICT_HOP top5), not `actualTopK` — expand=true doubles
+          // actualTopK to give callers extra candidates to work with, and evicting only the
+          // tail of that padded list would sit far past any realistic Hit@5/Hit@10 check,
+          // making the promotion pointless (measured: this landed the candidate at rank ~18,
+          // unchanged from before the fix). This is also the guard the bench ceiling probe
+          // lacked (bench/edge-experiments-llm-results.json measured it evicting an
           // already-correct rank-5 answer for "미나 취미").
-          if (strictHopId && !ranked.some(([mid]) => mid === strictHopId)) {
+          const windowSize = Math.min(5, topK, ranked.length);
+          if (strictHopId && !ranked.slice(0, windowSize).some(([mid]) => mid === strictHopId)) {
             const fullIdx = reordered.findIndex((r) => r.entry[0] === strictHopId);
-            const lastMid = ranked[ranked.length - 1]?.[0];
-            const lastIsWeak = lastMid !== undefined
-              && (memRawSim[lastMid] ?? 0) < STRICT_HOP_EVICT_BELOW;
-            if (fullIdx !== -1 && lastIsWeak) {
-              ranked = [...ranked.slice(0, -1), reordered[fullIdx].entry];
+            const evictIdx = windowSize - 1;
+            const evictMid = evictIdx >= 0 ? ranked[evictIdx]?.[0] : undefined;
+            const evictIsWeak = evictMid !== undefined
+              && (memRawSim[evictMid] ?? 0) < STRICT_HOP_EVICT_BELOW;
+            if (fullIdx !== -1 && evictIsWeak) {
+              // strictHopId may already sit further down `ranked` (the pool-inclusion
+              // guarantee above put it there) — drop that occurrence so splicing it into the
+              // window doesn't leave a duplicate entry in the result.
+              const withoutDup = ranked.filter(([mid]) => mid !== strictHopId);
+              ranked = [...withoutDup.slice(0, evictIdx), reordered[fullIdx].entry, ...withoutDup.slice(evictIdx)];
             }
           }
         }

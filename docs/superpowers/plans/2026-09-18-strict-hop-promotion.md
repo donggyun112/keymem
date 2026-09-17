@@ -457,6 +457,20 @@ git commit -m "chore: re-run ablation bench after strict-hop promotion lands in 
 
 ---
 
+## Execution Notes (filled in after running the plan)
+
+Actual result of Task 3, Step 2: `assoc2 hit@5` moved **27% → 33%** (4/15 → 5/15), `direct`/`semantic` unchanged (93%/88%, no regression), `notfound` unchanged (1/10). Short of the bench ceiling's 60%, as this plan predicted — the remaining assoc2 failures split into two groups: (a) queries where `findStrictHopCandidate` never fires because `gated[0]` (the fused-score anchor) isn't the intended "near" memory in the first place — the same anchor-selection/template-collision problem diagnosed earlier this session, not a defect in this feature; (b) queries where a candidate is found but the item occupying the eviction slot is itself >= `STRICT_HOP_EVICT_BELOW`, so the safety check correctly declines to promote.
+
+Three real bugs were found and fixed while executing Task 2 (the code above already reflects the fixes; this section is the record of what changed and why, since the plan's original code blocks predate them):
+
+1. **Eviction target was the wrong position.** The plan's original safety check compared against `ranked[ranked.length - 1]` — the tail of the padded `actualTopK` list (2x the caller's requested `topK` under `expand=true`). Evicting only that tail slot left the candidate at rank ~18 of a 20-long list, unchanged from having no fix at all. Fixed by evicting at a **fixed small window** (`Math.min(5, topK, ranked.length) - 1`), matching the bench's validated top5, not `actualTopK`.
+2. **"Weak" incorrectly required `hop >= 2`.** The original condition was `memRawSim < 0.75 && memHop >= 2`. The corpus-density noise this feature targets is routinely `hop === 1` weak content-admits, so that extra clause silently blocked every real promotion in testing. Dropped the `hop >= 2` half — "weak" is about raw similarity only.
+3. **Presence check looked at the whole list, not the window.** `!ranked.some(...)` treated "already anywhere in the padded list" as "nothing to do," so a candidate already sitting at rank 18 (via the Phase-2 pool-inclusion guarantee) never got moved up. Fixed to `!ranked.slice(0, windowSize).some(...)`, and the swap itself now removes any later duplicate before splicing the candidate into the window (`ranked.filter(([mid]) => mid !== strictHopId)` before slicing) — the naive version left the same memory appearing twice in one result set.
+
+A fourth issue was in the Task 2 test fixture itself, not the production code: the original `NOISE${i}` vectors cycled through only 5 distinct directions (`i % 5`), so most of the 30 "distinct" noise memories were >= `memoryDedup` (0.94) similar to an earlier one and got silently write-time-superseded — the test corpus never reached the size it claimed to. Fixed by giving each `NOISE${i}` its own orthogonal axis (`v[2 + i]`) so no two are ever dedup-similar. A 3-test addition (`recall() moves a strict-hop candidate into top5 without duplicating it when it already appears later in the results`) locks in fix #3 specifically, since the original two tests didn't happen to exercise "candidate already present outside the window."
+
+---
+
 ## Not in scope for this plan (do NOT attempt as part of these tasks)
 
 - **minScore corpus-density scaling** (the not-found accuracy problem: 0/10–1/10 on the 49-memory bench fixture). This needs its own calibration experiment first — there is no validated formula yet, only a ruled-out approach (gateZ/keyGate, documented in `src/embedding.ts`'s bgem3 profile comment). Do not fold a `minScore` change into this plan; write a separate plan once a bench experiment (analogous to tonight's `bench/z-check.mts`) has produced and validated an actual scaling formula.

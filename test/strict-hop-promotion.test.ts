@@ -125,10 +125,69 @@ test("recall() promotes a narrow-key hop-2 candidate past a flood of same-topic 
   }
 
   const before = (await g.recall("QQ", 10, null, true, 2, 0, 0, 0, 0)) as Array<{ content: string }>;
+  // Must land within the top5 confidence window specifically, not merely appear somewhere in
+  // the padded actualTopK=20 list — that weaker check silently passed an earlier, broken
+  // version of this feature that only ever swapped into the LAST slot of that padded list
+  // (rank ~18, no closer to a real Hit@5/Hit@10 than before the fix at all).
   assert.equal(
-    before.some((m) => m.content === "TARGET"),
+    before.slice(0, 5).some((m) => m.content === "TARGET"),
     true,
-    `expected TARGET to be promoted into the top10, got: ${before.map((m) => m.content).join(",")}`
+    `expected TARGET within the top5, got: ${before.map((m) => m.content).join(",")}`
+  );
+});
+
+test("recall() moves a strict-hop candidate into top5 without duplicating it when it already appears later in the results", async (t) => {
+  // A smaller noise set than the "flood" test above: TARGET already lands somewhere in the
+  // (unpromoted) results on its own — the promotion must MOVE it into top5, not add a second
+  // copy alongside the one already further down the list.
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = await mkdtemp(join(tmpdir(), "sm-stricthop-dedup-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  process.env.KEYMEM_DATA_DIR = dir;
+  process.env.EMBEDDING_BACKEND = "local";
+  process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
+
+  const DIM = 12;
+  function zeros(): number[] { return new Array(DIM).fill(0); }
+  function vec(t: string): number[] {
+    if (t === "QQ" || t === "ANCHOR") { const v = zeros(); v[0] = 1; return v; }
+    if (t === "TARGET") { const v = zeros(); v[1] = 1; return v; }
+    const m = /^NOISE(\d+)$/.exec(t);
+    if (m) {
+      const i = Number(m[1]);
+      const c = 0.6 + (i % 5) * 0.03;
+      const v = zeros();
+      v[0] = c;
+      v[2 + i] = Math.sqrt(1 - c * c);
+      return v;
+    }
+    return zeros();
+  }
+  const emb = await import("../src/embedding.ts");
+  emb.__setTestEmbedder((text: string) => vec(text));
+  t.after(() => emb.__clearTestEmbedder());
+  const rer = await import("../src/reranker.ts");
+  rer.__setTestReranker((_q: string, texts: string[]) => texts.map(() => 0));
+  t.after(() => rer.__clearTestReranker());
+
+  const mg = await import(`../src/memoryGraph.ts?stricthop-dedup=${Date.now()}`);
+  const g = new mg.MemoryGraph();
+  await g.load();
+  await g.add("ANCHOR", ["anchorNarrowKey"], {});
+  await g.add("TARGET", ["anchorNarrowKey"], {});
+  for (let i = 0; i < 8; i++) {
+    await g.add(`NOISE${i}`, [`noiseKey${i}`], {});
+  }
+
+  const result = (await g.recall("QQ", 10, null, true, 2, 0, 0, 0, 0)) as Array<{ content: string }>;
+  const occurrences = result.filter((m) => m.content === "TARGET").length;
+  assert.equal(occurrences, 1, `TARGET must appear exactly once, got ${occurrences} in: ${result.map((m) => m.content).join(",")}`);
+  assert.equal(
+    result.slice(0, 5).some((m) => m.content === "TARGET"),
+    true,
+    `expected TARGET within the top5, got: ${result.map((m) => m.content).join(",")}`
   );
 });
 
