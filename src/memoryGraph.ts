@@ -273,6 +273,42 @@ export function passesDistributionGate(
   return Number.isFinite(z) ? z >= gateZ : true;
 }
 
+// Structural (not fused-score) hop-2 candidate: the strongest neighbor of the top `gated`
+// anchor that is reachable ONLY via a "narrow" key — one shared by <= maxMembers memories,
+// i.e. a specific connector (a name, a project, a shared fact) rather than a hub topic word.
+// A hop-2 association's HOP_DECAY-scaled fused score routinely loses to dozens of weakly-
+// admitted same-topic candidates once the corpus is large (measured: real hop-2 hits ranked
+// ~15-18th of 49 in bench/edge-experiments-results.json) — this bypasses that competition by
+// looking at graph structure directly, exactly like the bench/edge-experiments.ts STRICT_HOP
+// probe that measured assoc2 Hit@5 27%→60% with no regression elsewhere.
+export function findStrictHopCandidate(
+  gated: Array<[string, number]>,
+  memHop: Record<string, number>,
+  memToKeys: Record<string, Map<string, unknown>>,
+  keyToMems: Record<string, Map<string, unknown>>,
+  maxMembers: number
+): string | null {
+  if (gated.length === 0) return null;
+  const anchorId = gated[0][0];
+  const anchorKeys = memToKeys[anchorId];
+  if (!anchorKeys) return null;
+  let bestId: string | null = null;
+  let bestScore = -Infinity;
+  for (const [mid, score] of gated) {
+    if (mid === anchorId || (memHop[mid] ?? 1) < 2) continue;
+    const midKeys = memToKeys[mid];
+    if (!midKeys) continue;
+    let sharesNarrowKey = false;
+    for (const kid of midKeys.keys()) {
+      if (!anchorKeys.has(kid)) continue;
+      const memberCount = keyToMems[kid]?.size ?? 0;
+      if (memberCount > 0 && memberCount <= maxMembers) { sharesNarrowKey = true; break; }
+    }
+    if (sharesNarrowKey && score > bestScore) { bestScore = score; bestId = mid; }
+  }
+  return bestId;
+}
+
 // ── Utils ──
 
 function uid(): string {
