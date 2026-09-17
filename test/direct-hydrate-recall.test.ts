@@ -215,6 +215,11 @@ test("recall returns the passive top-1 memory by default and no memory on a miss
   process.env.KEYMEM_DATA_DIR = dir;
   process.env.EMBEDDING_BACKEND = "local";
   process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
+  // This test's toy vec() gives an exact cosine=1.0 for any "coffee"/"drinks" text against
+  // itself, which would otherwise trip the (correct, separately tested below) auto-confirm
+  // feature and break the "recall never mutates state" assertion this test is actually about.
+  process.env.KEYMEM_AUTO_CONFIRM = "false";
+  t.after(() => { delete process.env.KEYMEM_AUTO_CONFIRM; });
 
   const embedding = await import("../src/embedding.ts");
   embedding.__setTestEmbedder((text: string) => vec(text));
@@ -296,4 +301,74 @@ test("recall returns the passive top-1 memory by default and no memory on a miss
   assert.equal(clipped.memories[0].content_truncated, true);
   assert.ok(clipped.memories[0].content.length <= 256, "preview must respect max_chars");
   assert.ok(clipped.memories[0].content.endsWith("[truncated; use read_memory for full content]"));
+});
+
+async function setUpRecallMcp(t: import("node:test").TestContext, tag: string) {
+  const dir = await mkdtemp(join(tmpdir(), `keymem-auto-confirm-${tag}-`));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  process.env.KEYMEM_DATA_DIR = dir;
+  process.env.EMBEDDING_BACKEND = "local";
+  process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
+  const embedding = await import("../src/embedding.ts");
+  embedding.__setTestEmbedder((text: string) => vec(text));
+  t.after(() => embedding.__clearTestEmbedder());
+  const { createMcpServer, graph } = await import(`../src/server.ts?auto-confirm-${tag}=${moduleId++}`);
+  const server = createMcpServer();
+  const client = new Client({ name: `auto-confirm-${tag}`, version: "0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  t.after(async () => { await client.close(); await server.close(); });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  return { graph, client };
+}
+
+test("recall auto-confirms when context strongly restates the returned memory", async (t) => {
+  const { graph, client } = await setUpRecallMcp(t, "strong");
+  const [coffeeId] = await graph.add("the user prefers coffee", ["drinks"], {});
+  const before = {
+    confirmationCount: graph.memories[coffeeId].confirmation_count,
+    lastConfirmedAt: graph.memories[coffeeId].last_confirmed_at,
+  };
+
+  const result = JSON.parse(textResult(await client.callTool({
+    name: "recall",
+    arguments: { query: "drinks", context: "the user still prefers coffee" },
+  })));
+
+  assert.equal(result.memories[0].id, coffeeId);
+  assert.equal(result.memories[0].auto_confirmed, true);
+  assert.equal(graph.memories[coffeeId].confirmation_count, before.confirmationCount + 1);
+  assert.ok(graph.memories[coffeeId].last_confirmed_at > before.lastConfirmedAt);
+});
+
+test("recall does not auto-confirm without a context argument", async (t) => {
+  const { graph, client } = await setUpRecallMcp(t, "no-context");
+  const [coffeeId] = await graph.add("the user prefers coffee", ["drinks"], {});
+  const before = graph.memories[coffeeId].confirmation_count;
+
+  const result = JSON.parse(textResult(await client.callTool({
+    name: "recall",
+    arguments: { query: "drinks" },
+  })));
+
+  assert.equal(result.memories[0].id, coffeeId);
+  assert.equal("auto_confirmed" in result.memories[0], false);
+  assert.equal(graph.memories[coffeeId].confirmation_count, before);
+});
+
+test("recall does not auto-confirm when context relevance is below the threshold", async (t) => {
+  const { graph, client } = await setUpRecallMcp(t, "weak");
+  const [coffeeId] = await graph.add("the user prefers coffee", ["drinks"], {});
+  const before = graph.memories[coffeeId].confirmation_count;
+
+  // "tea" -> [0.8, 0.6, 0] vs the memory's "coffee" -> [1, 0, 0]: cosine 0.8, below the
+  // 0.85 default threshold -- topically related, but not a reassertion of THIS fact.
+  const result = JSON.parse(textResult(await client.callTool({
+    name: "recall",
+    arguments: { query: "drinks", context: "the user wants some tea" },
+  })));
+
+  assert.equal(result.memories[0].id, coffeeId);
+  assert.equal("auto_confirmed" in result.memories[0], false);
+  assert.equal(graph.memories[coffeeId].confirmation_count, before);
 });

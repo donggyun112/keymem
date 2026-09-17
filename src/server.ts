@@ -21,6 +21,7 @@ import {
   hostLinkFromSession,
   type Agent,
 } from "./nativeTranscripts.js";
+import { cfgRaw } from "./env.js";
 import { parseDecayProfile, type ConfirmationEvidence } from "./decay.js";
 import type { DirectHydrateKey } from "./memoryGraph.js";
 import { compactRecallKeys, type RecallKeyCandidate } from "./recallView.js";
@@ -53,6 +54,14 @@ function parseNumber(v: unknown): number | null {
   if (typeof v === "string") { const n = Number(v); return isNaN(n) ? null : n; }
   return null;
 }
+
+// Auto-confirm on recall (see the "recall" case handler): reuses directHydrateTop1's own
+// content_relevance instead of requiring the agent to separately call confirm_memory when the
+// user just reasserted a fact. No calibration data yet -- 0.85 sits well above the bare content
+// admit floor (contentRecall, 0.5-0.55) and below near-duplicate territory (memoryDedup, ~0.9-0.99
+// depending on model); tune with KEYMEM_AUTO_CONFIRM_MIN_RELEVANCE per deployment.
+const AUTO_CONFIRM_ENABLED = cfgRaw("AUTO_CONFIRM") !== "false";
+const AUTO_CONFIRM_MIN_RELEVANCE = Number(cfgRaw("AUTO_CONFIRM_MIN_RELEVANCE") ?? 0.85);
 
 
 // Provenance: stamp every saved/corrected memory with the server session that wrote it,
@@ -268,7 +277,7 @@ export function createMcpServer(): Server {
       {
         name: "recall",
         description:
-          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. Returns {status, query, namespace, keys, memories}: ranked key clusters plus one passive Top-1 memory selected under the top key. The memory includes validity, matched_key, and connected_keys, each with a relevance score (cosine of that key to your query/context, sorted high→low). recall answers a question: check whether the Top-1 memory actually answers it. If it only points elsewhere, is partial, or the highest-relevance connected key is not the one you arrived by, take one more hop — read_key(that key_id, query, namespace) then read_memory — and stop as soon as the answer is complete. Each hop is one call; the store never fans out for you. Passive recall never reinforces links or changes access, depth, aliases, or confirmation. An empty result includes empty keys/memories and nearest_keys.",
+          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. Returns {status, query, namespace, keys, memories}: ranked key clusters plus one passive Top-1 memory selected under the top key. The memory includes validity, matched_key, and connected_keys, each with a relevance score (cosine of that key to your query/context, sorted high→low). recall answers a question: check whether the Top-1 memory actually answers it. If it only points elsewhere, is partial, or the highest-relevance connected key is not the one you arrived by, take one more hop — read_key(that key_id, query, namespace) then read_memory — and stop as soon as the answer is complete. Each hop is one call; the store never fans out for you. Passive recall never reinforces links or changes access, depth, aliases, or confirmation — except: when `context` is a strong restatement of the returned memory, it is auto-confirmed (`memories[0].auto_confirmed: true`) without a separate confirm_memory call. An empty result includes empty keys/memories and nearest_keys.",
         inputSchema: {
           type: "object",
           properties: {
@@ -338,7 +347,7 @@ export function createMcpServer(): Server {
       {
         name: "confirm_memory",
         description:
-          "Confirm that a memory is still current using explicit present evidence. Never call this merely because read_memory returned the content. Use only after a current user assertion, an authoritative current source, or direct observation. Refreshes validity but does not change content or key links.",
+          "Confirm that a memory is still current using explicit present evidence. Never call this merely because read_memory returned the content. Use only after a current user assertion, an authoritative current source, or direct observation. Refreshes validity but does not change content or key links. A strong restatement passed as recall's `context` is already auto-confirmed there (check memories[0].auto_confirmed) — this tool is for evidence recall can't see: read_memory results, authoritative sources, or direct observation.",
         inputSchema: {
           type: "object",
           properties: {
@@ -589,6 +598,27 @@ export function createMcpServer(): Server {
                 matched_key: decision.candidate.key,
               }]
             : [];
+          // Auto-confirm: content_relevance already measures cosine(context, memory content)
+          // whenever a real utterance (not the fallback keyword query) was passed as `context`.
+          // A very high value IS the "explicit present evidence" confirm_memory otherwise makes
+          // the agent notice and report back via a second call — reuse the signal instead of
+          // requiring that round trip. Gated strictly on `context` being present so a bare
+          // keyword query (topically close but not a reassertion) never triggers it.
+          if (
+            AUTO_CONFIRM_ENABLED &&
+            context?.trim() &&
+            memories.length > 0 &&
+            typeof memories[0].content_relevance === "number" &&
+            memories[0].content_relevance >= AUTO_CONFIRM_MIN_RELEVANCE
+          ) {
+            const hostLink = await resolveHostLink(headers);
+            await graph.confirmMemory(memories[0].id, {
+              evidence: "user",
+              namespace,
+              source: buildSource(null, "recall_auto_confirm", hostLink),
+            });
+            (memories[0] as Record<string, unknown>).auto_confirmed = true;
+          }
           if (a.explain === true) {
             const overview = await graph.browseKeys(namespace, { limit: 1 }) as {
               memory_count: number;
