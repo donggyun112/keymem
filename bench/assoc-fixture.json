@@ -1,5 +1,5 @@
 {
-  "_doc": "Associative-recall ablation fixture. Each 'assoc2' query's expected target is a FAR memory reachable only via a shared key 2 hops away (connected-but-dissimilar): the query has low direct similarity to the target, but matches a near memory that shares a key with it. 'direct' queries are 1-hop controls (should score equally under both conditions). 'notfound' must return nothing. Ground truth = expect[] of memory ids. The benchmark runs each query under DIRECT (expand=false,hops=1 ≈ flat semantic store) vs GRAPH (expand=true,hops=2 = keymem associative traversal) to isolate the graph's contribution.",
+  "_doc": "Associative-recall ablation fixture. Each 'assoc2' query's expected target is a FAR memory reachable only via a shared key 2 hops away (connected-but-dissimilar): the query has low direct similarity to the target, but matches a near memory that shares a key with it. FAR memories must not lexically or topically echo the query — hop-2 pairs are deliberately cross-domain (e.g. owning a car vs. a specific repair incident) so DIRECT content-embedding similarity can't solve them on its own. 'direct' queries are 1-hop controls (should score equally under both conditions). 'semantic' pairs share NO key at all — content-only relation, the held-out set from docs/superpowers/specs/2026-09-16-semantic-edge-temporary-plan.md's 'Evaluation before implementation' section; DIRECT and GRAPH are both expected to miss these today, which is the gap the semantic-edge proposal targets. 'notfound' must return nothing. Ground truth = expect[] of memory ids. The benchmark runs each query under DIRECT (expand=false,hops=1 ≈ flat semantic store) vs GRAPH (expand=true,hops=2 = keymem associative traversal) to isolate the graph's contribution. NOTE: bench/ablation.ts sets KEYMEM_RERANK_POOL to the corpus size before loading memoryGraph.ts — the default RERANK_POOL=30 silently truncates real hop-2 associations out of the pre-rerank candidate pool once a fixture this size, so without that override GRAPH looks identical to DIRECT for reasons unrelated to the graph's actual quality.",
   "memories": [
     { "id": "name",  "content": "사용자 이름은 미나이다", "keys": ["이름", "미나", "Mina", "name"], "key_types": { "미나": "name", "Mina": "name" } },
     { "id": "live",  "content": "미나는 서울 마포구에 산다", "keys": ["거주지", "사는곳", "마포구", "서울"] },
@@ -20,7 +20,52 @@
     { "id": "kyoto_food", "content": "교토의 한 작은 가게에서 먹은 라멘이 인생 라멘이었다고 한다", "keys": ["교토", "라멘", "음식"] },
 
     { "id": "project", "content": "미나는 keymem라는 오픈소스 메모리 라이브러리를 만든다", "keys": ["keymem", "프로젝트", "오픈소스"] },
-    { "id": "goal",    "content": "미나의 목표는 keymem을 에이전트의 표준 메모리 레이어로 만드는 것", "keys": ["keymem", "목표", "비전"] }
+    { "id": "goal",    "content": "미나의 목표는 keymem을 에이전트의 표준 메모리 레이어로 만드는 것", "keys": ["keymem", "목표", "비전"] },
+
+    { "id": "birthday", "content": "미나의 생일은 3월 14일이다", "keys": ["생일", "3월14일", "생년월일"] },
+    { "id": "blood",    "content": "미나의 혈액형은 O형이다", "keys": ["혈액형", "O형"] },
+    { "id": "car",       "content": "미나는 흰색 아반떼를 몰고 다닌다", "keys": ["자동차", "아반떼", "흰색"] },
+    { "id": "glasses",   "content": "미나는 근시가 있어 안경을 쓴다", "keys": ["안경", "근시", "시력"] },
+    { "id": "food",      "content": "미나가 가장 좋아하는 음식은 마라탕이다", "keys": ["음식", "마라탕", "좋아하는음식"] },
+    { "id": "season",    "content": "미나는 가을을 가장 좋아한다", "keys": ["계절", "가을", "좋아하는계절"] },
+    { "id": "laptop",    "content": "미나는 M3 맥북 프로로 개발한다", "keys": ["노트북", "맥북", "개발환경"] },
+    { "id": "color",     "content": "미나가 좋아하는 색은 초록색이다", "keys": ["색", "초록색", "좋아하는색"] },
+    { "id": "book",      "content": "미나는 이번 달에 클린 아키텍처를 읽고 있다", "keys": ["독서", "책", "클린아키텍처"] },
+    { "id": "local_food", "content": "미나는 합정역 근처 우동집을 자주 간다", "keys": ["맛집", "합정역", "우동"] },
+
+    { "id": "car_accident",          "content": "아반떼는 지난달 접촉사고가 나서 범퍼를 교체했다", "keys": ["아반떼", "접촉사고", "범퍼"] },
+    { "id": "glasses_lost",          "content": "안경을 며칠 전 카페에 두고 와서 하루 종일 찾아다녔다", "keys": ["안경", "분실", "카페"] },
+    { "id": "food_discount",         "content": "마라탕집에서 미나에게 단골 할인 카드를 챙겨줬다", "keys": ["마라탕", "할인카드", "단골"] },
+    { "id": "book_decor",            "content": "클린 아키텍처 표지가 마음에 들어서 책상에 액자로 세워뒀다", "keys": ["클린아키텍처", "책상", "장식"] },
+    { "id": "laptop_gift",           "content": "맥북은 미나가 취업 축하 선물로 받은 것이다", "keys": ["맥북", "선물", "취업축하"] },
+    { "id": "color_paint",           "content": "초록색 그림 도구를 새로 산 김에 그림을 그려봤다", "keys": ["초록색", "그림", "화구"] },
+    { "id": "neighborhood_construction", "content": "합정역 근처는 요즘 재개발 공사로 시끄럽다", "keys": ["합정역", "공사", "재개발"] },
+    { "id": "autumn_photo",          "content": "미나는 가을마다 단풍 사진을 찍으러 간다", "keys": ["가을", "단풍", "사진"] },
+    { "id": "birthday_friends",      "content": "미나 생일엔 매년 친한 친구 세명이 모여 케이크를 자른다", "keys": ["생일", "친구", "케이크"] },
+
+    { "id": "s1_near", "content": "미나는 최근 무릎 통증으로 병원 진료를 받았다", "keys": ["무릎", "병원", "통증"] },
+    { "id": "s1_far",  "content": "미나는 요즘 계단을 오르내리기가 버겁다고 한다", "keys": ["계단", "이동", "체력"] },
+
+    { "id": "s2_near", "content": "미나는 이번 주 회사에서 연봉 협상을 진행했다", "keys": ["연봉", "협상", "회사"] },
+    { "id": "s2_far",  "content": "미나는 다음 달에 새 아파트로 이사할 계획이다", "keys": ["이사", "아파트", "이주"] },
+
+    { "id": "s3_near", "content": "미나는 최근 채식 위주로 식단을 바꿨다", "keys": ["채식", "식단", "다이어트"] },
+    { "id": "s3_far",  "content": "미나는 예전보다 운동량을 크게 늘렸다", "keys": ["운동", "헬스", "체력관리"] },
+
+    { "id": "s4_near", "content": "미나는 최근 이직 제안을 하나 받았다", "keys": ["이직", "제안", "커리어"] },
+    { "id": "s4_far",  "content": "미나는 요즘 포트폴리오 사이트를 새로 만들고 있다", "keys": ["포트폴리오", "사이트", "개인프로젝트"] },
+
+    { "id": "s5_near", "content": "미나는 최근 반려식물을 몇 개 들였다", "keys": ["반려식물", "화분", "식물"] },
+    { "id": "s5_far",  "content": "미나는 집에 있는 시간이 예전보다 훨씬 늘었다", "keys": ["집", "재택", "생활패턴"] },
+
+    { "id": "s6_near", "content": "미나는 최근 필름 카메라를 하나 장만했다", "keys": ["카메라", "필름", "촬영"] },
+    { "id": "s6_far",  "content": "미나는 주말마다 동네 골목을 산책하며 시간을 보낸다", "keys": ["산책", "동네", "골목"] },
+
+    { "id": "s7_near", "content": "미나는 최근 명상 앱을 매일 사용한다", "keys": ["명상", "앱", "마음챙김"] },
+    { "id": "s7_far",  "content": "미나는 예전보다 감정 기복이 줄었다고 말한다", "keys": ["감정", "기분", "안정"] },
+
+    { "id": "s8_near", "content": "미나는 최근 오래된 노트북을 정리해서 팔았다", "keys": ["중고", "판매", "정리"] },
+    { "id": "s8_far",  "content": "미나는 그 돈으로 스터디 카페 정기권을 샀다", "keys": ["스터디카페", "정기권", "공부"] }
   ],
   "queries": [
     { "q": "미나 이름", "expect": ["name"], "category": "direct" },
@@ -28,6 +73,16 @@
     { "q": "미나가 마시는 음료", "expect": ["drink"], "category": "direct" },
     { "q": "미나 직업이 뭐야", "expect": ["job"], "category": "direct" },
     { "q": "미나 취미", "expect": ["hobby"], "category": "direct" },
+    { "q": "미나 생일이 언제야", "expect": ["birthday"], "category": "direct" },
+    { "q": "미나 혈액형이 뭐야", "expect": ["blood"], "category": "direct" },
+    { "q": "미나가 타는 차", "expect": ["car"], "category": "direct" },
+    { "q": "미나 시력 어때", "expect": ["glasses"], "category": "direct" },
+    { "q": "미나가 좋아하는 음식", "expect": ["food"], "category": "direct" },
+    { "q": "미나가 좋아하는 계절", "expect": ["season"], "category": "direct" },
+    { "q": "미나 개발할 때 쓰는 노트북", "expect": ["laptop"], "category": "direct" },
+    { "q": "미나가 좋아하는 색깔", "expect": ["color"], "category": "direct" },
+    { "q": "미나 요즘 읽는 책", "expect": ["book"], "category": "direct" },
+    { "q": "미나가 자주 가는 동네 맛집", "expect": ["local_food"], "category": "direct" },
 
     { "q": "미나가 키우는 강아지", "expect": ["dog_med"], "category": "assoc2" },
     { "q": "미나 주말에 뭐해", "expect": ["injury"], "category": "assoc2" },
@@ -35,9 +90,34 @@
     { "q": "미나가 하는 일", "expect": ["lang"], "category": "assoc2" },
     { "q": "미나 봄 여행", "expect": ["kyoto_food"], "category": "assoc2" },
     { "q": "미나가 만드는 오픈소스", "expect": ["goal"], "category": "assoc2" },
+    { "q": "미나가 타는 차 얘기 좀 해줘", "expect": ["car_accident"], "category": "assoc2" },
+    { "q": "미나 눈 관련해서 요즘 무슨 일 있었어", "expect": ["glasses_lost"], "category": "assoc2" },
+    { "q": "미나 요즘 뭐 먹는 거 좋아해", "expect": ["food_discount"], "category": "assoc2" },
+    { "q": "미나 요즘 책 읽는거 있어", "expect": ["book_decor"], "category": "assoc2" },
+    { "q": "미나가 쓰는 노트북 얘기해줘", "expect": ["laptop_gift"], "category": "assoc2" },
+    { "q": "미나 요즘 색깔 관련 취미 생겼어", "expect": ["color_paint"], "category": "assoc2" },
+    { "q": "미나 동네에 요즘 무슨 일 있어", "expect": ["neighborhood_construction"], "category": "assoc2" },
+    { "q": "미나는 가을을 왜 좋아해", "expect": ["autumn_photo"], "category": "assoc2" },
+    { "q": "미나 생일 어떻게 보내", "expect": ["birthday_friends"], "category": "assoc2" },
+
+    { "q": "미나 요즘 어디 아파", "expect": ["s1_far"], "category": "semantic" },
+    { "q": "미나 곧 돈 쓸 일 있어", "expect": ["s2_far"], "category": "semantic" },
+    { "q": "미나 요즘 건강 관리 어떻게 해", "expect": ["s3_far"], "category": "semantic" },
+    { "q": "미나 요즘 커리어 준비하는거 있어", "expect": ["s4_far"], "category": "semantic" },
+    { "q": "미나 요즘 집에 자주 있어", "expect": ["s5_far"], "category": "semantic" },
+    { "q": "미나 주말에 산책 같은거 해", "expect": ["s6_far"], "category": "semantic" },
+    { "q": "미나 요즘 기분 어때", "expect": ["s7_far"], "category": "semantic" },
+    { "q": "미나 요즘 어디서 공부해", "expect": ["s8_far"], "category": "semantic" },
 
     { "q": "미나 전화번호", "expect": [], "category": "notfound" },
     { "q": "미나 형제자매", "expect": [], "category": "notfound" },
-    { "q": "블록체인 합의 알고리즘", "expect": [], "category": "notfound" }
+    { "q": "블록체인 합의 알고리즘", "expect": [], "category": "notfound" },
+    { "q": "미나 몸무게가 몇이야", "expect": [], "category": "notfound" },
+    { "q": "미나 여권 번호 뭐야", "expect": [], "category": "notfound" },
+    { "q": "미나가 다닌 대학교 전공이 뭐야", "expect": [], "category": "notfound" },
+    { "q": "미나 신발 사이즈 몇이야", "expect": [], "category": "notfound" },
+    { "q": "미나 주민번호 알아", "expect": [], "category": "notfound" },
+    { "q": "미나가 키우는 고양이 이름은", "expect": [], "category": "notfound" },
+    { "q": "미나 자녀가 몇명이야", "expect": [], "category": "notfound" }
   ]
 }

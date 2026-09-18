@@ -19,6 +19,13 @@ type Mem = { id: string; content: string; keys: string[]; key_types?: Record<str
 type Q = { q: string; expect: string[]; category: string };
 const fixture = JSON.parse(await readFile(resolve("bench/assoc-fixture.json"), "utf-8")) as { memories: Mem[]; queries: Q[] };
 
+// RERANK_POOL defaults to 30 (memoryGraph.ts), a fine cutoff at the corpus sizes it was tuned
+// against. This fixture has grown past that: a real hop-2 association's HOP_DECAY-scaled fused
+// score routinely loses to dozens of weakly-admitted same-template distractors and gets sliced
+// out of the pre-rerank pool before the cross-encoder — which DOES rank it correctly — ever sees
+// it. Size the pool to the corpus so GRAPH gets a fair shot at every fixture size.
+process.env.KEYMEM_RERANK_POOL ??= String(fixture.memories.length);
+
 const dir = await mkdtemp(join(tmpdir(), "km-ablation-"));
 process.env.KEYMEM_DATA_DIR = dir;
 const { MemoryGraph } = await import("../src/memoryGraph.ts");

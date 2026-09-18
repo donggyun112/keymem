@@ -168,8 +168,14 @@ export const THRESHOLD_PROFILES: Record<string, ThresholdProfile> = {
   // match. Since hiding a real memory (false negative) is a worse failure than returning
   // noise, e5 defaults to no gate (0.7.0 behavior: never hides). The gate machinery is
   // env-opt-in (KEYMEM_GATE_Z / _KEY_GATE) for users who accept the precision/recall
-  // tradeoff; for RELIABLE not-found detection use bge-m3, which separates cleanly via the
-  // absolute minScore gate (verified found→hit / not-found→[] end-to-end).
+  // tradeoff. bge-m3's absolute minScore gate was verified end-to-end on a small
+  // (~14-memory) fixture, but does NOT hold at corpus scale: on a 49-memory single-subject
+  // fixture (2026-09-18), not-found queries' top content-cosine (0.42–0.76) routinely
+  // cleared minScore=0.55 on topic alone, and a robust-z check confirmed the SAME failure
+  // mode documented above for e5 — not-found z (1.26–2.71) overlaps real-hit z (1.16–7.85)
+  // too much for any gateZ to separate them. Turning gateZ/keyGate on does not fix this;
+  // the actual gap is minScore not scaling with corpus/topic density. Do not re-add a
+  // "bge-m3 is clean" claim without re-verifying at a realistic corpus size.
   e5: { keyMerge: 0.97, memoryDedup: 0.985, keyAutoLink: 0.93, keyRecall: 0.85, contentRecall: 0.8, minScore: 0.8, contradiction: 0.95, gateZ: 0, keyGate: 0, shortKeyMerge: 0, contentRecallShort: 0 },
   minilm: { keyMerge: 0.85, memoryDedup: 0.9, keyAutoLink: 0.6, keyRecall: 0.5, contentRecall: 0.45, minScore: 0.45, contradiction: 0.85, gateZ: 0, keyGate: 0, shortKeyMerge: 0, contentRecallShort: 0 },
   // bge-m3: multilingual, 1024-dim, well-separated (closer to bge than e5).
