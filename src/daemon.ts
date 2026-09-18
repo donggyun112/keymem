@@ -14,9 +14,12 @@ const DEFAULT_PORT = Number(process.env.KEYMEM_DAEMON_PORT ?? 8765);
 const dataDirPath = dataDir();
 const DEFAULT_IDLE_MS = Number(process.env.KEYMEM_DAEMON_IDLE_MS ?? 10 * 60_000);
 const DEFAULT_SESSION_REAP_GRACE_MS = Number(process.env.KEYMEM_SESSION_REAP_GRACE_MS ?? 15_000);
+// TTL 만료 정리는 더 이상 에이전트가 cleanup_expired를 호출해서 해주는 게 아니라, 데몬이
+// 스스로 처리한다: 시작 시 한 번, 이후 이 간격으로 계속.
+const DEFAULT_CLEANUP_INTERVAL_MS = Number(process.env.KEYMEM_CLEANUP_INTERVAL_MS ?? 60 * 60_000);
 
 export async function startDaemon(
-  opts: { port?: number; idleMs?: number; sessionReapGraceMs?: number } = {}
+  opts: { port?: number; idleMs?: number; sessionReapGraceMs?: number; cleanupIntervalMs?: number } = {}
 ): Promise<{
   port: number;
   close: () => Promise<void>;
@@ -26,7 +29,12 @@ export async function startDaemon(
 }> {
   const idleMs = opts.idleMs ?? DEFAULT_IDLE_MS;
   const sessionReapGraceMs = opts.sessionReapGraceMs ?? DEFAULT_SESSION_REAP_GRACE_MS;
+  const cleanupIntervalMs = opts.cleanupIntervalMs ?? DEFAULT_CLEANUP_INTERVAL_MS;
   await graph.load(); // 임베딩 모델은 첫 사용 시 lazy load
+  await graph.cleanupExpired();
+  const cleanupTimer = setInterval(() => {
+    graph.cleanupExpired().catch((err) => console.error("[cleanup]", err));
+  }, cleanupIntervalMs);
 
   // 세션별 transport. 각 shim = 1 MCP 세션 = 1 Server 인스턴스(graph는 공유).
   const transports = new Map<string, StreamableHTTPServerTransport>();
@@ -277,6 +285,7 @@ export async function startDaemon(
     close: async () => {
       closing = true;
       cancelIdle();
+      clearInterval(cleanupTimer);
       for (const timer of reapTimers.values()) clearTimeout(timer);
       reapTimers.clear();
       await Promise.allSettled([...transports.values()].map((t) => t.close()));

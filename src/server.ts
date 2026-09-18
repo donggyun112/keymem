@@ -451,25 +451,6 @@ export function createMcpServer(): Server {
           required: ["items"],
         },
       },
-      {
-        name: "cleanup_expired",
-        description:
-          "Delete all memories past their ttl. Returns count of deleted memories. Call periodically to keep memory clean.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-          required: [],
-        },
-      },
-      {
-        name: "memory_stats",
-        description: "Get counts of keys, memories, and links in the system.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-          required: [],
-        },
-      },
     ];
     return { tools };
   });
@@ -724,26 +705,6 @@ export function createMcpServer(): Server {
             results.push({ saved: mid, deduplicated: wasDedup });
           }
           return { content: [{ type: "text", text: JSON.stringify(results) }] };
-        }
-
-        case "cleanup_expired": {
-          const count = await graph.cleanupExpired();
-          return { content: [{ type: "text", text: JSON.stringify({ deleted: count }) }] };
-        }
-
-        case "memory_stats": {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  keys: Object.keys(graph.keys).length,
-                  memories: graph.listAll().length,
-                  links: graph.linkCount,
-                }),
-              },
-            ],
-          };
         }
 
         default:

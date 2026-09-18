@@ -6,6 +6,7 @@ import { graph, createMcpServer } from "./server.js";
 
 export async function runInProcess(): Promise<void> {
   await graph.load();
+  await graph.cleanupExpired(); // TTL 만료 정리를 에이전트에게 위임하지 않고 시작 시 스스로 처리
   const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);

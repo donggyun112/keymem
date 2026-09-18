@@ -28,6 +28,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `resolveHostLink`/`hostLinkFromSession`/`detectActiveSession`/`transcriptAccessEnabled` are
   untouched -- still used by `remember`/`correct`/`confirm_memory`/`remember_batch` to stamp
   `source.host_session` provenance. Tools contain 12 by default (was 14).
+- `memory_stats` MCP tool: 0 real calls, and its entire payload (key/memory/link counts) was
+  already passively injected into `SERVER_INSTRUCTIONS` on every turn via `stats()` -- a
+  dedicated tool call was pure duplication of information the agent already had. `stats()` and
+  `graph.listAll()` stay; only the tool-level exposure is removed.
+- `cleanup_expired` MCP tool: 0 real calls. Its own description said "call periodically", i.e.
+  it delegated a housekeeping chore to the agent instead of the system doing it -- the same
+  agent-opt-in pattern flagged and fixed for `writeHints`'s phrase-key warning earlier this
+  session. `graph.cleanupExpired()` (the real logic; unit-tested independently) is unchanged --
+  it's now invoked automatically instead: once at daemon/stdio startup, and every
+  `KEYMEM_CLEANUP_INTERVAL_MS` (default 1h) for the long-running daemon. Tools contain 10 by
+  default (was 12).
 
 ### Changed
 

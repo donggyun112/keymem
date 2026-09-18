@@ -410,7 +410,8 @@ KEYMEM_MEMORY_DEDUP=0.99
 | `KEYMEM_AUTOKEY_PROMOTE_N` | `3` | Routing-confirmed selections of a `(key, query)` pair before the query is folded into the key space. |
 | `KEYMEM_AUTOKEY_CONFIRM_FLOOR` | `0.45` | Lowest query↔key cosine eligible for routing-confirmation learning. Repeated selections through the same key can teach a below-gate query alias; this confirms routing only, never content freshness. Lower (e.g. `0.40`) to catch more borderline paraphrases; set `≥` the recall threshold to disable. |
 | `KEYMEM_AUTOKEY_MAX_ALIASES` | `8` | Max learned aliases promoted per key. |
-| `KEYMEM_AUTOKEY_PRUNE_AGE` | `2592000` | Seconds before a never-hit learned alias is pruned by `cleanup_expired` (30 days). |
+| `KEYMEM_AUTOKEY_PRUNE_AGE` | `2592000` | Seconds before a never-hit learned alias is pruned by the daemon's automatic TTL sweep (30 days). |
+| `KEYMEM_CLEANUP_INTERVAL_MS` | `3600000` (1h) | How often the daemon sweeps expired memories/aliases on its own. The stdio path sweeps once at startup instead (no long-running loop to schedule against). |
 | `KEYMEM_DECAY_TRANSIENT_DAYS` | `7` | Half-life in days for `transient` memories. Must be finite and greater than zero. |
 | `KEYMEM_DECAY_STANDARD_DAYS` | `90` | Half-life in days for the default `standard` profile. Must be finite and greater than zero. |
 | `KEYMEM_DECAY_STABLE_DAYS` | `365` | Half-life in days for `stable` memories. Must be finite and greater than zero. |
@@ -433,7 +434,7 @@ An uncalibrated `LOCAL_EMBEDDING_MODEL` falls back to the BGE profile **and logs
 
 ## MCP Tools
 
-The tool set contains 12 tools:
+The tool set contains 10 tools:
 
 | Tool | Description |
 | --- | --- |
@@ -447,8 +448,11 @@ The tool set contains 12 tools:
 | `dismiss(memory_id, key_id, namespace?)` | Negative feedback: the fact is fine, this key should not have surfaced it. Weakens that one edge (floored, never severed) and cancels its pending alias learning |
 | `forget(memory_id)` | Permanently delete |
 | `remember_batch(items)` | Save multiple memories; each item accepts `ttl_seconds` and `decay_profile` |
-| `cleanup_expired()` | Delete memories whose TTL has expired |
-| `memory_stats()` | Get current key/memory/link counts |
+
+TTL-expired memories and key/memory/link counts are no longer agent-facing tools: the daemon
+sweeps expired memories itself (once at startup, then every `KEYMEM_CLEANUP_INTERVAL_MS`; the
+stdio path sweeps once at startup), and the key/memory/link stats are already passively injected
+into `SERVER_INSTRUCTIONS` on every turn — a separate `memory_stats()` call was pure duplication.
 
 Scores carry `score_kind`. Key recall exposes cosine-like `key_relevance`; `read_key` exposes `content_relevance` plus a within-key rank score; injected/direct memories expose `relevance_score` separately from their small RRF `rank_score`. Compare thresholds only within the same score kind.
 
