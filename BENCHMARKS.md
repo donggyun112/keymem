@@ -567,12 +567,12 @@ view. Machine-readable results are in `bench/prompt-cache-ab-results.json`,
 `bench/fixture-prompt-cache-llm-results.json`, and
 `bench/assoc-fixture-prompt-cache-llm-results.json`.
 
-## 10. Association-strengthening / edge-learning ideas — three rejections, one root cause
+## 10. Association-strengthening / edge-learning ideas — four rejections, one root cause
 
 Recorded for the same reason as §7: it costs a day to rebuild one of these and rediscover the
-same thing, and the pattern across all three is more useful than any single result.
+same thing, and the pattern across all four is more useful than any single result.
 
-**The ideas (three variants, same session).**
+**The ideas (four variants, same session).**
 1. Semantic edges — direct memory↔memory typed edges based on content-only relation (no shared
    key), so a `recall()` traversal could reach a target that shares nothing structural with the
    query.
@@ -581,6 +581,9 @@ same thing, and the pattern across all three is more useful than any single resu
    better than the fixed-weight formula.
 3. Dismiss as training signal — using `dismiss()` calls as explicit negative feedback to learn
    which key→memory edges are untrustworthy, instead of only the current fixed decay-on-dismiss.
+4. Public QA datasets as a training-data substitute — sidestep "we have no labels" by training
+   the same kind of scorer on real, externally-labeled data (LongMemEval) instead of on keymem's
+   own usage or fixtures.
 
 **Results.**
 1. *Semantic edges*: rejected after several experiments (including an LLM-judge pass) against a
@@ -597,13 +600,25 @@ same thing, and the pattern across all three is more useful than any single resu
    called exactly **once**, and that one call's `cwd` was this repo's own pre-rename directory
    with a fixture-style namespace (`fx-0263`) — development dogfooding, not a real user
    correcting a real mis-hit. There is no dismiss data to learn from.
+4. *Public QA datasets*: LongMemEval's `oracle` split (500 questions, real `has_answer` turn
+   labels, no LLM judge needed) has no key/graph structure to map onto — unlike HotpotQA in §2,
+   a linear chat transcript has no natural analogue to a shared key, so this could only test a
+   learned *content-cosine* reweighting, not a hop/edge scorer. First pass looked promising
+   (hit@1 17/29 → 19/29) but that sample was a data bug, not a result: the oracle file is sorted
+   by `question_type`, so "first 60 rows" was 60/60 `temporal-reasoning` and every flipped
+   question was that one type. Re-run on a proper random sample across all 6 question types
+   (n=27, stratified): hit@1 16/27 → 17/27, hit@5 25/27 → 26/27 — a one-question swing, noise.
+   Real external labels, no circularity, and still nothing.
 
-**Verdict.** All three fail for the reason §7 already named: *the only place any benefit showed
-up was a fixture (or a training split) built to show it, or a formula that predates any
-learning*. This is not a volume problem — more synthetic queries just let a model rediscover the
-same construction rule more confidently. The bar from §7 still applies to any future attempt in
-this space: a real reachability gap, plus a real usage trace showing it actually matters, not
-another synthetic fixture.
+**Verdict.** Three of four fail for the reason §7 already named: *the only place any benefit
+showed up was a fixture (or a training split) built to show it*. The fourth (#4) is a distinct
+and stronger data point — it used real, externally-labeled, non-circular data and *still* found
+no advantage over plain cosine similarity, which rules out "we just need non-circular data" as
+the fix. This is not a volume problem — more synthetic queries just let a model rediscover the
+same construction rule more confidently, and more real data (at this scale) doesn't produce a
+signal plain similarity wasn't already capturing. The bar from §7 still applies to any future
+attempt in this space: a real reachability gap, plus a real usage trace showing it actually
+matters, not another dataset or another fixture.
 
 ---
 
