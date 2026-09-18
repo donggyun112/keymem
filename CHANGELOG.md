@@ -6,6 +6,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- Per-sentence content vectors (`_embedSentences`, `KEYMEM_SENTENCE_VECTORS`, introduced in
+  0.20.0-era work) — removed outright rather than kept opt-in. A rigorous held-out "buried fact"
+  fixture (10 multi-sentence memories + 20 distractors, `bench/sentence-vector-fixture-eval.mts`)
+  and the official `bench/fixture.json` both showed zero measurable Hit@5/MRR gain over the
+  whole-content vector alone, at a real ~2-14x write-time cost (extra unbatched model call per
+  sentence). The mechanism was correctly implemented for the diluted-centroid case it targeted
+  (see the now-removed `test/maxsim-recall.test.ts`); real bge-m3 embeddings on realistic short
+  Korean multi-sentence content simply never produced that dilution in testing.
+- `recall`'s `inject`/`inject_top_k`/`inject_min_rel_score`/`inject_prefer_depth`/
+  `inject_explore_shallow` parameters and the `recall_memories` compatibility tool
+  (`KEYMEM_DIRECT_RECALL`). `graph.recall()`/`graph.recallInject()` are untouched — still used
+  internally by the auto-injection hook (`daemon.ts`) — only the MCP-tool-level exposure was
+  unused (no tool-level test coverage) and removed. `inject_max_chars` survives as `max_chars`.
+
+### Added
+
+- `recall` auto-confirms a memory when `context` is a strong restatement of it (reuses
+  `directHydrateTop1`'s existing `content_relevance`; see `memories[0].auto_confirmed`).
+  `KEYMEM_AUTO_CONFIRM=false` disables it.
+- `recall()`'s hop-2 associative traversal (`expand: true`) promotes a structurally-confirmed
+  narrow-key association into the top5 when the slot it would take is itself weak (never evicts
+  a confident direct/key hit). `KEYMEM_STRICT_HOP=false` disables it.
+- `add()`/`supersede()` now bridge a freshly-written phrase key (3+ tokens) onto any existing
+  atomic key/hub it contains immediately, instead of waiting for the next full `load()`.
+
 ## [0.29.0] - 2026-09-13
 
 ### Added

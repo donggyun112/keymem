@@ -343,25 +343,6 @@ function conversationPath(sessionId: string): string {
   return join(CONVERSATIONS_DIR, `${sessionId}.jsonl`);
 }
 
-// Sentence-level multi-vector support: multi-fact notes embedded as ONE vector dilute
-// into a centroid no sub-fact query can reach (measured 2026-07-29: sub-fact queries
-// score +0.07~0.19 higher against the best sentence than against the whole note, and
-// the whole-note cosine often sits below the content gate). Split content into
-// sentences at write time, embed each, and score content matches by the best sentence.
-const SENTENCE_VECTORS_ENABLED = (cfgRaw("SENTENCE_VECTORS") ?? "1") !== "0";
-const SENTENCE_MAX = 12;
-const SENTENCE_MIN_CHARS = 10;
-
-export function splitSentences(content: string): string[] {
-  const pieces = content
-    .split(/(?<=[.!?…])\s+|\n+/u)
-    .map((s) => s.trim())
-    .filter((s) => s.length >= SENTENCE_MIN_CHARS);
-  // A single sentence adds nothing over the whole-content vector.
-  if (pieces.length < 2) return [];
-  return pieces.slice(0, SENTENCE_MAX);
-}
-
 // A single Hangul/Han/kana character is a whole concept (집, 돈, 팀, 말, 車), so the
 // >= 2 bar below — a latin-script assumption — silently discarded legitimate keys.
 // A key silently discarded is a memory silently orphaned, so CJK is exempted from it.
@@ -457,9 +438,6 @@ export class MemoryGraph {
   // (recall flush); nothing acquires _saveLock then _lock, so no deadlock.
   private _saveLock = new Mutex();
   private _saveSeq = 0;
-  // Per-sentence vectors for multi-fact memories (max-sim content scoring).
-  // Persisted in the vector sidecar under "s:<mid>"; absent for single-fact memories.
-  _sentVecs: Record<string, number[][]> = {};
   private _dirty = false;
   private _bm25: MiniSearch;
   private readonly _now: () => number;
@@ -559,21 +537,8 @@ export class MemoryGraph {
     return valid;
   }
 
-  // Embed each sentence of a multi-fact content for max-sim scoring. [] when the
-  // feature is off or the content is a single sentence. Called OUTSIDE the lock
-  // (model inference), mirroring the whole-content embedding call sites.
-  private async _embedSentences(content: string): Promise<number[][]> {
-    if (!SENTENCE_VECTORS_ENABLED) return [];
-    const sentences = splitSentences(content);
-    if (sentences.length === 0) return [];
-    const out: number[][] = [];
-    for (const s of sentences) out.push(await embedTextAsync(s));
-    return out;
-  }
-
   private _removeMemoryReferences(memoryIds: Iterable<string>): void {
     const deleted = new Set(memoryIds);
-    for (const id of deleted) delete this._sentVecs[id];
     for (const [mid, mem] of Object.entries(this.memories)) {
       mem.links = this._validMemoryLinks(mem.links, mid).filter(
         (linkedId) => !deleted.has(linkedId)
@@ -1085,8 +1050,6 @@ export class MemoryGraph {
         repaired = true;
       }
       if (repaired) this.markDirty();
-      const sent = sidecar?.get(`s:${mid}`);
-      if (sent && sent.length > 0) this._sentVecs[mid] = sent;
       this.memories[mid] = mem;
     }
     if (sawInlineVectors) this.markDirty(); // legacy store → migrate on next flush
@@ -1152,9 +1115,6 @@ export class MemoryGraph {
     for (const [mid, m] of Object.entries(this.memories)) {
       if (m.embedding.length > 0) vecs.set(`m:${mid}`, [m.embedding]);
       strippedMems[mid] = { ...m, embedding: [] };
-    }
-    for (const [mid, list] of Object.entries(this._sentVecs)) {
-      if (mid in this.memories && list.length > 0) vecs.set(`s:${mid}`, list);
     }
     const data: GraphData = {
       keys: strippedKeys,
@@ -1304,7 +1264,6 @@ export class MemoryGraph {
       );
     }
     const embedding = await embedTextAsync(content); // outside lock
-    const sentVecs = await this._embedSentences(content); // outside lock
 
     // Duplicate detection and insertion run under a SINGLE lock acquisition so they are
     // atomic: two concurrent identical adds serialize, and the second observes the first's
@@ -1346,7 +1305,6 @@ export class MemoryGraph {
         last_confirmation_source: options.source ?? null,
         last_confirmation_id: null,
       };
-      if (sentVecs.length > 0) this._sentVecs[mid] = sentVecs;
 
       const sanitized = sanitizeKeys(keyConcepts);
       const keyTypes = options.keyTypes ?? {};
@@ -1431,7 +1389,6 @@ export class MemoryGraph {
     const decayProfile =
       options.decayProfile === undefined ? undefined : parseDecayProfile(options.decayProfile);
     const newEmbedding = await embedTextAsync(newContent); // outside lock
-    const newSentVecs = await this._embedSentences(newContent); // outside lock
 
     let resultMid = "";
     await this._lock.runExclusive(async () => {
@@ -1500,7 +1457,6 @@ export class MemoryGraph {
         last_confirmation_source: options.source ?? null,
         last_confirmation_id: null,
       };
-      if (newSentVecs.length > 0) this._sentVecs[mid] = newSentVecs;
 
       this._bm25.add({ id: mid, content: newContent });
 
@@ -1761,9 +1717,11 @@ export class MemoryGraph {
     });
   }
 
-  // Best content similarity per memory: max(whole-content vector, best sentence vector).
-  // Multi-fact notes' whole vectors are diluted centroids; the sentence pack (when
-  // present) lets a sub-fact query reach the memory. Synchronous — safe inside a lock.
+  // Content similarity per memory against the whole-content vector. (Used to score a
+  // sentence-level pack too, measured 2026-09-19 on both the official bench/fixture.json
+  // and a dedicated held-out "buried fact" fixture: zero measurable Hit@5/MRR gain over the
+  // whole-content vector alone, at a real ~2-14x write-time cost. Removed rather than kept
+  // opt-in -- see bench/sentence-vector-fixture-eval.mts.)
   private _bestContentSims(qVec: number[], candidateIds?: Iterable<string>): Map<string, number> {
     const memIds = candidateIds
       ? [...new Set(candidateIds)].filter((mid) => Boolean(this.memories[mid]))
@@ -1771,15 +1729,6 @@ export class MemoryGraph {
     const sims = batchCosineSim(qVec, memIds.map((mid) => this.memories[mid].embedding));
     const out = new Map<string, number>();
     for (let i = 0; i < memIds.length; i++) out.set(memIds[i], sims[i]);
-    for (const [mid, list] of Object.entries(this._sentVecs)) {
-      let best = out.get(mid);
-      if (best === undefined) continue;
-      for (const v of list) {
-        const s = cosineSim(qVec, v);
-        if (s > best) best = s;
-      }
-      out.set(mid, best);
-    }
     return out;
   }
 

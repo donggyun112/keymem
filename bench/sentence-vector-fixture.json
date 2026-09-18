@@ -1,0 +1,48 @@
+{
+  "_doc": "Rigorous held-out test for _embedSentences (SENTENCE_VECTORS_ENABLED): 10 multi-sentence (3-sentence) memories, each with a specific fact BURIED in a non-first sentence, plus 20 single-sentence distractors for real competitive noise (matching the template-collision lesson from bench/assoc-fixture.json). Each query targets the buried sub-fact specifically, not the memory's overall gist. Run with KEYMEM_SENTENCE_VECTORS=1 vs =0; compare Hit@5/MRR. Binary acceptance gate: ON must beat OFF by a margin that justifies the measured ~14.6x write-time cost, or the feature is deleted outright (no opt-in).",
+  "memories": [
+    { "id": "m1", "content": "미나는 이번 주에 회사 프로젝트 마감 때문에 매일 야근을 했다. 그러다 스트레스가 쌓여서 주말에 한라산 등산을 다녀왔다. 산 정상에서 우연히 대학 동창을 만나 반갑게 인사를 나눴다.", "keys": ["등산", "동창"] },
+    { "id": "m2", "content": "미나는 최근 이사를 준비하면서 짐을 정리했다. 오래된 사진첩을 발견해서 옛 생각이 났다. 사진첩 맨 뒤에서 첫 월급으로 샀던 시계를 찾았다.", "keys": ["이사", "사진첩"] },
+    { "id": "m3", "content": "미나는 요즘 다이어트를 시작했다. 매일 아침 조깅을 하고 있다. 조깅하다가 발목을 삐어서 병원에 다녀왔다.", "keys": ["다이어트", "조깅"] },
+    { "id": "m4", "content": "미나는 주말에 친구 결혼식에 다녀왔다. 오랜만에 고등학교 동창들을 만났다. 그중 한 명이 최근에 스타트업을 창업했다는 소식을 들었다.", "keys": ["결혼식", "동창들"] },
+    { "id": "m5", "content": "미나는 새 프로젝트를 위해 팀을 꾸리고 있다. 백엔드 개발자를 먼저 뽑았다. 다음 주에는 디자이너 면접이 예정되어 있다.", "keys": ["프로젝트", "팀꾸리기"] },
+    { "id": "m6", "content": "미나는 요리에 취미를 붙였다. 최근에 파스타 만드는 법을 배웠다. 다음 목표는 김치찌개를 제대로 끓이는 것이다.", "keys": ["요리", "파스타"] },
+    { "id": "m7", "content": "미나는 최근 독서 모임에 가입했다. 첫 책으로 SF 소설을 읽었다. 다음 모임에서는 에세이집을 다룰 예정이다.", "keys": ["독서모임", "SF소설"] },
+    { "id": "m8", "content": "미나는 반려식물을 여러 개 키운다. 그중 몬스테라가 가장 오래됐다. 최근에는 선인장을 하나 더 들였다.", "keys": ["반려식물", "몬스테라"] },
+    { "id": "m9", "content": "미나는 자전거로 출퇴근을 한다. 최근 자전거 체인이 고장나서 수리를 맡겼다. 수리 기사가 타이어도 같이 갈아주면 좋겠다고 제안했다.", "keys": ["자전거", "체인고장"] },
+    { "id": "m10", "content": "미나는 주말마다 카페에서 그림을 그린다. 최근엔 수채화에 관심이 생겼다. 다음 달에 작은 전시회에 참여할 계획이다.", "keys": ["그림", "수채화"] },
+
+    { "id": "d1", "content": "미나는 아침에 커피를 마셨다", "keys": ["커피"] },
+    { "id": "d2", "content": "미나는 저녁에 산책을 했다", "keys": ["산책"] },
+    { "id": "d3", "content": "미나는 최근 시계를 하나 새로 샀다", "keys": ["시계쇼핑"] },
+    { "id": "d4", "content": "미나는 대학 시절 동창회에 나간 적이 있다", "keys": ["동창회"] },
+    { "id": "d5", "content": "미나는 스타트업 창업에 관심이 있다고 말했다", "keys": ["창업관심"] },
+    { "id": "d6", "content": "미나는 다음 주에 병원 정기검진이 있다", "keys": ["정기검진"] },
+    { "id": "d7", "content": "미나는 디자이너 친구와 자주 연락한다", "keys": ["디자이너친구"] },
+    { "id": "d8", "content": "미나는 김치찌개를 좋아한다", "keys": ["김치찌개선호"] },
+    { "id": "d9", "content": "미나는 에세이집을 몇 권 소장하고 있다", "keys": ["에세이소장"] },
+    { "id": "d10", "content": "미나는 선인장 화분을 선물받은 적이 있다", "keys": ["선인장선물"] },
+    { "id": "d11", "content": "미나는 자전거 타이어를 작년에 한 번 갈았다", "keys": ["타이어교체이력"] },
+    { "id": "d12", "content": "미나는 전시회를 관람하러 자주 간다", "keys": ["전시회관람"] },
+    { "id": "d13", "content": "미나는 등산화를 새로 장만했다", "keys": ["등산화"] },
+    { "id": "d14", "content": "미나는 이삿짐센터를 알아보고 있다", "keys": ["이삿짐센터"] },
+    { "id": "d15", "content": "미나는 발목 보호대를 착용하고 조깅한다", "keys": ["발목보호대"] },
+    { "id": "d16", "content": "미나는 결혼식 축가를 부탁받은 적이 있다", "keys": ["축가"] },
+    { "id": "d17", "content": "미나는 백엔드 개발 공부를 하고 있다", "keys": ["백엔드공부"] },
+    { "id": "d18", "content": "미나는 파스타 재료를 대량으로 사놨다", "keys": ["파스타재료"] },
+    { "id": "d19", "content": "미나는 독서 모임 장소를 카페로 정했다", "keys": ["독서모임장소"] },
+    { "id": "d20", "content": "미나는 몬스테라 화분을 분갈이했다", "keys": ["분갈이"] }
+  ],
+  "queries": [
+    { "q": "미나가 산에서 누구를 만났어", "expect": ["m1"], "category": "buried" },
+    { "q": "미나가 첫 월급으로 뭘 샀어", "expect": ["m2"], "category": "buried" },
+    { "q": "미나가 왜 병원에 갔어", "expect": ["m3"], "category": "buried" },
+    { "q": "미나 친구 중 누가 창업했어", "expect": ["m4"], "category": "buried" },
+    { "q": "미나가 다음 주에 뭐 할 예정이야", "expect": ["m5"], "category": "buried" },
+    { "q": "미나의 다음 요리 목표가 뭐야", "expect": ["m6"], "category": "buried" },
+    { "q": "미나 독서모임 다음 책이 뭐야", "expect": ["m7"], "category": "buried" },
+    { "q": "미나가 최근에 새로 들인 식물이 뭐야", "expect": ["m8"], "category": "buried" },
+    { "q": "수리 기사가 미나에게 뭘 제안했어", "expect": ["m9"], "category": "buried" },
+    { "q": "미나가 다음 달에 뭐 할 계획이야", "expect": ["m10"], "category": "buried" }
+  ]
+}
