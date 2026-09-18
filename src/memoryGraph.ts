@@ -1358,6 +1358,14 @@ export class MemoryGraph {
         const kid = await this.findOrCreateKey(concept, kt);
         if (!this._hasLink(kid, mid)) this._link(kid, mid);
       }
+      // A freshly-written phrase key (3+ tokens) only used to get bridged onto the atomic
+      // keys/hubs it contains on the NEXT full load() — a long-lived daemon session could go
+      // a long time returning it unreachable except by the exact phrase. Run the same,
+      // already-conservative bridge (existing keys only, real-similarity gated, phrase key
+      // itself untouched) right away instead of waiting for a restart.
+      if (sanitized.some((concept) => concept.trim().split(/\s+/).length >= 3)) {
+        this._bridgePhraseKeys();
+      }
 
       const linkedKeyIds = [...(this._memToKeys[mid]?.keys() ?? [])];
       this._autoLinkKeys(mid, embedding);
@@ -1527,6 +1535,9 @@ export class MemoryGraph {
             | "proper_noun");
           const kid = await this.findOrCreateKey(concept, kt);
           this._link(kid, mid);
+        }
+        if (sanitized.some((concept) => concept.trim().split(/\s+/).length >= 3)) {
+          this._bridgePhraseKeys();
         }
       } else {
         // Inherit the old keys, but drop CONCEPT keys the corrected content has drifted
@@ -1885,7 +1896,10 @@ export class MemoryGraph {
       // Phrase keys (3+ whitespace tokens) are memory-specific labels, not reusable
       // concepts: measured on this store 2026-07-29, 3+-token keys are 91% singleton
       // (never reused → no hubs, no associative traversal) vs 69% for single words.
-      // Flag them so the agent decomposes into atomic concepts on future saves.
+      // Flag them so the agent decomposes into atomic concepts on future saves. The key
+      // itself is kept (not split) and add()/supersede() already bridge it onto any
+      // EXISTING atomic key/hub it contains with real topic overlap (_bridgePhraseKeys) —
+      // this note is about the NEXT save, not a claim that this one is unreachable.
       const phraseKeys = providedKeys.filter((k) => k.trim().split(/\s+/).length >= 3);
       const phraseNote =
         phraseKeys.length > 0

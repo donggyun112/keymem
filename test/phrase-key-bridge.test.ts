@@ -73,3 +73,30 @@ test("legacy phrase keys bridge onto contained atomic keys, but only on real top
   await again.load();
   assert.equal(again.linkCount, linkCount);
 });
+
+test("a fresh phrase key bridges onto an existing hub immediately, without a load() round trip", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "keymem-phrase-eager-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  process.env.KEYMEM_DATA_DIR = dir;
+  process.env.KEYMEM_SHORT_KEY_MERGE = "0";
+  process.env.EMBEDDING_BACKEND = "local";
+  process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
+  t.after(() => delete process.env.KEYMEM_SHORT_KEY_MERGE);
+
+  const embedding = await import("../src/embedding.ts");
+  embedding.__setTestEmbedder((text: string) => vec(text));
+  t.after(() => embedding.__clearTestEmbedder());
+
+  const { MemoryGraph } = await import(`../src/memoryGraph.ts?phrase-eager=${n++}`);
+  const graph = new MemoryGraph();
+  await graph.load();
+  await graph.add("release pushed", ["git push"]);
+
+  // A long-lived daemon session never calls load() again -- the bridge used to only run
+  // there, so this phrase key would stay reachable only by its exact string until a restart.
+  const [onTopic] = await graph.add("403 on the release push", ["git push 403 fix"]);
+
+  const keys = graph.getKeysForMemory(onTopic);
+  assert.ok(keys.includes("git push"), `expected eager bridge onto "git push", got ${keys.join(", ")}`);
+  assert.ok(keys.includes("git push 403 fix"), "phrase key must survive for literal recall");
+});
