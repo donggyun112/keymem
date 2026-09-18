@@ -15,29 +15,12 @@ export interface NormalizedTurn {
   ts: string | null;
 }
 
-export interface SessionInfo {
-  agent: Agent;
-  session_id: string;
-  path: string;
-  cwd: string | null;
-  modified: number;
-  preview: string | null;
-}
-
 // Both agents name their session files by a v4-style UUID. Restricting
 // session_id to this shape is the primary path-traversal guard: the value is
 // only ever used as a filename filter, never concatenated into a path segment
 // that could escape the agent's root.
 const UUID_PATTERN =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-
-function assertUuid(sessionId: string): void {
-  if (!UUID_PATTERN.test(sessionId)) {
-    throw new Error(
-      `Invalid session_id "${sessionId}". Expected a UUID as written by the agent's transcript file.`
-    );
-  }
-}
 
 // ── Roots (honour the agents' own env overrides) ──
 
@@ -234,38 +217,6 @@ async function findSessionFile(agent: Agent, sessionId: string): Promise<string 
 
 // ── Public API ──
 
-export async function loadNativeConversation(
-  agent: Agent,
-  sessionId: string,
-  turn?: number | null
-): Promise<NormalizedTurn[]> {
-  assertUuid(sessionId);
-  const file = await findSessionFile(agent, sessionId);
-  if (!file) return [];
-  const turns = parseFor(agent, await readFile(file, "utf-8"));
-  if (turn != null) {
-    const start = Math.max(0, turn - 2);
-    const end = Math.min(turns.length, turn + 3);
-    return turns.slice(start, end);
-  }
-  return turns;
-}
-
-// Best-effort lookup when the caller doesn't know which agent produced the
-// session: try each root in turn. Non-UUID or unknown ids resolve to an empty
-// array (never throw) so callers can fall back to other stores.
-export async function loadNativeAuto(
-  sessionId: string,
-  turn?: number | null
-): Promise<NormalizedTurn[]> {
-  if (!UUID_PATTERN.test(sessionId)) return [];
-  for (const agent of ["claude", "codex"] as Agent[]) {
-    const turns = await loadNativeConversation(agent, sessionId, turn);
-    if (turns.length) return turns;
-  }
-  return [];
-}
-
 // Identify the session being written *right now* — the active conversation that
 // triggered a remember() call is, by construction, the most-recently-touched
 // transcript on disk. A staleness guard avoids mislabelling memories saved
@@ -330,51 +281,3 @@ function codexSessionMeta(lines: Record<string, unknown>[]): { id: string; cwd: 
   return null;
 }
 
-function claudeCwd(lines: Record<string, unknown>[]): string | null {
-  for (const line of lines) {
-    if (typeof line.cwd === "string") return line.cwd;
-  }
-  return null;
-}
-
-async function sessionInfo(agent: Agent, file: string): Promise<SessionInfo | null> {
-  let modified = 0;
-  try {
-    modified = (await stat(file)).mtimeMs;
-  } catch {
-    return null;
-  }
-  let text: string;
-  try {
-    text = await readFile(file, "utf-8");
-  } catch {
-    return null;
-  }
-  const lines = parseLines(text);
-  const turns = parseFor(agent, text);
-  const preview = turns.find((tn) => tn.role === "user")?.content ?? null;
-
-  if (agent === "claude") {
-    const id = claudeSessionId(file);
-    if (!id) return null;
-    return { agent, session_id: id, path: file, cwd: claudeCwd(lines), modified, preview };
-  }
-  const meta = codexSessionMeta(lines);
-  if (!meta) return null;
-  return { agent, session_id: meta.id, path: file, cwd: meta.cwd, modified, preview };
-}
-
-export async function listNativeSessions(
-  opts: { agent?: Agent; limit?: number } = {}
-): Promise<SessionInfo[]> {
-  const agents: Agent[] = opts.agent ? [opts.agent] : ["claude", "codex"];
-  const sessions: SessionInfo[] = [];
-  for (const agent of agents) {
-    for (const file of await walkJsonl(rootFor(agent))) {
-      const info = await sessionInfo(agent, file);
-      if (info) sessions.push(info);
-    }
-  }
-  sessions.sort((a, b) => b.modified - a.modified);
-  return typeof opts.limit === "number" ? sessions.slice(0, opts.limit) : sessions;
-}

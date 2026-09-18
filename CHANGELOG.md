@@ -15,6 +15,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   then read_key()" / "Prefer recall() for normal retrieval") and had no other internal caller.
   `getRelated()` is removed with `related` (its only caller); `graph.listAll()` stays -- it's
   used by `memory_stats` and the startup stats() logger. Tools contain 14 by default (was 16).
+- `get_conversation` and `list_sessions` MCP tools, by the same real-usage-data standard: 0 of
+  197 real keymem calls across every local session transcript ever used either. First pass on
+  this data kept both tools anyway (citing possible access-gating, substantial supporting code
+  in `nativeTranscripts.ts`, and the `read_memory` `trace` hint that recommends `get_conversation`)
+  -- reversed after re-checking: the `trace` hint itself was never followed once in 197 calls,
+  and `loadNativeConversation`/`loadNativeAuto`/`listNativeSessions`/`loadConversation`/`saveTurn`
+  had zero other internal callers, the exact signal already used to justify removing `related`.
+  Removed both tools, the `trace` hint, `saveTurn`/`loadConversation`/`conversationPath` and the
+  keymem-owned `conversations/` log they wrote, and the now-orphaned `loadNativeConversation`/
+  `loadNativeAuto`/`listNativeSessions`/`sessionInfo`/`claudeCwd` from `nativeTranscripts.ts`.
+  `resolveHostLink`/`hostLinkFromSession`/`detectActiveSession`/`transcriptAccessEnabled` are
+  untouched -- still used by `remember`/`correct`/`confirm_memory`/`remember_batch` to stamp
+  `source.host_session` provenance. Tools contain 12 by default (was 14).
 
 ### Changed
 

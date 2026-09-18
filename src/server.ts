@@ -8,13 +8,9 @@ import {
 import {
   MemoryGraph,
   classifyRecallStatus,
-  loadConversation,
   sanitizeKeys,
 } from "./memoryGraph.js";
 import {
-  loadNativeConversation,
-  loadNativeAuto,
-  listNativeSessions,
   detectActiveSession,
   transcriptAccessEnabled,
   hostSessionFromHeaders,
@@ -77,9 +73,8 @@ export function buildSource(
     session: SERVER_SESSION,
     tool,
     saved_at: new Date().toISOString(),
-    // Link to the host agent's original transcript so a recalled memory can be
-    // traced back to its verbatim conversation via get_conversation. Caller
-    // source still wins (spread last).
+    // Stamp the host agent's transcript link for provenance (host_session on
+    // the memory's source). Caller source still wins (spread last).
     ...(hostLink
       ? {
           host_agent: hostLink.agent,
@@ -107,12 +102,6 @@ export async function resolveHostLink(
   } catch {
     return null;
   }
-}
-
-// Transcript tools/stamping are allowed when we trust the caller: either the
-// request carries host-session headers (daemon) or the env opted in (stdio).
-export function transcriptAccessForRequest(headers: ReqHeaders): boolean {
-  return hostSessionFromHeaders(headers) != null || transcriptAccessEnabled();
 }
 
 const MEMORY_SYSTEM = `\
@@ -153,7 +142,6 @@ Stats: {stats}
    - ✅ recall("이름"), recall("직업"), recall("취향") — specific, multiple
    - 복합 개념이면 키워드 여러 개로 분리: recall("운동"), recall("취미"), recall("건강")
 5. \`read_key\` is the deeper-navigation fallback. It returns handles and metadata only. Pass the original focused query so hub memories are relevance-ranked, then call \`read_memory\` to inspect the selected content.
-5a. If a \`read_memory\` result is too compressed for the question and includes a \`trace\` field, call that tool with those exact args (\`get_conversation\`) to read the original conversation it came from. Use only when the summary genuinely lacks the detail you need — otherwise the recalled fact is enough.
 
 ### Remember (PROACTIVE — capture what matters)
 6. **You MUST save durable info the moment the user shares it — silently, in the same turn.** Do not defer to "later"; later never comes. Mandatory, not optional (see the "Before ending EVERY turn" gate above). No exceptions.
@@ -257,11 +245,6 @@ For the full navigation and key-selection playbook, load the memory_system_promp
 
 // ── Tool definitions ──
 
-// Tools that read the host's local transcripts; hidden unless trusted (see
-// transcriptAccessEnabled) so they aren't exposed over a plain server or a
-// non-owner agent.
-const TRANSCRIPT_TOOLS = new Set(["get_conversation", "list_sessions"]);
-
 export function createMcpServer(): Server {
   const server = new Server(
     { name: "keymem", version: VERSION },
@@ -271,8 +254,7 @@ export function createMcpServer(): Server {
     }
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async (_req, extra) => {
-    const headers = extra.requestInfo?.headers;
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
     const tools = [
       {
         name: "recall",
@@ -362,7 +344,7 @@ export function createMcpServer(): Server {
       {
         name: "remember",
         description:
-          "MANDATORY END-OF-TURN GATE: before replying, save every durable fact newly revealed this turn (names, preferences, decisions, corrections, project facts, goals). A durable fact left unsaved is a bug; save silently in the same turn. Save nothing only after consciously confirming that nothing durable appeared. Before writing, recall() the topic in the same namespace and reuse returned canonical concepts or aliases. Use 3-6 diverse ATOMIC concept keys of 1-2 words each, never memory-specific phrases (use 'Nexora' and 'portfolio', not 'Nexora portfolio'); 3+-word keys are flagged in hints.phrase_keys and are measurably 91% unreachable singletons. CROSS-LINGUAL: register both language forms together (for example '포트폴리오' and 'portfolio'). Shared broad keys become navigable hubs. namespace groups memories by project/context; ttl_seconds sets expiry; decay_profile selects transient, standard (the default), stable, or permanent confirmation freshness; related_to adds explicit memory links; source attaches provenance and is auto-stamped with the server session, a timestamp, and — when a host agent (Claude Code, Codex) transcript is active — host_session/host_agent/host_turn so the memory can be traced back to its original conversation via get_conversation. The response may include hints.near_keys (existing concepts your keys nearly duplicate — prefer reusing those concepts) and hints.language_note (add the missing-language variants).",
+          "MANDATORY END-OF-TURN GATE: before replying, save every durable fact newly revealed this turn (names, preferences, decisions, corrections, project facts, goals). A durable fact left unsaved is a bug; save silently in the same turn. Save nothing only after consciously confirming that nothing durable appeared. Before writing, recall() the topic in the same namespace and reuse returned canonical concepts or aliases. Use 3-6 diverse ATOMIC concept keys of 1-2 words each, never memory-specific phrases (use 'Nexora' and 'portfolio', not 'Nexora portfolio'); 3+-word keys are flagged in hints.phrase_keys and are measurably 91% unreachable singletons. CROSS-LINGUAL: register both language forms together (for example '포트폴리오' and 'portfolio'). Shared broad keys become navigable hubs. namespace groups memories by project/context; ttl_seconds sets expiry; decay_profile selects transient, standard (the default), stable, or permanent confirmation freshness; related_to adds explicit memory links; source attaches provenance and is auto-stamped with the server session, a timestamp, and — when a host agent (Claude Code, Codex) transcript is active — host_session/host_agent/host_turn. The response may include hints.near_keys (existing concepts your keys nearly duplicate — prefer reusing those concepts) and hints.language_note (add the missing-language variants).",
         inputSchema: {
           type: "object",
           properties: {
@@ -436,53 +418,6 @@ export function createMcpServer(): Server {
         },
       },
       {
-        name: "get_conversation",
-        description:
-          "Load the original conversation turns for a past session when a recalled memory lacks the detail you need and you want the verbatim exchange. Reads the host coding agent's own on-disk transcript (Claude Code, Codex) — call list_sessions first to find a session_id. Falls back to keymem's own conversation log if a host integration wrote one. Pass turn to fetch a focused ±2-turn window (5 turns total) and keep context lean; omit turn to load the whole session. Returns turns [{turn, role, content, ts}] in chronological order, with non-conversational noise (reasoning, tool calls) stripped; an unknown session_id returns an empty array.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            session_id: {
-              type: "string",
-              description:
-                "Session id to load — the UUID from a list_sessions result, or the host_session stamped on a recalled memory's source (pass host_agent as agent and host_turn as turn to land on the exact exchange).",
-            },
-            turn: {
-              type: "number",
-              description:
-                "Optional 0-based turn index to center on; returns that turn plus the 2 before and 2 after (5 turns). Omit to return the full conversation.",
-            },
-            agent: {
-              type: "string",
-              enum: ["claude", "codex"],
-              description:
-                "Which host agent's transcript store to read. Omit to auto-detect by session id across all known agents.",
-            },
-          },
-          required: ["session_id"],
-        },
-      },
-      {
-        name: "list_sessions",
-        description:
-          "List recent conversation sessions recorded by host coding agents (Claude Code, Codex) on this machine, most recently modified first. Use this to discover a session_id (and its working directory) before calling get_conversation to read the verbatim transcript. Returns [{agent, session_id, cwd, modified, preview}] where preview is the first user message. Returns an empty array if no agent transcripts are found.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            agent: {
-              type: "string",
-              enum: ["claude", "codex"],
-              description: "Restrict to one host agent. Omit to list across all known agents.",
-            },
-            limit: {
-              type: "number",
-              description: "Maximum number of sessions to return (most recent first).",
-            },
-          },
-          required: [],
-        },
-      },
-      {
         name: "remember_batch",
         description:
           "MANDATORY END-OF-TURN GATE: when a turn reveals multiple durable facts, save them silently before replying. A durable fact left unsaved is a bug. Recall each topic first, reuse canonical concept-level keys (ATOMIC, 1-2 words each — never phrases), and register cross-lingual forms together. Each item: {content, keys, key_types?, namespace?, ttl_seconds?, decay_profile?, related_to?}; decay_profile defaults to standard. Returns saved IDs and is more efficient than multiple remember() calls.",
@@ -536,11 +471,7 @@ export function createMcpServer(): Server {
         },
       },
     ];
-    return {
-      tools: transcriptAccessForRequest(headers)
-        ? tools
-        : tools.filter((t) => !TRANSCRIPT_TOOLS.has(t.name)),
-    };
+    return { tools };
   });
 
   // ── Tool call handler ──
@@ -769,56 +700,6 @@ export function createMcpServer(): Server {
         case "forget": {
           const ok = await graph.delete(a.memory_id as string);
           return { content: [{ type: "text", text: JSON.stringify({ deleted: ok }) }] };
-        }
-
-        case "get_conversation": {
-          if (!transcriptAccessForRequest(headers)) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify({
-                    error:
-                      "Transcript access is disabled. Run keymem under a host agent (Claude Code / Codex) or set KEYMEM_TRANSCRIPT_ACCESS=true.",
-                  }),
-                },
-              ],
-            };
-          }
-          const sessionId = a.session_id as string;
-          const turn = typeof a.turn === "number" ? a.turn : null;
-          const agent = a.agent === "claude" || a.agent === "codex" ? (a.agent as Agent) : null;
-          let turns: object[];
-          if (agent) {
-            turns = await loadNativeConversation(agent, sessionId, turn);
-          } else {
-            // No agent hint: try the host agents' native transcripts, then fall
-            // back to keymem's own conversation log.
-            turns = await loadNativeAuto(sessionId, turn);
-            if (turns.length === 0) turns = await loadConversation(sessionId, turn);
-          }
-          return { content: [{ type: "text", text: JSON.stringify(turns) }] };
-        }
-
-        case "list_sessions": {
-          if (!transcriptAccessForRequest(headers)) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify({
-                    error:
-                      "Transcript access is disabled. Run keymem under a host agent (Claude Code / Codex) or set KEYMEM_TRANSCRIPT_ACCESS=true.",
-                  }),
-                },
-              ],
-            };
-          }
-          const sessions = await listNativeSessions({
-            agent: a.agent === "claude" || a.agent === "codex" ? (a.agent as Agent) : undefined,
-            limit: typeof a.limit === "number" ? a.limit : undefined,
-          });
-          return { content: [{ type: "text", text: JSON.stringify(sessions) }] };
         }
 
         case "remember_batch": {

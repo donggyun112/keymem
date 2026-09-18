@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, appendFile, rename, copyFile } from "fs/promises";
+import { readFile, writeFile, mkdir, rename, copyFile } from "fs/promises";
 import { randomBytes } from "crypto";
 import { join } from "path";
 import { Mutex } from "async-mutex";
@@ -28,8 +28,6 @@ import {
 
 const DATA_DIR = dataDir();
 const GRAPH_FILE = join(DATA_DIR, "graph.json");
-const CONVERSATIONS_DIR = join(DATA_DIR, "conversations");
-const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 
 // Thresholds are calibrated per embedding backend/model (see embedding.ts).
 const _THRESHOLDS = getThresholdProfile();
@@ -328,15 +326,6 @@ function errorMessage(err: unknown): string {
 
 function isNodeError(err: unknown): err is NodeJS.ErrnoException {
   return err instanceof Error && "code" in err;
-}
-
-function conversationPath(sessionId: string): string {
-  if (!SESSION_ID_PATTERN.test(sessionId)) {
-    throw new Error(
-      "Invalid session_id. Use 1-128 characters: letters, numbers, dot, underscore, or hyphen."
-    );
-  }
-  return join(CONVERSATIONS_DIR, `${sessionId}.jsonl`);
 }
 
 // A single Hangul/Han/kana character is a whole concept (집, 돈, 팀, 말, 車), so the
@@ -2196,27 +2185,10 @@ export class MemoryGraph {
       // (measured ~263ms @ 3k memories). markDirty() holds it in RAM; flush()/the next
       // content write makes it durable. Mirrors recall()'s existing deferred-flush path.
       this.markDirty();
-      // When the memory was saved with a host transcript link, hand the agent a
-      // ready-to-run get_conversation call so it can drill to the verbatim
-      // exchange without remapping source fields to tool params. A passive hint,
-      // not a directive — use it only when the recalled fact is too compressed.
-      const src = mem.source;
-      const trace =
-        src && typeof src.host_session === "string"
-          ? {
-              tool: "get_conversation" as const,
-              args: {
-                session_id: src.host_session,
-                agent: src.host_agent,
-                turn: src.host_turn,
-              },
-            }
-          : null;
       return {
         evidence: "read",
         grounded: true,
         suggested_tool: null,
-        trace,
         memory: {
           id: memoryId,
           content: mem.content,
@@ -3049,60 +3021,4 @@ export class MemoryGraph {
       return expired.length;
     });
   }
-}
-
-// ── Conversation store ──
-
-export async function saveTurn(
-  sessionId: string,
-  role: string,
-  content: string
-): Promise<number> {
-  await mkdir(CONVERSATIONS_DIR, { recursive: true });
-  const path = conversationPath(sessionId);
-  let turn = 0;
-  try {
-    const text = await readFile(path, "utf-8");
-    turn = text.split("\n").filter((l) => l.trim()).length;
-  } catch {
-    // file does not exist yet
-  }
-  const entry = JSON.stringify({
-    turn,
-    role,
-    content,
-    ts: Date.now() / 1000,
-  });
-  await appendFile(path, entry + "\n", "utf-8");
-  return turn;
-}
-
-export async function loadConversation(
-  sessionId: string,
-  turn?: number | null
-): Promise<object[]> {
-  const path = conversationPath(sessionId);
-  let text: string;
-  try {
-    text = await readFile(path, "utf-8");
-  } catch {
-    return [];
-  }
-  const lines: object[] = [];
-  text.split("\n").forEach((line, idx) => {
-    if (!line.trim()) return;
-    try {
-      lines.push(JSON.parse(line) as object);
-    } catch (err) {
-      throw new Error(
-        `Invalid conversation log ${sessionId} at line ${idx + 1}: ${errorMessage(err)}`
-      );
-    }
-  });
-  if (turn != null) {
-    const start = Math.max(0, turn - 2);
-    const end = Math.min(lines.length, turn + 3);
-    return lines.slice(start, end);
-  }
-  return lines;
 }

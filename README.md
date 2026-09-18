@@ -405,7 +405,7 @@ KEYMEM_MEMORY_DEDUP=0.99
 | --- | --- | --- |
 | `KEYMEM_MIN_SCORE` | per-model (e.g. `0.55` for bge-m3) | Absolute cosine floor for `recall()`/`recallInject()`. Set to `0` to disable. |
 | `KEYMEM_GATE_Z` | `0` by default | Opt-in distribution gate for `recall()`/`recallInject()` (robust-z, median/MAD). Values around 2–5 are typical; `0` disables it. |
-| `KEYMEM_CONTRADICTION` | per-model (e.g. `0.80` for bge-m3) | Contradiction-band lower bound. Memory pairs whose cosine similarity falls in `[contradiction, memoryDedup)` are flagged as contradictions. `read_memory()` and `related()` expose conflicting IDs. |
+| `KEYMEM_CONTRADICTION` | per-model (e.g. `0.80` for bge-m3) | Contradiction-band lower bound. Memory pairs whose cosine similarity falls in `[contradiction, memoryDedup)` are flagged as contradictions. `read_memory()` exposes conflicting IDs. |
 | `KEYMEM_AUTOKEY` | `true` | Auto-key self-healing: learn missing search terms from real usage. Set `false` to disable. |
 | `KEYMEM_AUTOKEY_PROMOTE_N` | `3` | Routing-confirmed selections of a `(key, query)` pair before the query is folded into the key space. |
 | `KEYMEM_AUTOKEY_CONFIRM_FLOOR` | `0.45` | Lowest query↔key cosine eligible for routing-confirmation learning. Repeated selections through the same key can teach a below-gate query alias; this confirms routing only, never content freshness. Lower (e.g. `0.40`) to catch more borderline paraphrases; set `≥` the recall threshold to disable. |
@@ -433,8 +433,7 @@ An uncalibrated `LOCAL_EMBEDDING_MODEL` falls back to the BGE profile **and logs
 
 ## MCP Tools
 
-The full trusted-local tool set contains 14 tools by default. Plain untrusted
-servers hide the two transcript tools (`list_sessions`, `get_conversation`):
+The tool set contains 12 tools:
 
 | Tool | Description |
 | --- | --- |
@@ -447,8 +446,6 @@ servers hide the two transcript tools (`list_sessions`, `get_conversation`):
 | `correct(memory_id, content, keys?, key_types?, ttl_seconds?, decay_profile?, related_to?)` | Versioned update. The immediate predecessor is preserved but inactive; omitted TTL/profile inherit from it. |
 | `dismiss(memory_id, key_id, namespace?)` | Negative feedback: the fact is fine, this key should not have surfaced it. Weakens that one edge (floored, never severed) and cancels its pending alias learning |
 | `forget(memory_id)` | Permanently delete |
-| `list_sessions(agent?, limit?)` | Discover recent host-agent conversation sessions (Claude Code, Codex) on this machine, newest first |
-| `get_conversation(session_id, turn?, agent?)` | Load original conversation turns from the host agent's on-disk transcript (Claude Code / Codex), normalized to `{turn, role, content, ts}` |
 | `remember_batch(items)` | Save multiple memories; each item accepts `ttl_seconds` and `decay_profile` |
 | `cleanup_expired()` | Delete memories whose TTL has expired |
 | `memory_stats()` | Get current key/memory/link counts |
@@ -521,26 +518,22 @@ All data is local. No external database required.
 
 ```
 ~/.keymem/
-├── graph.json              # canonical keys, aliases, memories, weighted links
-└── conversations/
-    └── {session_id}.jsonl   # optional conversation log (only if a host integration writes one)
+└── graph.json              # canonical keys, aliases, memories, weighted links
 ```
 
 Set `KEYMEM_DATA_DIR` to use a different storage directory.
 
-`get_conversation` / `list_sessions` read the **host coding agent's own transcripts** directly — keymem does not record conversations itself. Locations are auto-detected per OS and honour the agents' env overrides:
+**Linking a memory to its source conversation.** When you save a memory, keymem stamps the active host session onto its `source` (`host_session` / `host_agent` / `host_turn`) for provenance. keymem does not expose a tool to read those transcripts back — it only reads them internally to resolve the active session. Locations are auto-detected per OS and honour the agents' env overrides:
 
 - **Claude Code** — `~/.claude/projects/**/{session_id}.jsonl` (`$CLAUDE_CONFIG_DIR`)
 - **Codex** — `~/.codex/sessions/**/rollout-*-{session_id}.jsonl` (`$CODEX_HOME`)
 
-`session_id` is restricted to a UUID and resolved within these roots (with symlink checks) to prevent path traversal.
+**Access is gated.** Because transcripts are local, potentially sensitive history, keymem only reads them to stamp provenance **when trusted as the owner's personal local agent** — i.e. a recognized host injected its session env (`CLAUDE_CODE_SESSION_ID` / `CODEX_THREAD_ID`), or you explicitly opt in with `KEYMEM_TRANSCRIPT_ACCESS=true`. Otherwise (a plain server, a remote deployment, a non-owner/custom agent) memories are saved without a host link. Set `KEYMEM_TRANSCRIPT_ACCESS=false` to force-disable even under a host agent.
 
-**Access is gated.** Because transcripts are local, potentially sensitive history, `get_conversation` and `list_sessions` are **only exposed when keymem is trusted as the owner's personal local agent** — i.e. a recognized host injected its session env (`CLAUDE_CODE_SESSION_ID` / `CODEX_THREAD_ID`), or you explicitly opt in with `KEYMEM_TRANSCRIPT_ACCESS=true`. Otherwise (a plain server, a remote deployment, a non-owner/custom agent) the two tools are hidden from `tools/list`, calling them is refused, and memories are saved without a host link. Set `KEYMEM_TRANSCRIPT_ACCESS=false` to force-disable even under a host agent.
-
-**Linking a memory to its source conversation.** When you save a memory, keymem stamps the active host session onto its `source` (`host_session` / `host_agent` / `host_turn`) so a recalled memory can drill back to the verbatim exchange via `get_conversation`. The active session is found two ways:
+The active session is found two ways:
 
 1. **Deterministic** — the host injects its session id into every MCP server it spawns, and keymem reads it directly: Claude Code → `CLAUDE_CODE_SESSION_ID`, Codex → `CODEX_THREAD_ID` (which equals the rollout file's session id). The link is exact, with no guessing.
-2. **Heuristic fallback** — for hosts that don't expose a session id (e.g. Claude Desktop), keymem uses the most-recently-modified transcript (with a staleness guard). Reliable for a single active session; if ambiguous, use `list_sessions` to pick the right one.
+2. **Heuristic fallback** — for hosts that don't expose a session id (e.g. Claude Desktop), keymem uses the most-recently-modified transcript (with a staleness guard).
 
 ---
 
