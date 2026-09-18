@@ -567,6 +567,44 @@ view. Machine-readable results are in `bench/prompt-cache-ab-results.json`,
 `bench/fixture-prompt-cache-llm-results.json`, and
 `bench/assoc-fixture-prompt-cache-llm-results.json`.
 
+## 10. Association-strengthening / edge-learning ideas — three rejections, one root cause
+
+Recorded for the same reason as §7: it costs a day to rebuild one of these and rediscover the
+same thing, and the pattern across all three is more useful than any single result.
+
+**The ideas (three variants, same session).**
+1. Semantic edges — direct memory↔memory typed edges based on content-only relation (no shared
+   key), so a `recall()` traversal could reach a target that shares nothing structural with the
+   query.
+2. A learned scorer — a 4-parameter logistic regression over signals `recall()` already computes
+   per candidate (raw cosine, hop distance, fused RRF score), trained to re-rank candidates
+   better than the fixed-weight formula.
+3. Dismiss as training signal — using `dismiss()` calls as explicit negative feedback to learn
+   which key→memory edges are untrustworthy, instead of only the current fixed decay-on-dismiss.
+
+**Results.**
+1. *Semantic edges*: rejected after several experiments (including an LLM-judge pass) against a
+   strict evidence bar — no result cleared it. (Plan doc deleted after the verdict; see git
+   history for `docs/superpowers/specs/2026-09-16-semantic-edge-temporary-plan.md`.)
+2. *Learned scorer*: trained on 8 `assoc2` queries from `bench/assoc-fixture.json`, evaluated on
+   7 held out. Hit@5 went 2/7 (current fixed formula) → 4/7 (learned) — looked like a real lift
+   until checked against a zero-training baseline that just sorts by `hop` descending: 3/7. Most
+   of the "learning" was the model rediscovering the fixture's own construction rule (`assoc2`
+   targets are hop=2 by definition, with deliberately low direct query similarity) — not a fact
+   about the graph. n=7 also can't distinguish a 1-query difference from noise.
+3. *Dismiss as signal*: settled by real usage data before any modeling started. Across every
+   local session transcript (204 real `mcp__keymem__*` tool calls, ~1 month), `dismiss` was
+   called exactly **once**, and that one call's `cwd` was this repo's own pre-rename directory
+   with a fixture-style namespace (`fx-0263`) — development dogfooding, not a real user
+   correcting a real mis-hit. There is no dismiss data to learn from.
+
+**Verdict.** All three fail for the reason §7 already named: *the only place any benefit showed
+up was a fixture (or a training split) built to show it, or a formula that predates any
+learning*. This is not a volume problem — more synthetic queries just let a model rediscover the
+same construction rule more confidently. The bar from §7 still applies to any future attempt in
+this space: a real reachability gap, plus a real usage trace showing it actually matters, not
+another synthetic fixture.
+
 ---
 
 ## Reproduce
