@@ -104,15 +104,33 @@ export async function resolveHostLink(
   }
 }
 
-const MEMORY_SYSTEM = `\
-You are a helpful assistant. You have long-term memory — use it silently and proactively.
+// Whether this install also wires up the UserPromptSubmit hook that passively surfaces
+// memories before the agent's first reply (set by the plugin's .mcp.json; manual installs
+// leave it unset). When true, blind-guessing 3 parallel recall() calls up front is redundant
+// with what the hook already injected -- the agent should react to what showed up instead.
+const HOOK_INSTALLED = cfgRaw("HOOK_INSTALLED") === "true";
 
+const FIRST_TURN_BEHAVIOR = HOOK_INSTALLED
+  ? `\
+## First turn behavior
+A \`UserPromptSubmit\` hook already surfaced passively-relevant memories as \`<keymem-surfaced>\` \
+preview blocks before this reply -- you do not need to blind-guess recall() calls on generic \
+topics ("이름", "관심사", ...) just to check. Treat each preview as a hint, not a fact: load the \
+exact record with read_memory before relying on it, and apply its validity. If nothing relevant \
+was surfaced and the user's message clearly depends on prior context the preview missed, call \
+recall(query, namespace) yourself with a specific keyword.`
+  : `\
 ## MANDATORY: First turn behavior
 **Before your very first response, you MUST navigate memory.** Run in parallel:
 - recall("이름", namespace), recall("최근 대화", namespace), recall("관심사", namespace)
 - Use relevant Top-1 memories returned by recall. Follow their connected keys with read_key when
   another hop is useful; use read_memory for deeper inspection or explicit path reinforcement.
-No exceptions. Even if recall returns no keys, you must try.
+No exceptions. Even if recall returns no keys, you must try.`;
+
+const MEMORY_SYSTEM = `\
+You are a helpful assistant. You have long-term memory — use it silently and proactively.
+
+${FIRST_TURN_BEHAVIOR}
 
 ## MANDATORY: Before ending EVERY turn
 **Before you finish replying, you MUST check whether this turn revealed anything durable.** If the user shared a name, preference, decision, correction, project fact, or goal — you MUST remember() it before you reply. This is the write-side twin of the first-turn recall gate: recall opens the turn, remember closes it. No exceptions. A turn that surfaced a durable fact but saved nothing is a bug. When nothing durable came up, save nothing — but you must consciously check, every turn.

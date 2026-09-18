@@ -40,6 +40,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `KEYMEM_CLEANUP_INTERVAL_MS` (default 1h) for the long-running daemon. Tools contain 10 by
   default (was 12).
 
+### Added
+
+- `KEYMEM_HOOK_INSTALLED` (set automatically by the plugin's `.mcp.json`; unset on a manual
+  install): the `memory_system_prompt` MCP prompt's "First turn behavior" section used to
+  unconditionally mandate 3 blind parallel `recall()` calls before every first reply, regardless
+  of whether a `UserPromptSubmit` hook had already passively surfaced relevant memories as
+  `<keymem-surfaced>` previews (the daemon's `/inject` path, `recallInject`) -- duplicated work
+  for any host that has both wired up. The `keymem` skill (the plugin's actual live guidance when
+  hook + skill are both installed) already handled this correctly by referencing the previews;
+  only this one prompt template didn't. Now branches: hook-installed installs get guidance to
+  react to what was already surfaced instead of blind-guessing; installs without a hook (manual
+  setup, `memory_system_prompt` as the literal system prompt) keep the original mandate unchanged.
+
 ### Changed
 
 - Trimmed unused fields from `recall`/`read_key` responses (checked against SERVER_INSTRUCTIONS,

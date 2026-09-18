@@ -185,7 +185,7 @@ For reliable proactive saving in Claude Code, add the following to `~/.claude/CL
 In Codex, put the same block in `~/.codex/AGENTS.md`. (The plugin install ships this as the `keymem`
 skill instead, so you can skip it there.)
 
-For other MCP clients, include the `memory_system_prompt` MCP prompt in the agent's persistent system instructions.
+For other MCP clients, include the `memory_system_prompt` MCP prompt in the agent's persistent system instructions. It mandates 3 blind recall() calls before the first reply — appropriate when there's no hook surfacing anything passively. If you *do* wire up a `UserPromptSubmit`-equivalent push path yourself, set `KEYMEM_HOOK_INSTALLED=true` so the prompt reacts to what was surfaced instead of blind-guessing on top of it (this is set automatically by the plugin's `.mcp.json`).
 
 ### Manual / Development
 

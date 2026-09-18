@@ -5,7 +5,8 @@
       "args": ["-y", "-p", "keymem@latest", "keymem-shim"],
       "env": {
         "EMBEDDING_BACKEND": "local",
-        "LOCAL_EMBEDDING_MODEL": "bge-m3"
+        "LOCAL_EMBEDDING_MODEL": "bge-m3",
+        "KEYMEM_HOOK_INSTALLED": "true"
       }
     }
   }
