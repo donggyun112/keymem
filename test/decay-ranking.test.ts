@@ -96,12 +96,6 @@ test("second-hop expansion applies target freshness", async (t) => {
   assert.ok(result.findIndex((memory) => memory.id === ids.fresh) < result.findIndex((memory) => memory.id === ids.stale));
 });
 
-test("related ranks fresh before stale when graph evidence is equal", async (t) => {
-  const { graph, ids } = await hopFixture(t);
-  const result = graph.getRelated(ids.source) as any[];
-  assert.deepEqual(result.slice(0, 2).map((memory) => memory.id), [ids.fresh, ids.stale]);
-  assert.ok(result.every((memory) => "validity" in memory));
-});
 
 test("list, read, recall, and injection expose validity", async (t) => {
   const { graph, ids } = await rankedFixture(t);

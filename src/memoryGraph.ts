@@ -57,10 +57,6 @@ const RRF_K = 60;
 const BM25_RESULT_DEPTH = 50;
 const DENSE_RESULT_DEPTH = 50;
 
-// related() ranks neighbors by shared-key specificity (IDF) and caps the list, so a hub
-// key (shared by many) can't flood the chain. Keeps recall→related→related navigable.
-const RELATED_LIMIT = Number(cfgRaw("RELATED_LIMIT") ?? 20);
-const RELATED_EXPLICIT_BONUS = 1.0; // an explicit link is the strongest connection signal
 const _hubMinLinks = Number(cfgRaw("KEY_HUB_MIN_LINKS") ?? 3);
 const KEY_HUB_MIN_LINKS = Number.isFinite(_hubMinLinks)
   ? Math.max(2, Math.floor(_hubMinLinks))
@@ -2952,113 +2948,6 @@ export class MemoryGraph {
 
     await this.flush(); // outside lock; save() is serialized + atomic (see _saveLock)
     return results;
-  }
-
-  // ── Related ──
-
-  getRelated(memoryId: string): object[] {
-    if (!(memoryId in this.memories)) return [];
-
-    const related: Record<
-      string,
-      {
-        id: string;
-        content: string;
-        shared_keys: string[];
-        link_type: string;
-        depth: number;
-        contradicts: string[];
-        validity: ValidityView;
-        _score: number;
-      }
-    > = {};
-
-    // Key-sharing — accumulate a relevance score from key specificity (IDF). A neighbor
-    // linked via a rare/specific shared key scores far higher than one linked only by a
-    // hub key, so hubs sink to the bottom (and out, after the cap).
-    for (const kid of this._memToKeys[memoryId]?.keys() ?? []) {
-      const concept = this.keys[kid]?.concept ?? "?";
-      const idf = this._keyIdf(kid);
-      for (const mid of this._keyToMems[kid]?.keys() ?? []) {
-        if (mid === memoryId || !(mid in this.memories)) continue;
-        const mem = this.memories[mid];
-        if (this._isExpired(mem) || mid in this._supersededBy) continue;
-        if (!related[mid]) {
-          related[mid] = {
-            id: mid,
-            content: mem.content,
-            shared_keys: [],
-            link_type: "key",
-            depth: Math.round(mem.depth * 1000) / 1000,
-            contradicts: mem.contradicts ?? [],
-            validity: this._validity(mem),
-            _score: 0,
-          };
-        }
-        if (!related[mid].shared_keys.includes(concept)) {
-          related[mid].shared_keys.push(concept);
-        }
-        related[mid]._score += idf;
-      }
-    }
-
-    // Explicit links (→)
-    const sourceMem = this.memories[memoryId];
-    for (const linkedId of sourceMem.links) {
-      if (!(linkedId in this.memories) || linkedId === memoryId) continue;
-      const mem = this.memories[linkedId];
-      if (this._isExpired(mem) || linkedId in this._supersededBy) continue;
-      if (!related[linkedId]) {
-        related[linkedId] = {
-          id: linkedId,
-          content: mem.content,
-          shared_keys: ["(explicit →)"],
-          link_type: "explicit",
-          depth: Math.round(mem.depth * 1000) / 1000,
-          contradicts: mem.contradicts ?? [],
-          validity: this._validity(mem),
-          _score: 0,
-        };
-      } else {
-        related[linkedId].link_type = "both";
-        if (!related[linkedId].shared_keys.includes("(explicit →)")) {
-          related[linkedId].shared_keys.push("(explicit →)");
-        }
-      }
-      related[linkedId]._score += RELATED_EXPLICIT_BONUS;
-    }
-
-    // Reverse links (←)
-    for (const [mid, mem] of Object.entries(this.memories)) {
-      if (mid === memoryId || this._isExpired(mem) || mid in this._supersededBy) continue;
-      if (mem.links.includes(memoryId)) {
-        if (!related[mid]) {
-          related[mid] = {
-            id: mid,
-            content: mem.content,
-            shared_keys: ["(explicit ←)"],
-            link_type: "explicit",
-            depth: Math.round(mem.depth * 1000) / 1000,
-            contradicts: mem.contradicts ?? [],
-            validity: this._validity(mem),
-            _score: 0,
-          };
-        } else if (!related[mid].shared_keys.includes("(explicit ←)")) {
-          related[mid].shared_keys.push("(explicit ←)");
-        }
-        related[mid]._score += RELATED_EXPLICIT_BONUS;
-      }
-    }
-
-    for (const entry of Object.values(related)) {
-      entry._score *= this._freshnessFactor(this.memories[entry.id]);
-    }
-
-    // Rank by specificity and freshness, cap so a hub can't flood the chain, drop internal score.
-    return Object.values(related)
-      .sort((a, b) => b._score - a._score)
-      .slice(0, RELATED_LIMIT)
-      .map(({ _score, ...rest }) => rest);
   }
 
   // ── Delete ──

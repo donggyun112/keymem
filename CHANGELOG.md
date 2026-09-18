@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- `related` and `list_memories` MCP tools, decided from real usage data rather than guessing:
+  grepped every `mcp__keymem__*` tool_use call across every local Claude Code session transcript
+  (~/.claude/projects/*/*.jsonl, 538 sessions, ~1 month, 197 total keymem calls) and found zero
+  calls to either. Both also self-deprecated in their own descriptions ("prefer read_memory()...
+  then read_key()" / "Prefer recall() for normal retrieval") and had no other internal caller.
+  `getRelated()` is removed with `related` (its only caller); `graph.listAll()` stays -- it's
+  used by `memory_stats` and the startup stats() logger. Tools contain 14 by default (was 16).
+
 ### Changed
 
 - Trimmed unused fields from `recall`/`read_key` responses (checked against SERVER_INSTRUCTIONS,

@@ -47,10 +47,12 @@ test("a clear synonym short-key merges into the existing key; a distinct one sta
   await g.findOrCreateKey("Agent A");
   await g.findOrCreateKey("Agent B");
 
-  // m1 and m2 now share the (merged) concept key -> related connects them.
-  const relM1 = (g.getRelated(m1) as any[]).map((r) => r.id);
-  assert.ok(relM1.includes(m2), "synonym keys must merge so the two memories share a key");
-  assert.ok(!relM1.includes(m3), "a distinct concept must NOT merge in");
+  // m1 and m2 now share the (merged) concept key.
+  const keysM1 = new Set(g.getKeysForMemory(m1) as string[]);
+  const keysM2 = new Set(g.getKeysForMemory(m2) as string[]);
+  const keysM3 = new Set(g.getKeysForMemory(m3) as string[]);
+  assert.ok([...keysM1].some((k) => keysM2.has(k)), "synonym keys must merge so the two memories share a key");
+  assert.ok(![...keysM1].some((k) => keysM3.has(k)), "a distinct concept must NOT merge in");
 
   // The synonym pair merged by default, while both sibling entity labels survived.
   const conceptKeys = Object.values(g.keys).filter((k: any) => k.key_type === "concept");

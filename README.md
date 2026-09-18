@@ -433,7 +433,7 @@ An uncalibrated `LOCAL_EMBEDDING_MODEL` falls back to the BGE profile **and logs
 
 ## MCP Tools
 
-The full trusted-local tool set contains 16 tools by default. Plain untrusted
+The full trusted-local tool set contains 14 tools by default. Plain untrusted
 servers hide the two transcript tools (`list_sessions`, `get_conversation`):
 
 | Tool | Description |
@@ -446,11 +446,9 @@ servers hide the two transcript tools (`list_sessions`, `get_conversation`):
 | `remember(content, keys, key_types?, namespace?, ttl_seconds?, decay_profile?, related_to?)` | Save memory with key concepts, optional TTL, and a `transient`, `standard`, `stable`, or `permanent` decay profile. |
 | `correct(memory_id, content, keys?, key_types?, ttl_seconds?, decay_profile?, related_to?)` | Versioned update. The immediate predecessor is preserved but inactive; omitted TTL/profile inherit from it. |
 | `dismiss(memory_id, key_id, namespace?)` | Negative feedback: the fact is fine, this key should not have surfaced it. Weakens that one edge (floored, never severed) and cancels its pending alias learning |
-| `related(memory_id)` | Find memories sharing keys (associative exploration) |
 | `forget(memory_id)` | Permanently delete |
 | `list_sessions(agent?, limit?)` | Discover recent host-agent conversation sessions (Claude Code, Codex) on this machine, newest first |
 | `get_conversation(session_id, turn?, agent?)` | Load original conversation turns from the host agent's on-disk transcript (Claude Code / Codex), normalized to `{turn, role, content, ts}` |
-| `list_memories(namespace?)` | List active memories with keys, depth, access count, and validity |
 | `remember_batch(items)` | Save multiple memories; each item accepts `ttl_seconds` and `decay_profile` |
 | `cleanup_expired()` | Delete memories whose TTL has expired |
 | `memory_stats()` | Get current key/memory/link counts |

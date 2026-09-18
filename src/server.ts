@@ -410,18 +410,6 @@ export function createMcpServer(): Server {
         },
       },
       {
-        name: "related",
-        description:
-          "Find other memories associated with a memory you already have (by ID). Returns neighboring memories connected by shared keys or explicit links. For normal agent-driven navigation prefer read_memory(), inspect its returned keys, then call read_key().",
-        inputSchema: {
-          type: "object",
-          properties: {
-            memory_id: { type: "string" },
-          },
-          required: ["memory_id"],
-        },
-      },
-      {
         name: "dismiss",
         description:
           "Tell keymem a recalled memory was surfaced by the WRONG key — the fact may be fine, it just should not have come up for this query. Pass the memory_id and the key_id it arrived under (recall returns both). Weakens that one key->memory link so the pairing ranks lower next time, and cancels any pending alias learning for it. The memory itself, its other keys, and its content are untouched, and the link is floored rather than severed, so nothing becomes unreachable. Use correct() when the fact changed and forget() when it is simply wrong.",
@@ -490,18 +478,6 @@ export function createMcpServer(): Server {
               type: "number",
               description: "Maximum number of sessions to return (most recent first).",
             },
-          },
-          required: [],
-        },
-      },
-      {
-        name: "list_memories",
-        description:
-          "List all stored memories. namespace filters by project/context. Expired memories are excluded. Prefer recall() for normal retrieval.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            namespace: { type: "string" },
           },
           required: [],
         },
@@ -781,11 +757,6 @@ export function createMcpServer(): Server {
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
         }
 
-        case "related": {
-          const results = graph.getRelated(a.memory_id as string);
-          return { content: [{ type: "text", text: JSON.stringify(results) }] };
-        }
-
         case "dismiss": {
           const res = await graph.dismiss(
             a.memory_id as string,
@@ -848,13 +819,6 @@ export function createMcpServer(): Server {
             limit: typeof a.limit === "number" ? a.limit : undefined,
           });
           return { content: [{ type: "text", text: JSON.stringify(sessions) }] };
-        }
-
-        case "list_memories": {
-          const results = graph.listAll(
-            typeof a.namespace === "string" ? a.namespace : null
-          );
-          return { content: [{ type: "text", text: JSON.stringify(results) }] };
         }
 
         case "remember_batch": {

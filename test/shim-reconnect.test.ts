@@ -77,7 +77,10 @@ test("same stdio client reconnects after daemon restart and sees the same global
     });
 
     await daemon.close();
-    const pendingResult = client.callTool({ name: "list_memories", arguments: {} });
+    const pendingResult = client.callTool({
+      name: "recall",
+      arguments: { query: "restart-global-memory" },
+    });
     await new Promise((resolve) => setTimeout(resolve, 150));
     daemon = await startDaemon({ port, idleMs: 60_000 });
 
@@ -86,9 +89,9 @@ test("same stdio client reconnects after daemon restart and sees the same global
       10_000,
       () => stderr
     );
-    const memories = JSON.parse(toolText(result)) as Array<{ content: string }>;
+    const recalled = JSON.parse(toolText(result)) as { memories: Array<{ content: string }> };
     assert.ok(
-      memories.some((memory) => memory.content === "global memory survives daemon restart"),
+      recalled.memories.some((memory) => memory.content === "global memory survives daemon restart"),
       "the reinitialized MCP session reads the same global graph"
     );
     assert.equal(shim.pid, shimPid, "stdio shim process stayed alive across daemon restart");
