@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.30.0] - 2026-09-19
 
 ### Removed
 
@@ -39,32 +39,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it's now invoked automatically instead: once at daemon/stdio startup, and every
   `KEYMEM_CLEANUP_INTERVAL_MS` (default 1h) for the long-running daemon. Tools contain 10 by
   default (was 12).
-
-### Added
-
-- `KEYMEM_HOOK_INSTALLED` (set automatically by the plugin's `.mcp.json`; unset on a manual
-  install): the `memory_system_prompt` MCP prompt's "First turn behavior" section used to
-  unconditionally mandate 3 blind parallel `recall()` calls before every first reply, regardless
-  of whether a `UserPromptSubmit` hook had already passively surfaced relevant memories as
-  `<keymem-surfaced>` previews (the daemon's `/inject` path, `recallInject`) -- duplicated work
-  for any host that has both wired up. The `keymem` skill (the plugin's actual live guidance when
-  hook + skill are both installed) already handled this correctly by referencing the previews;
-  only this one prompt template didn't. Now branches: hook-installed installs get guidance to
-  react to what was already surfaced instead of blind-guessing; installs without a hook (manual
-  setup, `memory_system_prompt` as the literal system prompt) keep the original mandate unchanged.
-
-### Changed
-
-- Trimmed unused fields from `recall`/`read_key` responses (checked against SERVER_INSTRUCTIONS,
-  existing test assertions, and the daemon's own consumers before cutting anything):
-  `recall`'s `memories[0].matched_key` is now `{key_id}` — a pointer, not a full duplicate of
-  `keys[0]`'s already-returned key object; `link_weight`/`score` (internal ranking, never
-  referenced by protocol or tests on this path) are dropped from that same memory object;
-  `read_key`'s per-call `scoring` field (static explanatory text, unchanged across every call)
-  moved into the tool description instead of the response payload.
-
-### Removed
-
 - Per-sentence content vectors (`_embedSentences`, `KEYMEM_SENTENCE_VECTORS`, introduced in
   0.20.0-era work) — removed outright rather than kept opt-in. A rigorous held-out "buried fact"
   fixture (10 multi-sentence memories + 20 distractors, `bench/sentence-vector-fixture-eval.mts`)
@@ -79,8 +53,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   internally by the auto-injection hook (`daemon.ts`) — only the MCP-tool-level exposure was
   unused (no tool-level test coverage) and removed. `inject_max_chars` survives as `max_chars`.
 
+### Changed
+
+- Trimmed unused fields from `recall`/`read_key` responses (checked against SERVER_INSTRUCTIONS,
+  existing test assertions, and the daemon's own consumers before cutting anything):
+  `recall`'s `memories[0].matched_key` is now `{key_id}` — a pointer, not a full duplicate of
+  `keys[0]`'s already-returned key object; `link_weight`/`score` (internal ranking, never
+  referenced by protocol or tests on this path) are dropped from that same memory object;
+  `read_key`'s per-call `scoring` field (static explanatory text, unchanged across every call)
+  moved into the tool description instead of the response payload.
+
 ### Added
 
+- `KEYMEM_HOOK_INSTALLED` (set automatically by the plugin's `.mcp.json`; unset on a manual
+  install): the `memory_system_prompt` MCP prompt's "First turn behavior" section used to
+  unconditionally mandate 3 blind parallel `recall()` calls before every first reply, regardless
+  of whether a `UserPromptSubmit` hook had already passively surfaced relevant memories as
+  `<keymem-surfaced>` previews (the daemon's `/inject` path, `recallInject`) -- duplicated work
+  for any host that has both wired up. The `keymem` skill (the plugin's actual live guidance when
+  hook + skill are both installed) already handled this correctly by referencing the previews;
+  only this one prompt template didn't. Now branches: hook-installed installs get guidance to
+  react to what was already surfaced instead of blind-guessing; installs without a hook (manual
+  setup, `memory_system_prompt` as the literal system prompt) keep the original mandate unchanged.
 - `recall` auto-confirms a memory when `context` is a strong restatement of it (reuses
   `directHydrateTop1`'s existing `content_relevance`; see `memories[0].auto_confirmed`).
   `KEYMEM_AUTO_CONFIRM=false` disables it.
