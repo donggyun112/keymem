@@ -409,9 +409,7 @@ export type DirectHydrateTop1Decision =
           depth: number;
           created_at: number;
           validity: ValidityView;
-          link_weight: number;
           content_relevance: number | null;
-          score: number;
           connected_keys: Array<{ concept: string; key_id: string; relevance: number | null }>;
           content_truncated?: true;
           content_chars?: number;
@@ -1917,14 +1915,6 @@ export class MemoryGraph {
       memories: page,
       total: ranked.length,
       next_offset: offset + limit < ranked.length ? offset + limit : null,
-      scoring: {
-        content_relevance: qEmb
-          ? "cosine similarity; comparable to recall key relevance"
-          : "not computed because query was omitted",
-        score: qEmb
-          ? "content_relevance × link_weight × depth_factor × freshness_factor; compare only within this key"
-          : "link_weight × depth_factor × freshness_factor; compare only within this key",
-      },
     };
   }
 
@@ -2004,9 +1994,7 @@ export class MemoryGraph {
         depth: Math.round(mem.depth * 1000) / 1000,
         created_at: mem.created_at,
         validity: this._validity(mem),
-        link_weight: handle.link_weight,
         content_relevance: handle.content_relevance,
-        score: handle.score,
         connected_keys: this.getKeyRefsForMemory(handle.memory_id)
           .map((ref) => ({
             ...ref,

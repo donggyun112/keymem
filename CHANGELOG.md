@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Trimmed unused fields from `recall`/`read_key` responses (checked against SERVER_INSTRUCTIONS,
+  existing test assertions, and the daemon's own consumers before cutting anything):
+  `recall`'s `memories[0].matched_key` is now `{key_id}` — a pointer, not a full duplicate of
+  `keys[0]`'s already-returned key object; `link_weight`/`score` (internal ranking, never
+  referenced by protocol or tests on this path) are dropped from that same memory object;
+  `read_key`'s per-call `scoring` field (static explanatory text, unchanged across every call)
+  moved into the tool description instead of the response payload.
+
 ### Removed
 
 - Per-sentence content vectors (`_embedSentences`, `KEYMEM_SENTENCE_VECTORS`, introduced in

@@ -317,7 +317,7 @@ export function createMcpServer(): Server {
       {
         name: "read_key",
         description:
-          "List the memories stored under one key (concept), ranked. Returns the canonical key, its aliases, and hub metadata plus ranked memory IDs, metadata, and validity — never memory content. Always pass the original focused query and active namespace when known: handles are then ranked by content relevance, which is essential for hubs. Call read_memory(memory_id, via_key_id=key_id, namespace) on the selected handle to inspect the fact and reinforce the path; reading does not confirm that its content is current. Use limit/offset to page without flooding context.",
+          "List the memories stored under one key (concept), ranked. Returns the canonical key, its aliases, and hub metadata plus ranked memory IDs, metadata, and validity — never memory content. Always pass the original focused query and active namespace when known: handles are then ranked by content relevance, which is essential for hubs. Each memory's score is content_relevance × link_weight × depth_factor × freshness_factor when query is passed (link_weight × depth_factor × freshness_factor otherwise); content_relevance is a cosine, comparable to recall's key relevance — both only meaningful within this one key's ranking. Call read_memory(memory_id, via_key_id=key_id, namespace) on the selected handle to inspect the fact and reinforce the path; reading does not confirm that its content is current. Use limit/offset to page without flooding context.",
         inputSchema: {
           type: "object",
           properties: {
@@ -595,7 +595,8 @@ export function createMcpServer(): Server {
           const memories = decision.status === "candidate"
             ? [{
                 ...decision.candidate.memory,
-                matched_key: decision.candidate.key,
+                // A pointer, not a duplicate: the full key object is already keys[0] above.
+                matched_key: { key_id: decision.candidate.key.key_id },
               }]
             : [];
           // Auto-confirm: content_relevance already measures cosine(context, memory content)
