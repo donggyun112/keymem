@@ -704,6 +704,10 @@ export function createMcpServer(): Server {
         case "remember_batch": {
           const items = (parseArray(a.items) ?? []) as Array<Record<string, unknown>>;
           const hostLink = await resolveHostLink(headers); // detect once for the whole batch
+          // A shared batch_id lets recall() surface these items to each other as a plain
+          // read-time suggestion (batch_sibling_ids) — never a graph edge. A single-item
+          // "batch" has no sibling to suggest, so it gets none (identical to a plain remember).
+          const batchId = items.length > 1 ? randomUUID() : null;
           const results: object[] = [];
           for (const item of items) {
             const content = item.content as string;
@@ -712,13 +716,18 @@ export function createMcpServer(): Server {
               results.push({ error: "content and keys required", item });
               continue;
             }
+            const itemSource = (item.source as Record<string, unknown>) ?? null;
             const [mid, wasDedup] = await graph.add(content, keys, {
               keyTypes: item.key_types as Record<string, string> | null,
               namespace: typeof item.namespace === "string" ? item.namespace : "default",
               ttlSeconds: parseNumber(item.ttl_seconds),
               decayProfile: parseDecayProfile(item.decay_profile),
               relatedTo: Array.isArray(item.related_to) ? (item.related_to as string[]) : null,
-              source: buildSource((item.source as Record<string, unknown>) ?? null, "remember_batch", hostLink),
+              source: buildSource(
+                batchId ? { ...itemSource, batch_id: batchId } : itemSource,
+                "remember_batch",
+                hostLink
+              ),
             });
             results.push({ saved: mid, deduplicated: wasDedup });
           }

@@ -196,6 +196,10 @@ const LINK_WEIGHT_DEFAULT = 1.0;
 const LINK_WEIGHT_MIN = 0.1;
 const LINK_WEIGHT_MAX = 3.0;
 const LINK_REINFORCE_AMOUNT = 0.1;
+// A hop>=2 result rode in on an association, not a direct hit — real signal, but weaker
+// than "this is the thing the query was about". Scaled below LINK_REINFORCE_AMOUNT so a
+// large returned set can't inflate the graph as fast as a confirmed top-1 read.
+const HOP_LINK_REINFORCE_AMOUNT = LINK_REINFORCE_AMOUNT * 0.5;
 // Dismissal costs 3x what a read pays back. A read is weak evidence — agents read to
 // check, including to check something they suspect is wrong — while a dismissal is an
 // explicit "this key should not have surfaced this". 3:1 means three later confirmations
@@ -203,6 +207,10 @@ const LINK_REINFORCE_AMOUNT = 0.1;
 // dismissing can sever a link and orphan the memory behind it.
 const LINK_DISMISS_AMOUNT = 0.3;
 const LINK_DECAY_RATE = 0.005;
+// A key inherited across a correction rode along with content that needed fixing once —
+// real but weaker evidence than a fresh add(). Half of LINK_DISMISS_AMOUNT: a real signal,
+// not as strong as dismiss's explicit "this pairing is wrong".
+const LINK_CORRECT_PENALTY = LINK_DISMISS_AMOUNT * 0.5;
 
 // ── Vector math ──
 
@@ -466,6 +474,28 @@ export class MemoryGraph {
 
   private _hasLink(keyId: string, memId: string): boolean {
     return this._keyToMems[keyId]?.has(memId) ?? false;
+  }
+
+  // Read-time suggestion, not a graph edge: memories written in the same remember_batch call
+  // share a source.batch_id. Surfacing that as a plain id list costs nothing to compute and
+  // ranks/reinforces nothing — the caller decides whether to look at the sibling at all.
+  // Self-contained (normalizes namespace, applies the same expired/superseded filter as
+  // _activeMemoryIdsForKey) so every read path — recall, directHydrateTop1, readKey — can call
+  // it the same way instead of threading a bespoke skip() through each.
+  private _batchSiblingIds(memId: string, namespace?: string | null): string[] {
+    const batchId = (this.memories[memId]?.source as Record<string, unknown> | null)?.batch_id;
+    if (typeof batchId !== "string") return [];
+    const ns = normalizeNamespace(namespace);
+    const siblings: string[] = [];
+    for (const [otherId, other] of Object.entries(this.memories)) {
+      if (otherId === memId) continue;
+      if (this._isExpired(other) || otherId in this._supersededBy) continue;
+      if (ns && other.namespace !== ns) continue;
+      if ((other.source as Record<string, unknown> | null)?.batch_id === batchId) {
+        siblings.push(otherId);
+      }
+    }
+    return siblings;
   }
 
   // Links created by _autoLinkKeys (embedding proximity at write time) rather than by the
@@ -1512,7 +1542,7 @@ export class MemoryGraph {
           }
         }
         for (const [kid, w] of inherited) {
-          this._link(kid, mid, w);
+          this._link(kid, mid, Math.max(LINK_WEIGHT_MIN, w - LINK_CORRECT_PENALTY));
           this._setAutoLink(kid, mid, this._isAutoLink(kid, oldId));
         }
       }
@@ -1881,19 +1911,23 @@ export class MemoryGraph {
       })
       .sort((a, b) => b.score - a.score || b.mem.created_at - a.mem.created_at);
 
-    const page = ranked.slice(offset, offset + limit).map(({ mid, mem, linkWeight, relevance, score }) => ({
-      memory_id: mid,
-      evidence: "unread" as const,
-      suggested_tool: "read_memory" as const,
-      depth: Math.round(mem.depth * 1000) / 1000,
-      created_at: mem.created_at,
-      namespace: mem.namespace,
-      validity: this._validity(mem),
-      link_weight: Math.round(linkWeight * 1000) / 1000,
-      content_relevance: qEmb ? Math.round(relevance * 1000) / 1000 : null,
-      score_kind: qEmb ? "within_key_rank" as const : "link_rank" as const,
-      score: Math.round(score * 1000) / 1000,
-    }));
+    const page = ranked.slice(offset, offset + limit).map(({ mid, mem, linkWeight, relevance, score }) => {
+      const batchSiblingIds = this._batchSiblingIds(mid, namespace);
+      return {
+        memory_id: mid,
+        evidence: "unread" as const,
+        suggested_tool: "read_memory" as const,
+        depth: Math.round(mem.depth * 1000) / 1000,
+        created_at: mem.created_at,
+        namespace: mem.namespace,
+        validity: this._validity(mem),
+        link_weight: Math.round(linkWeight * 1000) / 1000,
+        content_relevance: qEmb ? Math.round(relevance * 1000) / 1000 : null,
+        ...(batchSiblingIds.length ? { batch_sibling_ids: batchSiblingIds } : {}),
+        score_kind: qEmb ? "within_key_rank" as const : "link_rank" as const,
+        score: Math.round(score * 1000) / 1000,
+      };
+    });
 
     return {
       key: this._keyView(keyId, namespace),
@@ -1970,6 +2004,7 @@ export class MemoryGraph {
       ) {
         return { status: "no_memory", candidate: null };
       }
+      const batchSiblingIds = this._batchSiblingIds(handle.memory_id, namespace);
       const memory = truncateInjectedContent({
         id: handle.memory_id,
         content: mem.content,
@@ -1980,6 +2015,7 @@ export class MemoryGraph {
         created_at: mem.created_at,
         validity: this._validity(mem),
         content_relevance: handle.content_relevance,
+        ...(batchSiblingIds.length ? { batch_sibling_ids: batchSiblingIds } : {}),
         connected_keys: this.getKeyRefsForMemory(handle.memory_id)
           .map((ref) => ({
             ...ref,
@@ -2442,6 +2478,9 @@ export class MemoryGraph {
     const queryLower = query.toLowerCase().trim();
     const memMatchedKeys: Record<string, string[]> = {};
     const memHop: Record<string, number> = {};
+    // The single shared key that first pulled a hop>=2 memory in — enough to name the
+    // link worth reinforcing without recording a full traversal path.
+    const memHopKey: Record<string, string> = {};
     const memRawSim: Record<string, number> = {};
     const memContentSim: Record<string, number> = {};
     let keyScores: [number, string][] = [];
@@ -2666,7 +2705,7 @@ export class MemoryGraph {
                 memMatchedKeys[otherMid].push(`${concept}(via)`);
                 graphAnchored.add(otherMid); // legit reachability propagates to deeper hops
               }
-              if (!(otherMid in memHop)) { memHop[otherMid] = h; next.add(otherMid); }
+              if (!(otherMid in memHop)) { memHop[otherMid] = h; memHopKey[otherMid] = kid; next.add(otherMid); }
             }
           }
           // explicit links (bidirectional)
@@ -2860,6 +2899,7 @@ export class MemoryGraph {
           mem.access_count += 1;
           mem.last_accessed = this._now();
         }
+        const batchSiblingIds = this._batchSiblingIds(mid, nsFilter);
         results.push({
           id: mid,
           content: mem.content,
@@ -2872,6 +2912,7 @@ export class MemoryGraph {
           ...(includeSelectionUtility
             ? { content_relevance_score: Math.round((memContentSim[mid] ?? 0) * 1000) / 1000 }
             : {}),
+          ...(batchSiblingIds.length ? { batch_sibling_ids: batchSiblingIds } : {}),
           score_kind: "rrf_fused_rank",
           depth: Math.round(mem.depth * 1000) / 1000,
           access_count: mem.access_count,
@@ -2902,6 +2943,17 @@ export class MemoryGraph {
             if (!matchedKeyIds.has(kid)) continue;
             this._setLinkWeight(kid, topMid, this._getLinkWeight(kid, topMid) + LINK_REINFORCE_AMOUNT);
           }
+        }
+
+        // Widen to every OTHER returned hop>=2 result: it was consumed context too, just
+        // reached by association rather than a direct hit. Reinforce only the specific key
+        // that pulled it in (memHopKey), at a fraction of the top-1 amount.
+        for (const [mid] of ranked) {
+          if (mid === topMid) continue;
+          if ((memHop[mid] ?? 1) < 2) continue;
+          const kid = memHopKey[mid];
+          if (!kid) continue;
+          this._setLinkWeight(kid, mid, this._getLinkWeight(kid, mid) + HOP_LINK_REINFORCE_AMOUNT);
         }
 
         // Weaken: explored but not returned
