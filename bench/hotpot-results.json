@@ -23,35 +23,35 @@
     "DIRECT": {
       "bridge": {
         "n": 96,
-        "recall": 75.16666666666666,
-        "both": 58
+        "recall": 88.33333333333333,
+        "both": 82
       },
       "comparison": {
         "n": 24,
-        "recall": 19.5,
-        "both": 15
+        "recall": 23.5,
+        "both": 23
       },
       "all": {
         "n": 120,
-        "recall": 94.66666666666667,
-        "both": 73
+        "recall": 111.83333333333333,
+        "both": 105
       }
     },
     "GRAPH": {
       "bridge": {
         "n": 96,
-        "recall": 84.16666666666666,
-        "both": 75
+        "recall": 88.33333333333333,
+        "both": 82
       },
       "comparison": {
         "n": 24,
-        "recall": 18.5,
-        "both": 13
+        "recall": 23.5,
+        "both": 23
       },
       "all": {
         "n": 120,
-        "recall": 102.66666666666669,
-        "both": 88
+        "recall": 111.83333333333333,
+        "both": 105
       }
     }
   }
