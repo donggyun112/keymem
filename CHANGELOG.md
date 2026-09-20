@@ -4,6 +4,41 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.0] - 2026-09-20
+
+### Added
+
+- `remember_batch` now stamps a shared `source.batch_id` across its items whenever more than
+  one is saved in the same call, and `recall`, `read_key`, and the direct-hydrate top-1 path
+  surface each other as `batch_sibling_ids` on the result. This is a read-time suggestion, not
+  a graph edge -- it never touches scoring, ranking, or link weight, so it closes a real
+  reachability gap (batch-mates tagged with non-overlapping keys were previously unreachable
+  from each other, confirmed on the real 892-memory store) without the noise-injection risk
+  that sank the four association-strengthening attempts recorded in BENCHMARKS.md §7/§10. Two
+  broader "automatic edge" designs (session-proximity linking, then batch-sibling *auto*-linking)
+  were spiked against the real store first and rejected on the same evidence bar before landing
+  on this narrower, non-invasive form.
+- `recall()`'s Hebbian reinforcement now strengthens the connecting key of every RETURNED
+  hop>=2 result, not only the single top-1 pick, at half the top-1 amount
+  (`HOP_LINK_REINFORCE_AMOUNT`) so a large result set can't inflate the graph as fast as a
+  confirmed top-1 read.
+- `correct()` (`supersede()`) now carries an inherited key at a penalized weight
+  (`LINK_CORRECT_PENALTY`, half of `LINK_DISMISS_AMOUNT`) instead of the old weight verbatim --
+  it rode along with content that needed fixing once, which is real but weaker evidence than a
+  fresh `add()`.
+
+### Fixed
+
+- The two Hebbian changes above initially targeted `MemoryGraph.recall()`, which turned out to
+  be dead code for interactive use: the `recall` MCP tool never calls it (it uses
+  `searchKeys()` + `directHydrateTop1()`), and the one real caller of `recall()`
+  (`recallInject`, the passive `/inject` hook) always passes `reinforce=false`. `batch_sibling_ids`
+  had the same problem and, worse, was silently dropped by `hook.ts`'s field allowlist even
+  when present in the `/inject` response. `batch_sibling_ids` is now also wired into
+  `directHydrateTop1` and `readKey` -- the paths the `recall`/`read_key` tools actually use --
+  and verified end to end with real bge-m3 embeddings through an actual MCP client/server round
+  trip. The Hebbian reinforcement widening remains scoped to `recall()`/`recallInject` only.
+
 ## [0.30.0] - 2026-09-19
 
 ### Removed
