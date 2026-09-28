@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.0] - 2026-09-28
+
+### Fixed
+
+- A shim from a newer release no longer attaches silently to a stale daemon. `/health` now
+  reports the daemon `version`, and when it differs the shim sends `POST /shutdown`. The daemon
+  flushes deferred reinforcement and exits only if the requester is strictly newer (equal or
+  older gets 409, so mixed versions never ping-pong), and the shim then autostarts a daemon from
+  its own release. Previously `/health` returned only `{ok:true}`, so a daemon could keep serving
+  old code for as long as any session stayed attached (observed: 0.31.0 shims on a 0.29.0 daemon
+  12 days old). `/shutdown` requires an `x-keymem-shim` header, which forces a CORS preflight the
+  daemon never answers, and a loopback `Host`, which blocks DNS rebinding, so a browser page
+  cannot trigger it. Daemons older than this release have no `/shutdown` and only get a stderr
+  warning; stop those once by hand.
+
 ## [0.31.0] - 2026-09-20
 
 ### Added
