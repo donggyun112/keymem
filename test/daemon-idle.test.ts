@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp } from "node:fs/promises";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -10,7 +11,9 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 process.env.KEYMEM_DATA_DIR = await mkdtemp(join(tmpdir(), "keymem-daemon-"));
 process.env.KEYMEM_TRANSCRIPT_ACCESS = "false";
 
-const { startDaemon } = await import("../src/daemon.ts");
+const { startDaemon, isNewerVersion } = await import("../src/daemon.ts");
+const { VERSION } = await import("../src/server.ts");
+const { ensureDaemon } = await import("../src/shim.ts");
 
 test("health endpoint returns 200 after start", async () => {
   const d = await startDaemon({ port: 0, idleMs: 60_000 });
@@ -19,6 +22,58 @@ test("health endpoint returns 200 after start", async () => {
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.ok, true);
+    assert.match(body.version, /^\d+\.\d+\.\d+/);
+  } finally {
+    await d.close();
+  }
+});
+
+test("isNewerVersion compares x.y.z numerically and rejects garbage", () => {
+  assert.equal(isNewerVersion("0.31.0", "0.29.0"), true);
+  assert.equal(isNewerVersion("0.10.0", "0.9.9"), true);
+  assert.equal(isNewerVersion("0.29.0", "0.31.0"), false);
+  assert.equal(isNewerVersion("0.31.0", "0.31.0"), false);
+  assert.equal(isNewerVersion("", "0.31.0"), false);
+});
+
+test("/shutdown only honors a local shim that is strictly newer", async () => {
+  let shutdowns = 0;
+  const d = await startDaemon({ port: 0, idleMs: 60_000, onShutdown: () => { shutdowns++; } });
+  const post = (headers: Record<string, string>, version: string) =>
+    fetch(`http://127.0.0.1:${d.port}/shutdown`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify({ version }),
+    });
+  try {
+    assert.equal((await post({}, "999.0.0")).status, 403); // no shim header (browser-style)
+    // DNS-rebinding shape: right header, foreign Host. fetch drops Host overrides, so use http.
+    const rebindStatus = await new Promise<number | undefined>((resolve, reject) => {
+      const req = request(
+        { port: d.port, path: "/shutdown", method: "POST", headers: { host: "evil.test", "x-keymem-shim": "1" } },
+        (res) => { res.resume(); resolve(res.statusCode); }
+      );
+      req.on("error", reject);
+      req.end(JSON.stringify({ version: "999.0.0" }));
+    });
+    assert.equal(rebindStatus, 403);
+    assert.equal((await post({ "x-keymem-shim": "1" }, VERSION)).status, 409);
+    assert.equal((await post({ "x-keymem-shim": "1" }, "0.0.1")).status, 409);
+    assert.equal(shutdowns, 0);
+    assert.equal((await post({ "x-keymem-shim": "1" }, "999.0.0")).status, 202);
+    assert.equal(shutdowns, 1);
+  } finally {
+    await d.close();
+  }
+});
+
+test("ensureDaemon keeps a same-version daemon", async () => {
+  let shutdowns = 0;
+  const d = await startDaemon({ port: 0, idleMs: 60_000, onShutdown: () => { shutdowns++; } });
+  try {
+    const ok = await ensureDaemon(`http://127.0.0.1:${d.port}/mcp`, { timeoutMs: 300, spawnDaemon: false });
+    assert.equal(ok, true);
+    assert.equal(shutdowns, 0);
   } finally {
     await d.close();
   }

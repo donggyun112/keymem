@@ -7,6 +7,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { runInProcess } from "./index.js";
+import { VERSION } from "./server.js";
 
 const PORT = Number(process.env.KEYMEM_DAEMON_PORT ?? 8765);
 const MCP_URL = `http://127.0.0.1:${PORT}/mcp`;
@@ -49,12 +50,49 @@ function healthUrlFor(url: string): string {
   }
 }
 
-async function healthOk(url: string): Promise<boolean> {
+// null = no daemon; otherwise the daemon's reported version (undefined for daemons older than this check).
+async function health(url: string): Promise<{ version?: string } | null> {
   try {
     const res = await fetch(healthUrlFor(url), { signal: AbortSignal.timeout(500) });
-    return res.ok;
+    if (!res.ok) return null;
+    return ((await res.json().catch(() => ({}))) ?? {}) as { version?: string };
   } catch {
-    return false;
+    return null;
+  }
+}
+
+const healthOk = async (url: string) => (await health(url)) !== null;
+
+// A daemon from an older release keeps serving stale code for as long as any session is
+// attached. Ask it to exit (it refuses unless we are strictly newer) and wait for the port
+// to free, so the caller's autostart path brings up a daemon built from this release.
+async function replaceStaleDaemon(url: string, daemonVersion: string | undefined, timeoutMs: number): Promise<void> {
+  if (daemonVersion === VERSION) return;
+  let status: number;
+  try {
+    const u = new URL(url);
+    u.pathname = "/shutdown";
+    const res = await fetch(u, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-keymem-shim": VERSION },
+      body: JSON.stringify({ version: VERSION }),
+      signal: AbortSignal.timeout(500),
+    });
+    status = res.status;
+  } catch {
+    return;
+  }
+  if (status === 404) {
+    console.error(
+      `[shim] daemon on ${new URL(url).host} predates version checks (shim ${VERSION}); ` +
+        "stop it manually to pick up this release"
+    );
+    return;
+  }
+  if (status !== 202) return; // 409: daemon is same-or-newer, keep it
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && (await healthOk(url))) {
+    await new Promise((r) => setTimeout(r, 100));
   }
 }
 
@@ -67,7 +105,11 @@ export async function ensureDaemon(
 ): Promise<boolean> {
   const timeoutMs = opts.timeoutMs ?? 8000;
   const spawnDaemon = opts.spawnDaemon ?? true;
-  if (await healthOk(url)) return true;
+  const current = await health(url);
+  if (current) {
+    await replaceStaleDaemon(url, current.version, timeoutMs);
+    if (await healthOk(url)) return true;
+  }
 
   if (spawnDaemon) {
     const here = dirname(fileURLToPath(import.meta.url));

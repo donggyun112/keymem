@@ -8,7 +8,7 @@ import { dataDir } from "./env.js";
 import { normalizeNamespace } from "./memoryGraph.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { graph, createMcpServer } from "./server.js";
+import { graph, createMcpServer, VERSION } from "./server.js";
 
 const DEFAULT_PORT = Number(process.env.KEYMEM_DAEMON_PORT ?? 8765);
 const dataDirPath = dataDir();
@@ -18,8 +18,30 @@ const DEFAULT_SESSION_REAP_GRACE_MS = Number(process.env.KEYMEM_SESSION_REAP_GRA
 // 스스로 처리한다: 시작 시 한 번, 이후 이 간격으로 계속.
 const DEFAULT_CLEANUP_INTERVAL_MS = Number(process.env.KEYMEM_CLEANUP_INTERVAL_MS ?? 60 * 60_000);
 
+// x.y.z numeric compare; prerelease tags are ignored. Unparseable → false, so garbage
+// never shuts a daemon down, and equal/older shims never evict a newer daemon (no ping-pong).
+export function isNewerVersion(a: string, b: string): boolean {
+  const parse = (v: string) => /^(\d+)\.(\d+)\.(\d+)/.exec(v)?.slice(1).map(Number);
+  const pa = parse(a);
+  const pb = parse(b);
+  if (!pa || !pb) return false;
+  for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] > pb[i];
+  return false;
+}
+
+// Deferred (dirty) reinforcement lives only in memory; persist it before exiting.
+const flushAndExit = () => {
+  graph.flush().catch((err) => console.error("[daemon flush]", err)).finally(() => process.exit(0));
+};
+
 export async function startDaemon(
-  opts: { port?: number; idleMs?: number; sessionReapGraceMs?: number; cleanupIntervalMs?: number } = {}
+  opts: {
+    port?: number;
+    idleMs?: number;
+    sessionReapGraceMs?: number;
+    cleanupIntervalMs?: number;
+    onShutdown?: () => void;
+  } = {}
 ): Promise<{
   port: number;
   close: () => Promise<void>;
@@ -30,6 +52,7 @@ export async function startDaemon(
   const idleMs = opts.idleMs ?? DEFAULT_IDLE_MS;
   const sessionReapGraceMs = opts.sessionReapGraceMs ?? DEFAULT_SESSION_REAP_GRACE_MS;
   const cleanupIntervalMs = opts.cleanupIntervalMs ?? DEFAULT_CLEANUP_INTERVAL_MS;
+  const onShutdown = opts.onShutdown ?? flushAndExit;
   await graph.load(); // 임베딩 모델은 첫 사용 시 lazy load
   await graph.cleanupExpired();
   const cleanupTimer = setInterval(() => {
@@ -92,7 +115,32 @@ export async function startDaemon(
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (url.pathname === "/health") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true }));
+      res.end(JSON.stringify({ ok: true, version: VERSION }));
+      return;
+    }
+    // A shim from a newer release asks a stale daemon to step aside; without this a
+    // long-lived daemon keeps serving old code forever, since health alone says "fine".
+    // The custom header forces a CORS preflight (never answered) and the Host check
+    // blocks DNS rebinding, so a browser page cannot trigger it — only local processes.
+    if (url.pathname === "/shutdown") {
+      const host = (req.headers.host ?? "").replace(/:\d+$/, "");
+      if (
+        req.method !== "POST" ||
+        req.headers["x-keymem-shim"] === undefined ||
+        (host !== "127.0.0.1" && host !== "localhost")
+      ) {
+        res.writeHead(403).end();
+        return;
+      }
+      const body = (await readBody(req)) as { version?: unknown } | undefined;
+      const requester = typeof body?.version === "string" ? body.version : "";
+      if (!isNewerVersion(requester, VERSION)) {
+        res.writeHead(409, { "content-type": "application/json" });
+        res.end(JSON.stringify({ version: VERSION }));
+        return;
+      }
+      res.writeHead(202).end();
+      onShutdown();
       return;
     }
     // Push path for harness hooks (e.g. Claude Code UserPromptSubmit): the hook client
