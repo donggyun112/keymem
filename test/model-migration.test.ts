@@ -163,3 +163,38 @@ test("does NOT re-embed when the model is unchanged (same fingerprint, same dim)
   const backups = (await readdir(dataDir)).filter((f) => f.includes(".bak."));
   assert.equal(backups.length, 0, `no migration backup expected, found: ${backups.join(",")}`);
 });
+
+test("a save under a backend that could not probe keeps the stored fingerprint", async (t) => {
+  // Observed: keymem run without its MCP env fell back to openai, the probe 401'd so no
+  // migration ran, yet save() stamped "openai:..." over 1024-d bge-m3 vectors. Every later
+  // bge-m3 daemon then saw a "model change" and re-embedded the whole store on startup.
+  const dataDir = await mkdtemp(join(tmpdir(), "sm-modelmig-"));
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const stored = {
+    meta: { embeddingFingerprint: BGEM3_FINGERPRINT },
+    keys: { k1: { id: "k1", concept: "딸기", embedding: [1, 0], key_type: "concept" } },
+    memories: {
+      m1: {
+        id: "m1", content: "사용자는 딸기를 좋아한다", embedding: [1, 0],
+        created_at: 1000, source: null, supersedes: null, depth: 0.7,
+        access_count: 5, last_accessed: 1000, namespace: "default",
+        ttl: null, links: [], contradicts: [],
+      },
+    },
+    links: [{ key_id: "k1", memory_id: "m1", weight: 1.0 }],
+  };
+  await writeFile(join(dataDir, "graph.json"), JSON.stringify(stored), "utf-8");
+
+  process.env.EMBEDDING_BACKEND = "openai";
+  t.after(() => { process.env.EMBEDDING_BACKEND = "local"; });
+  const { emb, mg } = await loadModules(dataDir);
+  emb.__setTestEmbedder(() => { throw new Error("401 Incorrect API key"); });
+  t.after(() => emb.__clearTestEmbedder());
+
+  const g = new mg.MemoryGraph();
+  await g.load();
+  await g.save();
+
+  const saved = JSON.parse(await readFile(join(dataDir, "graph.json"), "utf-8"));
+  assert.equal(saved.meta.embeddingFingerprint, BGEM3_FINGERPRINT);
+});

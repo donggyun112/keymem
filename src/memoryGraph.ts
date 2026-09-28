@@ -1112,10 +1112,6 @@ export class MemoryGraph {
         links.push(this._isAutoLink(kid, mid) ? { key_id: kid, memory_id: mid, weight, auto: true } : { key_id: kid, memory_id: mid, weight });
       }
     }
-    // Stamp the embedding-space fingerprint so a later same-dimension backend swap
-    // is detected on load. Keep _storedFingerprint in sync for in-process reloads.
-    const fingerprint = embeddingFingerprint();
-    this._storedFingerprint = fingerprint;
     // Vectors go to the binary sidecar; graph.json stores embedding: [] (floats as
     // JSON text bloated a 1.3k-memory store to ~93 MB and made save O(graph)-slow).
     const vecs = new Map<string, number[][]>();
@@ -1129,6 +1125,14 @@ export class MemoryGraph {
       if (m.embedding.length > 0) vecs.set(`m:${mid}`, [m.embedding]);
       strippedMems[mid] = { ...m, embedding: [] };
     }
+    // Stamp the fingerprint of the space the stored vectors actually live in, so a later
+    // same-dimension backend swap is detected on load. That is the loaded fingerprint (a
+    // migration updates it), not the current backend: a process whose probe failed never
+    // migrated, and stamping its backend would relabel the vectors and force a spurious
+    // full re-embed on the next correctly configured load. Legacy/empty stores take the
+    // current backend. Keep _storedFingerprint in sync for in-process reloads.
+    const fingerprint = (vecs.size > 0 && this._storedFingerprint) || embeddingFingerprint();
+    this._storedFingerprint = fingerprint;
     const data: GraphData = {
       keys: strippedKeys,
       memories: strippedMems,

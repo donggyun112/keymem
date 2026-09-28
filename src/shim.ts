@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
@@ -96,6 +96,8 @@ async function replaceStaleDaemon(url: string, daemonVersion: string | undefined
   }
 }
 
+let spawnedDaemon: ChildProcess | null = null;
+
 // Poll health until it's up. If not up, autostart the daemon detached, then keep polling.
 // In an autostart race (two shims at once), the loser dies with EADDRINUSE, but once the
 // winner's daemon health is up we return true. Success criterion is "whoever wins, health 200".
@@ -111,7 +113,12 @@ export async function ensureDaemon(
     if (await healthOk(url)) return true;
   }
 
-  if (spawnDaemon) {
+  // A daemon only opens its port after graph.load(), which can outlast timeoutMs (a full
+  // re-embed takes minutes). Without this guard every reconnect retry spawned another
+  // loader, and N daemons re-embedding in parallel pinned every core.
+  // ponytail: per-shim guard only; concurrent shims can still each start one loader.
+  const loading = spawnedDaemon !== null && spawnedDaemon.exitCode === null && spawnedDaemon.signalCode === null;
+  if (spawnDaemon && !loading) {
     const here = dirname(fileURLToPath(import.meta.url));
     const daemonPath = join(here, "daemon.js");
     const child = spawn(process.execPath, [daemonPath], {
@@ -120,6 +127,7 @@ export async function ensureDaemon(
       env: daemonEnv(process.env),
     });
     child.unref();
+    spawnedDaemon = child;
   }
 
   const deadline = Date.now() + timeoutMs;
