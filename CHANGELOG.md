@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.1] - 2026-09-28
+
+### Fixed
+
+- `save()` no longer relabels stored vectors with the current backend's fingerprint. When
+  `load()` could not probe the backend (e.g. keymem run once without its MCP env, so it fell
+  back to openai and got a 401), no migration ran, but the next save still stamped
+  `openai:text-embedding-3-small` over 1024-d bge-m3 vectors. Every correctly configured
+  daemon after that saw a "model change" and re-embedded the whole store on startup. The
+  loaded fingerprint is now kept whenever vectors exist; legacy and empty stores still take
+  the current backend.
+- The shim no longer spawns a new daemon on every reconnect attempt. A daemon opens its port
+  only after `graph.load()`, so a slow load (such as the spurious re-embed above) outlasted the
+  8s health wait and each retry started another loader. Seven daemons re-embedding in parallel
+  pinned every core. A shim now waits for the daemon it started instead of starting another;
+  separate shims reconnecting at the same moment can still each start one.
+
 ## [0.32.0] - 2026-09-28
 
 ### Fixed
