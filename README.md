@@ -311,7 +311,7 @@ The default MCP API crosses from Key Space to one Value while preserving explici
 
 1. `recall(query, context)` returns ranked key clusters and the Top-1 memory under the strongest key. The raw `context` ranks memories within that key.
 2. The memory is a passive preview with `validity`, `matched_key`, and every `connected_keys[].key_id`. It does not increment access/depth, reinforce links, learn aliases, or confirm freshness.
-3. The agent can use relevant content immediately or follow a connected key with `read_key(key_id)`. Later memories are not automatically injected.
+3. The agent checks which facts the question needs. It can use the preview when those facts are present; otherwise it follows a connected key for a missing fact with `read_key(key_id, missing_fact_query)` or recalls that fact directly. It stops when the evidence is complete or no promising path remains. Later memories are not automatically injected.
 4. `read_memory(memory_id, via_key_id)` remains the explicit full-read path. It updates access metadata and reinforces only the traversed edge; it does not confirm or deepen the memory.
 
 Semantically merged keys are preserved as aliases on one canonical key cluster (for example `Python` + `파이썬`). The recommended `bge-m3` profile enables conservative short-key merging by default; override or disable it with `KEYMEM_SHORT_KEY_MERGE`. A key linked to at least three active memories is surfaced as a hub with `is_hub`, `memory_count`, and `specificity` metadata rather than being hidden by IDF. Override the hub threshold with `KEYMEM_KEY_HUB_MIN_LINKS`.

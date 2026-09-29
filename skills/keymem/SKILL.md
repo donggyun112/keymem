@@ -12,13 +12,16 @@ description: Use when the conversation reveals or needs durable knowledge about 
   utterance. Keys match keywords, content matches sentences — the two cues take different paths.
 - Split multi-fact questions into several `recall` calls.
 - On `{status:"no_match"}`, retry with one of the returned `nearest_keys`, or `browse_keys(namespace)`.
-- A hit returns ranked keys plus one passive Top-1 memory. `recall` answers a question — check
-  whether that memory actually answers it before moving on.
-- If it only points elsewhere or is partial, take one more hop. `connected_keys` carries a
-  `relevance` score per key (cosine to your query/context, sorted high→low): pick the top one you
-  did not arrive by, call `read_key(key_id, query, namespace)`, then
-  `read_memory(memory_id, via_key_id, namespace)`. One hop = one call; stop when the answer is
-  complete. Explicit traversal may reinforce the selected path and learn aliases.
+- A hit returns ranked keys plus one passive Top-1 memory. Before answering, identify the facts
+  the question needs and check which ones that memory supplies. Use it directly when the needed
+  evidence is complete; a related memory alone is not necessarily a complete answer.
+- If a required fact is missing, choose an unvisited `connected_keys` concept that fits the
+  missing fact, not just the highest relevance to the original question. Call
+  `read_key(key_id, missing_fact_query, namespace)`, then
+  `read_memory(memory_id, via_key_id, namespace)` on a relevant handle. Recheck after each read;
+  if no connected key fits, `recall` the missing fact directly. Stop when the evidence is complete
+  or no promising path remains. Do not add hops to a complete single-fact answer. Explicit
+  traversal may reinforce the selected path and learn aliases.
 - `<keymem-surfaced>` blocks (the UserPromptSubmit hook) are previews. Load the exact record with
   `read_memory`, apply its `validity` status, and ignore it when irrelevant.
 

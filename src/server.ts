@@ -151,15 +151,15 @@ Stats: {stats}
 
 ### Recall (PROACTIVE — do it often)
 1. **MUST recall before your first reply.** Recall returns ranked key clusters plus one passive Top-1 memory by default. Always pass the active project/context \`namespace\` when one is known.
-2. \`recall\` answers a question: check whether the returned memory actually answers it. Use it directly when it does, applying its \`validity\`. It is unconfirmed and non-reinforcing. Its \`matched_key\` records the incoming edge; \`connected_keys\` are next-hop targets, each with a \`relevance\` score (cosine to your query/context, sorted high→low).
-2a. If the memory only points elsewhere or is partial, take one more hop: pick the highest-relevance \`connected_keys\` entry you did not arrive by, call \`read_key(key_id, query, namespace)\`, then \`read_memory\` on the best handle. One hop = one call; stop when the answer is complete. A full read records access, reinforces only the traversed edge, and may learn aliases; it does not confirm currentness.
+2. Before using \`recall\`'s Top-1 memory, identify the facts the user's question needs and check which ones this preview actually supplies. Use it directly when the needed evidence is complete, applying its \`validity\`. It is unconfirmed and non-reinforcing. Its \`matched_key\` records the incoming edge; \`connected_keys\` are next-hop targets, each with a \`relevance\` score (cosine to your query/context, sorted high→low).
+2a. If a required fact is missing, choose an unvisited \`connected_keys\` concept that fits the missing fact, not just the highest score for the original question. Call \`read_key(key_id, missing_fact_query, namespace)\`, then \`read_memory(memory_id, via_key_id=key_id, namespace)\` on a relevant handle. Recheck what is still missing after each read; if no connected key fits, \`recall\` the missing fact directly. Stop when the evidence is complete or no promising path remains. Do not add hops to a complete single-fact answer. A full read records access, reinforces only the traversed edge, and may learn aliases; it does not confirm currentness.
 3. Recall again whenever the topic shifts. Never say "I don't know" without navigating first.
 4. **Query = short noun/keyword, NOT a full sentence.**
    - ❌ recall("어디 살아"), recall("뭐 마셔") — 구어체 문장은 매칭 안 됨
    - ✅ recall("거주지"), recall("음료") — 명사 키워드로 검색
    - ✅ recall("이름"), recall("직업"), recall("취향") — specific, multiple
    - 복합 개념이면 키워드 여러 개로 분리: recall("운동"), recall("취미"), recall("건강")
-5. \`read_key\` is the deeper-navigation fallback. It returns handles and metadata only. Pass the original focused query so hub memories are relevance-ranked, then call \`read_memory\` to inspect the selected content.
+5. \`read_key\` is the deeper-navigation fallback. It returns handles and metadata only. Pass a focused query for the missing fact so hub memories are relevance-ranked, then call \`read_memory\` to inspect the selected content.
 
 ### Remember (PROACTIVE — capture what matters)
 6. **You MUST save durable info the moment the user shares it — silently, in the same turn.** Do not defer to "later"; later never comes. Mandatory, not optional (see the "Before ending EVERY turn" gate above). No exceptions.
@@ -232,9 +232,10 @@ not full sentences (recall("거주지") not recall("어디 살아")), and split 
 into several recall calls. ALSO pass the raw user utterance as context — keys match keywords, content \
 matches sentences, and the two cues are routed to different paths. On {status:"no_match"}, retry with a \
 nearest_keys concept or browse_keys(namespace) before giving up. recall returns matching keys plus one passive Top-1 memory. \
-recall answers a question, so check whether that memory actually answers it. If it only points elsewhere or is partial, \
-take one more hop: pick the connected_keys entry with the highest relevance that you did not arrive by, call read_key(key_id, query, namespace), \
-then read_memory on the best handle. One hop = one call; stop as soon as the answer is complete. Use the memory directly when it already answers, applying its validity. Passive recall changes no graph state; \
+Before using that memory, identify the facts needed to answer the question and check which are still missing. \
+If a fact is missing, follow an unvisited connected_keys concept that fits that fact with read_key(key_id, missing_fact_query, namespace), \
+then read_memory(memory_id, via_key_id=key_id, namespace) on a relevant handle. Recheck after each read; if no connected key fits, recall the missing fact directly. \
+Stop when the evidence is complete or no promising path remains; do not add hops to a complete single-fact answer. Apply each memory's validity. Passive recall changes no graph state; \
 a full read may reinforce the traversed key path or learn aliases but does not confirm that content is current. \
 \`fresh\` may be used normally. Qualify \`aging\` facts when currentness matters. Never assert a \`stale\` fact as current. Verify it externally or ask the user. \
 Call confirm_memory only after an explicit current user assertion, an authoritative current source, or direct observation. \
@@ -277,7 +278,7 @@ export function createMcpServer(): Server {
       {
         name: "recall",
         description:
-          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. Returns {status, query, namespace, keys, memories}: ranked key clusters plus one passive Top-1 memory selected under the top key. The memory includes validity, matched_key, and connected_keys, each with a relevance score (cosine of that key to your query/context, sorted high→low). recall answers a question: check whether the Top-1 memory actually answers it. If it only points elsewhere, is partial, or the highest-relevance connected key is not the one you arrived by, take one more hop — read_key(that key_id, query, namespace) then read_memory — and stop as soon as the answer is complete. Each hop is one call; the store never fans out for you. Passive recall never reinforces links or changes access, depth, aliases, or confirmation — except: when `context` is a strong restatement of the returned memory, it is auto-confirmed (`memories[0].auto_confirmed: true`) without a separate confirm_memory call. An empty result includes empty keys/memories and nearest_keys.",
+          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. Returns {status, query, namespace, keys, memories}: ranked key clusters plus one passive Top-1 memory selected under the top key. The memory includes validity, matched_key, and connected_keys, each with a relevance score (cosine of that key to your query/context, sorted high→low). Before answering, check whether the Top-1 memory supplies every fact the question needs. If a fact is missing, follow an unvisited connected key that fits that fact with read_key(key_id, missing_fact_query, namespace), then read_memory on a relevant handle; recheck and continue only while a required fact and promising path remain. If no connected key fits, recall the missing fact directly. Do not add hops to a complete single-fact answer. Passive recall never reinforces links or changes access, depth, aliases, or confirmation — except: when `context` is a strong restatement of the returned memory, it is auto-confirmed (`memories[0].auto_confirmed: true`) without a separate confirm_memory call. An empty result includes empty keys/memories and nearest_keys.",
         inputSchema: {
           type: "object",
           properties: {
@@ -317,7 +318,7 @@ export function createMcpServer(): Server {
       {
         name: "read_key",
         description:
-          "List the memories stored under one key (concept), ranked. Returns the canonical key, its aliases, and hub metadata plus ranked memory IDs, metadata, and validity — never memory content. Always pass the original focused query and active namespace when known: handles are then ranked by content relevance, which is essential for hubs. Each memory's score is content_relevance × link_weight × depth_factor × freshness_factor when query is passed (link_weight × depth_factor × freshness_factor otherwise); content_relevance is a cosine, comparable to recall's key relevance — both only meaningful within this one key's ranking. Call read_memory(memory_id, via_key_id=key_id, namespace) on the selected handle to inspect the fact and reinforce the path; reading does not confirm that its content is current. Use limit/offset to page without flooding context.",
+          "List the memories stored under one key (concept), ranked. Returns the canonical key, its aliases, and hub metadata plus ranked memory IDs, metadata, and validity — never memory content. Pass a focused query for the missing fact and the active namespace when known: handles are then ranked by content relevance, which is essential for hubs. Each memory's score is content_relevance × link_weight × depth_factor × freshness_factor when query is passed (link_weight × depth_factor × freshness_factor otherwise); content_relevance is a cosine, comparable to recall's key relevance — both only meaningful within this one key's ranking. Call read_memory(memory_id, via_key_id=key_id, namespace) on the selected handle to inspect the fact and reinforce the path; reading does not confirm that its content is current. Use limit/offset to page without flooding context.",
         inputSchema: {
           type: "object",
           properties: {
