@@ -53,8 +53,11 @@ jobs:
       # plugin.json and .claude-plugin/plugin.json are generated from package.json by the build.
       # If the build changes them, the tagged commit was made without running it, and the plugin
       # would ship advertising the previous version.
-      - name: Generated plugin manifests must be committed
-        run: git diff --exit-code -- plugin.json .claude-plugin/plugin.json
+      - name: Generated plugin files must be committed
+        run: git diff --exit-code -- plugin.json .claude-plugin/plugin.json hooks/keymem-hook.mjs
+
+      - name: Published package includes the hook
+        run: npm pack --dry-run --json | jq -e '.[0].files | map(.path) | index("hooks/hooks.json") != null and index("hooks/keymem-hook.mjs") != null'
 
       - name: Publish to npm
         run: npm publish --provenance --access public

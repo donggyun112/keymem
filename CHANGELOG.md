@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.2] - 2026-09-29
+
+### Fixed
+
+- The `UserPromptSubmit` hook now waits up to 9 seconds for `/inject`, with a 10-second
+  host timeout. The previous 800 ms client limit silently discarded results from the
+  local bge-m3 + reranker path (6–7 seconds on a 931-memory store). A stopped or
+  unresponsive daemon still leaves the prompt unblocked after the timeout.
+- npm tarballs now include `hooks/` so manual installs can use the documented hook path.
+- Recall guidance now follows a connected key for a missing fact instead of answering
+  from the first relevant preview when that preview is incomplete.
+
 ## [0.32.1] - 2026-09-28
 
 ### Fixed

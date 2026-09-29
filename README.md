@@ -131,6 +131,8 @@ codex plugin add keymem@keymem
 Codex prompts once to trust the hook; approve it or the push path stays silent. The plugin defaults
 to local `bge-m3` embeddings (auto-downloads ~570MB on first run, no API key). For OpenAI
 embeddings, use the manual setup below instead — plugin MCP servers only see the env they declare.
+The synchronous hook waits up to 9 seconds for `/inject` (set `KEYMEM_HOOK_TIMEOUT_MS` to tune it);
+local embedding and reranking can add several seconds to prompts that trigger recall.
 
 ### Claude Code (manual)
 
@@ -160,7 +162,7 @@ talks to. For the hook, add to `~/.codex/config.toml`:
 [[hooks.UserPromptSubmit.hooks]]
 type = "command"
 command = "node /absolute/path/to/keymem/hooks/keymem-hook.mjs"
-timeout = 5
+timeout = 10
 ```
 
 Codex only forwards the env vars declared in its MCP entry, so pass every `KEYMEM_*` /

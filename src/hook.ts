@@ -10,12 +10,12 @@ import type { ValidityView } from "./decay.js";
 //
 // Contract: NEVER block the prompt and NEVER wake the daemon.
 //  - daemon down → ECONNREFUSED → exit 0 silently (the MCP shim owns daemon spawning)
-//  - daemon cold / slow → abort at KEYMEM_HOOK_TIMEOUT_MS (default 800 ms) → exit 0
+//  - daemon cold / slow → abort at KEYMEM_HOOK_TIMEOUT_MS (default 9000 ms) → exit 0
 //  - any parse error → exit 0
 // stdin:  Claude Code hook JSON ({ prompt, ... })
 // stdout: { hookSpecificOutput: { hookEventName, additionalContext } } or nothing
 const PORT = Number(process.env.KEYMEM_DAEMON_PORT ?? 8765);
-const TIMEOUT_MS = Number(process.env.KEYMEM_HOOK_TIMEOUT_MS ?? 800);
+const TIMEOUT_MS = Number(process.env.KEYMEM_HOOK_TIMEOUT_MS ?? 9000);
 const TOP_K = Number(process.env.KEYMEM_HOOK_TOP_K ?? 2);
 const MAX_CHARS = 400; // per-memory preview budget in the injected context
 // Acknowledgments ("ㄱㄱ", "ok") carry no recall cue — skip them and save the

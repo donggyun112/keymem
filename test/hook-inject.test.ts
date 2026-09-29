@@ -91,3 +91,33 @@ test("hook renders fresh and stale injected validity with currentness guidance",
   assert.match(context, /stale.*(?:verify externally|ask the user)/is);
   assert.doesNotMatch(context, /verify with read_memory.*before asserting/i);
 });
+
+test("hook accepts a slow healthy daemon with its default timeout", async (t) => {
+  const daemon = createServer(async (req, res) => {
+    for await (const _chunk of req) { /* consume request */ }
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ memories: [{ id: "slow-memory", content: "A relevant fact." }] }));
+  });
+  daemon.listen(0, "127.0.0.1");
+  await once(daemon, "listening");
+  t.after(() => new Promise<void>((resolve, reject) => {
+    daemon.close((error) => error ? reject(error) : resolve());
+  }));
+
+  const address = daemon.address();
+  assert.ok(address && typeof address === "object");
+  const env = { ...process.env, KEYMEM_DAEMON_PORT: String(address.port) };
+  delete env.KEYMEM_HOOK_TIMEOUT_MS;
+  const child = spawn(
+    fileURLToPath(new URL("../node_modules/.bin/tsx", import.meta.url)),
+    [fileURLToPath(new URL("../src/hook.ts", import.meta.url))],
+    { env, stdio: ["pipe", "pipe", "pipe"] }
+  );
+  let stdout = "";
+  child.stdout.setEncoding("utf-8").on("data", (chunk) => { stdout += chunk; });
+  child.stdin.end(JSON.stringify({ prompt: "What relevant fact should be recalled?" }));
+  const [code] = await once(child, "close");
+  assert.equal(code, 0);
+  assert.match(stdout, /slow-memory/);
+});
