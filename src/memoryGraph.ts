@@ -4,6 +4,7 @@ import { join } from "path";
 import { Mutex } from "async-mutex";
 import { cfgRaw, dataDir } from "./env.js";
 import { selectInject } from "./inject.js";
+import { timed } from "./timing.js";
 import { analyzeTaskEvidence, projectTaskEvidence } from "./evidenceSelection.js";
 import MiniSearch from "minisearch";
 import { embedTextAsync, EMBEDDING_BACKEND, embeddingFingerprint, getThresholdProfile, isShortConcept, inContradictionBand } from "./embedding.js";
@@ -64,6 +65,7 @@ const KEY_HUB_MIN_LINKS = Number.isFinite(_hubMinLinks)
 // joint (query, memory) relevance, then keeps the requested top_k. KEYMEM_RERANK=false disables it.
 // A wider pool than top_k lets the reranker rescue a right answer the fused score buried.
 const RERANK_POOL = Number(cfgRaw("RERANK_POOL") ?? 30);
+const INJECT_RERANK_POOL = 12; // pool sweep on 16 prompts: 12 → ~0.9 s, top-1 == pool-30 in 14/16
 const TASK_EVIDENCE_SELECTION = cfgRaw("TASK_EVIDENCE_SELECTION") !== "false";
 
 // Strict-hop promotion (see findStrictHopCandidate below). Default-on when the caller already
@@ -2315,6 +2317,7 @@ export class MemoryGraph {
       maxChars?: number;
       minRelScore?: number;
       taskSelection?: boolean;
+      rerankPool?: number;
     } = {},
     contextText: string | null = null
   ): Promise<{ keys: object[]; memories: object[] }> {
@@ -2325,7 +2328,7 @@ export class MemoryGraph {
     // SOMETHING before we inject. Passing minScore=0 disabled it, so a query with no real match
     // (e.g. a cross-lingual miss) filled every slot with coincidental BM25 hits — pure junk. Pull a
     // wider candidate pool, then let selectInject pick by relevance / depth / exploration.
-    const keys = await this.searchKeys(query, 8, namespace, contextText);
+    const keys = await timed("inject:searchKeys", () => this.searchKeys(query, 8, namespace, contextText));
     const minRelScore = Number.isFinite(opts.minRelScore)
       ? Math.max(0, Math.min(0.9, opts.minRelScore as number))
       : INJECT_MIN_REL_SCORE;
@@ -2341,13 +2344,16 @@ export class MemoryGraph {
       relevance_score?: number;
       content_relevance_score?: number;
     };
-    const pool = (await this.recall(
+    const pool = (await timed("inject:recall", () => this.recall(
       query, Math.max(topK * 3, 15), namespace, true, 2, 0, MIN_SCORE_THRESHOLD,
       GATE_Z_THRESHOLD, KEY_GATE_THRESHOLD, 0, false, // reinforce=false: injection is passive
       contextText,
       false, // project after inject-specific filtering, using the caller's topK
-      true // retain content utility only inside this private candidate pool
-    )) as InjectMemory[];
+      true, // retain content utility only inside this private candidate pool
+      // Cross-encoder rerank is ~75 ms/doc (sequential): the default 30-doc pool costs ~2.3 s per
+      // prompt. Inject only needs the top few, so rerank a small pool. 0 = skip rerank.
+      opts.rerankPool ?? Number(cfgRaw("INJECT_RERANK_POOL") ?? INJECT_RERANK_POOL)
+    ))) as InjectMemory[];
     const taskSelection = opts.taskSelection ?? TASK_EVIDENCE_SELECTION;
     const poolKeys = new Map<string, Key>();
     for (const memory of pool) {
@@ -2443,7 +2449,10 @@ export class MemoryGraph {
     // Path B) while `query` keeps driving keys/BM25/literal matching. See searchKeys.
     contextText: string | null = null,
     taskSelection = TASK_EVIDENCE_SELECTION,
-    includeSelectionUtility = false
+    includeSelectionUtility = false,
+    // null = default pool (max(actualTopK, RERANK_POOL)); 0 = skip rerank; n = rerank exactly
+    // the top-n fused candidates (the unreranked tail is dropped).
+    rerankPool: number | null = null
   ): Promise<object[]> {
     if (Object.keys(this.memories).length === 0) return [];
 
@@ -2795,8 +2804,8 @@ export class MemoryGraph {
     // recalls and writes proceed meanwhile. It only READS immutable memory content
     // (all reads happen synchronously before the await) and mutates nothing shared.
     let ranked: [string, number][] = gated.slice(0, actualTopK);
-    if (rerankEnabled() && gated.length > 0) {
-      let pool = gated.slice(0, Math.max(actualTopK, RERANK_POOL));
+    if (rerankPool !== 0 && rerankEnabled() && gated.length > 0) {
+      let pool = gated.slice(0, rerankPool ?? Math.max(actualTopK, RERANK_POOL));
       // Guarantee the strict-hop candidate reaches the cross-encoder even when its fused
       // score would have put it outside RERANK_POOL — the corpus-density bug this feature
       // fixes (bench/edge-experiments-results.json measured a real hop-2 hit ranked ~15-18th

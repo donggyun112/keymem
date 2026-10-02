@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { KNOWN_MODELS, defaultModelDir, ensureModelFiles, type Fetcher } from "./modelDownload.js";
 import { availableParallelism } from "node:os";
 import { cfgRaw, cfgName, homeBaseDir, modelThreads } from "./env.js";
+import { timed } from "./timing.js";
 
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 export const OPENAI_EMBEDDING_MODEL =
@@ -488,10 +489,14 @@ export function isShortConcept(concept: string): boolean {
   return tokens.length <= SHORT_CONCEPT_MAX_TOKENS || trimmed.length <= SHORT_CONCEPT_MAX_CHARS;
 }
 
-export async function embedTextAsync(
+export function embedTextAsync(
   text: string,
   inputType: EmbeddingInputType = "passage"
 ): Promise<number[]> {
+  return timed(`embed:${inputType}(${text.length}ch)`, () => embedTextImpl(text, inputType));
+}
+
+async function embedTextImpl(text: string, inputType: EmbeddingInputType): Promise<number[]> {
   if (_testEmbedder) return _testEmbedder(text, inputType);
   if (EMBEDDING_BACKEND === "local") {
     return embedLocal(text, inputType);

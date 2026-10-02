@@ -10,6 +10,7 @@
 // precision pass never makes recall unavailable.
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
+import { timed } from "./timing.js";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { KNOWN_MODELS, defaultModelDir, ensureModelFiles } from "./modelDownload.js";
@@ -73,7 +74,11 @@ async function ensureLoaded(): Promise<boolean> {
  * Relevance score per candidate text for the query (higher = more relevant).
  * Returns null when reranking is unavailable (caller keeps its existing order).
  */
-export async function rerankScores(query: string, texts: string[]): Promise<number[] | null> {
+export function rerankScores(query: string, texts: string[]): Promise<number[] | null> {
+  return timed(`rerank(${texts.length} docs)`, () => rerankScoresImpl(query, texts));
+}
+
+async function rerankScoresImpl(query: string, texts: string[]): Promise<number[] | null> {
   if (_testReranker) return await _testReranker(query, texts);
   if (!(await ensureLoaded())) return null;
   const hasType = _session.inputNames.includes("token_type_ids");

@@ -9,6 +9,7 @@ import { normalizeNamespace } from "./memoryGraph.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { graph, createMcpServer, VERSION } from "./server.js";
+import { timed } from "./timing.js";
 
 const DEFAULT_PORT = Number(process.env.KEYMEM_DAEMON_PORT ?? 8765);
 const dataDirPath = dataDir();
@@ -164,13 +165,13 @@ export async function startDaemon(
         // ("음료는" never `includes`-matches the key "음료"). The push path's cue is a
         // full sentence, so precision comes from the dense anchor gate + the
         // no-bm25-only provenance filter instead.
-        const result = await graph.recallInject(
+        const result = await timed("inject:total", () => graph.recallInject(
           prompt,
           typeof body?.top_k === "number" ? body.top_k : 2,
           typeof body?.namespace === "string" ? body.namespace : null,
           { minRelScore: 0 },
           prompt // the utterance IS the content-path cue (dual-path recall)
-        );
+        ));
         // Push must be conservative: once ANY candidate anchors, recall keeps the whole
         // fused set, so low-relevance tail memories (~0.47 raw sim, right at the noise
         // band) ride in beside real hits (0.75+ measured). An absolute relevance floor
