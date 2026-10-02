@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.3] - 2026-10-02
+
+### Changed
+
+- The `/inject` hook path now reranks only the top 12 candidates instead of 30
+  (`KEYMEM_INJECT_RERANK_POOL`; `0` skips rerank). The cross-encoder was ~95% of the ~2.5 s
+  per-prompt latency; on a 954-memory store this cuts it to ~0.9 s. On a 16-prompt replay the
+  top-1 memory matched the old pool-30 result in 14/16 cases (top-2 set in 10/16), so some
+  injected previews differ. Plain `recall()` is unchanged. `KEYMEM_RERANK_POOL` never shrank
+  the inject pool because `recall(expand=true)` widens it to `topK*2`; the new explicit
+  `rerankPool` argument bypasses that.
+
+### Added
+
+- `KEYMEM_TIMING=1` logs per-stage latency (embedding, rerank, inject) to stderr.
+
 ## [0.32.2] - 2026-09-29
 
 ### Fixed
