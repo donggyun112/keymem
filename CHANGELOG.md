@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.33.1] - 2026-10-18
+
+### Fixed
+
+- Prompt hooks always inject what and when to save: durable preferences, decisions,
+  corrections, goals, project facts and verified outcomes, in the same turn.
+  Write guidance no longer depends on MCP instructions or loading the full skill.
+- Short prompts, empty retrieval results and unavailable daemons retain the write
+  policy while memory previews remain optional, unconfirmed context.
+
 ## [0.33.0] - 2026-10-18
 
 ### Changed

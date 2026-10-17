@@ -5,6 +5,24 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+test("hook always supplies write policy without a recall cue or a working daemon", async () => {
+  for (const prompt of ["ㅇㅇ", "/help", "", "Remember this durable project decision"]) {
+    const child = spawn(process.execPath,
+      ["--import", "tsx", fileURLToPath(new URL("../src/hook.ts", import.meta.url))],
+      { env: { ...process.env, KEYMEM_DAEMON_PORT: "0" }, stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    child.stdout.setEncoding("utf-8").on("data", chunk => { stdout += chunk; });
+    child.stdin.end(JSON.stringify({ prompt }));
+    const [code] = await once(child, "close");
+    assert.equal(code, 0);
+    const context = JSON.parse(stdout).hookSpecificOutput.additionalContext;
+    assert.match(context, /before finishing each reply/i);
+    assert.match(context, /preferences, decisions, corrections/i);
+    assert.match(context, /same turn/i);
+    assert.match(context, /nothing new.*do not write/i);
+  }
+});
+
 test("hook renders fresh and stale injected validity with currentness guidance", async (t) => {
   const daemon = createServer(async (req, res) => {
     for await (const _chunk of req) { /* consume request */ }
@@ -76,6 +94,7 @@ test("hook renders fresh and stale injected validity with currentness guidance",
 
   const payload = JSON.parse(stdout);
   const context = payload.hookSpecificOutput.additionalContext as string;
+  assert.match(context, /<keymem-policy>[\s\S]*remember[\s\S]*<\/keymem-policy>\s*<keymem-surfaced>/);
   assert.match(
     context,
     /- \[fresh-memory[^\n]*validity=\{[^}\n]*"status":"fresh"[^}\n]*"verification_recommended":false[^}\n]*"verification_required":false\}/
