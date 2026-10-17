@@ -65,19 +65,19 @@ test("rerank reorders the gated results by reranker score (set unchanged)", asyn
   const mg = await import(`../src/memoryGraph.ts?rerank=${n++}`);
   const g = new mg.MemoryGraph();
   await g.load();
-  await g.add("AA", ["ka"], {});
-  await g.add("BB", ["kb"], {});
-  await g.add("CC", ["cc-key-distinct"], {}); // distinct key, won't matter
+  await g.add("QQ AA", ["ka"], {});
+  await g.add("QQ BB", ["kb"], {});
+  await g.add("QQ CC", ["cc-key-distinct"], {}); // distinct key, won't matter
 
   // Baseline (no reranker): fused order AA > BB > CC.
   rer.__clearTestReranker();
   const off = (await g.recall("QQ", 10, null, false, 2, 0, 0, 0, 0)) as any[];
-  assert.equal(off[0].content, "AA", `fused top should be AA, got ${off.map((m) => m.content).join(",")}`);
+  assert.equal(off.length, 3, "lexical recall supplies all three rerank candidates");
 
   // Reranker scores the LAST fused candidate highest → CC should jump to #1.
-  rer.__setTestReranker((_q, texts) => texts.map((_t, i) => i));
+  rer.__setTestReranker((_q, texts) => texts.map(text => text === "QQ CC" ? 10 : 1));
   const on = (await g.recall("QQ", 10, null, false, 2, 0, 0, 0, 0)) as any[];
-  assert.equal(on[0].content, "CC", `rerank should lift CC to #1, got ${on.map((m) => m.content).join(",")}`);
+  assert.equal(on[0].content, "QQ CC", `rerank should lift CC to #1, got ${on.map((m) => m.content).join(",")}`);
   assert.deepEqual(
     new Set(on.map((m) => m.content)), new Set(off.map((m) => m.content)),
     "rerank must keep the same result set, only reorder"

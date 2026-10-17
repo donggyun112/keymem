@@ -1,4 +1,4 @@
-// Manual calibration + verification of the distribution not-found gate on real e5.
+// Manual key-similarity diagnostic; body-vector distribution gating has been removed.
 // Run: EMBEDDING_BACKEND=local npx tsx test/distribution-gate.live.ts
 // (Optionally LOCAL_EMBEDDING_MODEL=bge-m3 LOCAL_EMBEDDING_MODEL_PATH=/abs/dir to compare.)
 import { mkdtemp, rm } from "node:fs/promises";
@@ -34,13 +34,13 @@ const seed: [string, string[]][] = [
 ];
 for (const [c, k] of seed) await g.add(c, k);
 
-console.log(`model=${LOCAL_EMBEDDING_MODEL}  profile.gateZ=${getThresholdProfile().gateZ}\n`);
+console.log(`key model=${LOCAL_EMBEDDING_MODEL}  keyRecall=${getThresholdProfile().keyRecall}\n`);
 
-// Measure robust-z of the top content sim for FOUND vs NOT-FOUND queries.
-const allMems = Object.values((g as any).memories).map((m: any) => m.embedding);
+// Measure key similarities only. This is diagnostic, not an active retrieval gate.
+const allKeys = Object.values(g.keys).map((key) => key.embedding);
 async function topZ(q: string): Promise<number> {
   const qe = await embedTextAsync(q, "query");
-  const sims = allMems.map((e: number[]) => cos(qe, e));
+  const sims = allKeys.map((e: number[]) => cos(qe, e));
   const top = Math.max(...sims);
   return robustZScore(top, sims);
 }
@@ -54,7 +54,7 @@ for (const q of notFound) console.log(`  ${(await topZ(q)).toFixed(2).padStart(6
 // End-to-end: with the active e5 gateZ, not-found should be [] and found non-empty.
 let pass = 0, fail = 0;
 const ck = (n: string, c: boolean, d = "") => { c ? pass++ : fail++; console.log(`  ${c ? "✅" : "❌"} ${n}  ${d}`); };
-console.log("\nend-to-end (active profile gateZ):");
+console.log("\nend-to-end (Kiwi BM25 + key matching):");
 for (const q of found) { const r = (await g.recall(q, 5)) as any[]; ck(`found: ${q}`, r.length >= 1, `n=${r.length}`); }
 for (const q of notFound) { const r = (await g.recall(q, 5)) as any[]; ck(`not-found: ${q} -> []`, r.length === 0, `n=${r.length}`); }
 

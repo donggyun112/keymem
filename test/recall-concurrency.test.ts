@@ -50,8 +50,8 @@ async function freshGraph(t: any, tag: string) {
 
 test("a write proceeds while a rerank is in flight (rerank is not under the lock)", async (t) => {
   const { g, rer } = await freshGraph(t, "cc-nolock");
-  await g.add("A", ["ka"], {});
-  await g.add("B", ["kb"], {});
+  await g.add("QQ A", ["ka"], {});
+  await g.add("QQ B", ["kb"], {});
 
   // Barrier: rerank announces it started, then blocks until the interleaved add
   // has fully completed. If recall held the lock across rerank, that add could
@@ -85,8 +85,8 @@ test("a write proceeds while a rerank is in flight (rerank is not under the lock
 
 test("concurrent recalls + adds leave the graph file valid (no save race)", async (t) => {
   const { g, rer, dir } = await freshGraph(t, "cc-save");
-  await g.add("A", ["ka"], {});
-  await g.add("B", ["kb"], {});
+  await g.add("QQ A", ["ka"], {});
+  await g.add("QQ B", ["kb"], {});
   rer.__setTestReranker((_q, texts) => texts.map((_t, i) => 10 - i));
 
   // Fire a storm: 20 recalls (each markDirty + flush) interleaved with 10 adds.

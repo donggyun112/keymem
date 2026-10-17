@@ -14,10 +14,10 @@ import test from "node:test";
 let n = 0;
 // Query is orthogonal to the (generic) key concept but aligned with the drink memory content.
 const vecs: Record<string, number[]> = {
-  DRINKQ: [1, 0, 0, 0, 0],
+  coffee: [1, 0, 0, 0, 0],
   취향: [0, 1, 0, 0, 0], // keySim to query = 0  -> only content can surface it
-  drinkContent: [0.9, 0.436, 0, 0, 0], // cos(query) ~= 0.9
-  foodContent: [0, 0, 1, 0, 0], // cos(query) = 0
+  "coffee preference": [0.9, 0.436, 0, 0, 0], // cos(query) ~= 0.9
+  "rice preference": [0, 0, 1, 0, 0], // cos(query) = 0
 };
 const vec = (t: string): number[] => vecs[t] ?? [0, 0, 0, 0, 1];
 
@@ -38,10 +38,10 @@ async function freshGraph(t: any) {
 
 test("searchKeys surfaces a key whose content matches even if the concept misses the query", async (t) => {
   const g = await freshGraph(t);
-  await g.add("drinkContent", ["취향"], {}); // generic key, but content matches the query
-  await g.add("foodContent", ["취향"], {});
+  await g.add("coffee preference", ["취향"], {}); // generic key, but content matches the query
+  await g.add("rice preference", ["취향"], {});
 
-  const keys = (await g.searchKeys("DRINKQ", 10)) as Array<{ concept: string; match_type: string }>;
+  const keys = (await g.searchKeys("coffee", 10)) as Array<{ concept: string; match_type: string }>;
   const hit = keys.find((k) => k.concept === "취향");
   // keySim is 0 and there is no literal overlap; pre-cure this key would be excluded.
   assert.ok(hit, `generic key "취향" must surface via content match, got ${keys.map((k) => k.concept).join(",")}`);
@@ -50,11 +50,11 @@ test("searchKeys surfaces a key whose content matches even if the concept misses
 
 test("readKey ranks a hub's memories by content relevance when given the query", async (t) => {
   const g = await freshGraph(t);
-  const [drinkId] = await g.add("drinkContent", ["취향"], {});
-  await g.add("foodContent", ["취향"], {});
+  const [drinkId] = await g.add("coffee preference", ["취향"], {});
+  await g.add("rice preference", ["취향"], {});
   const keyId = Object.keys(g.keys).find((k: string) => g.keys[k].concept === "취향")!;
 
-  const withQuery = (await g.readKey(keyId, { query: "DRINKQ" })) as { memories: Array<{ memory_id: string }> };
+  const withQuery = (await g.readKey(keyId, { query: "coffee" })) as { memories: Array<{ memory_id: string }> };
   assert.equal(withQuery.memories[0].memory_id, drinkId, "query-relevant memory must rank first in the hub");
 
   // Backward compat: no query -> prior link-weight/recency ordering (no content rank applied).

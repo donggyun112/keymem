@@ -20,7 +20,6 @@ function memory(id: string, links: string[] = [], ttl: number | null = null): Me
   return {
     id,
     content: `memory ${id}`,
-    embedding: [1, 0],
     created_at: 0,
     source: null,
     supersedes: null,

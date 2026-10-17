@@ -233,7 +233,7 @@ pnpm start
 - **Key types** — `concept` keys match by similarity; `name`/`proper_noun` keys match exactly, so "동건" never matches "뉴턴" just for being short.
 - **Cross-lingual key merging (IDF)** — `파이썬` and `Python` collapse into one canonical cluster instead of fragmenting the key space.
 - **Hebbian link learning** — the path an agent actually traverses gets reinforced ("fire together, wire together"), so useful associations become easier to reach.
-- **Hybrid retrieval** (optional direct mode) — BM25 + dense + Reciprocal Rank Fusion, with depth/confirmation-freshness modulation and configurable multi-hop expansion.
+- **Hybrid retrieval** (optional direct mode) — Kiwi BM25 over keys and content + key embeddings + Reciprocal Rank Fusion, with depth/confirmation-freshness modulation and configurable multi-hop expansion.
 - **Cross-encoder reranking** (core default) — `bge-reranker-v2-m3` re-scores the passive Top-1 pool and compatibility direct-mode candidates.
 - **Local-first** — all data in a local JSON graph; no external database. OpenAI or fully-local embeddings (auto-downloaded).
 
@@ -320,13 +320,12 @@ Semantically merged keys are preserved as aliases on one canonical key cluster (
 
 ### Associative Recall Engine (library API, used internally by `recallInject`)
 
-`MemoryGraph.recall()` is a one-call ranked retrieval path, not exposed as its own MCP tool — `recallInject()` (the auto-injection hook in `daemon.ts`) is its production caller, and it's available directly if you use keymem as a library. Three signals run in parallel and are fused with **Reciprocal Rank Fusion** (`RRF_K = 60`):
+`MemoryGraph.recall()` is a one-call ranked retrieval path used by `recallInject()` and available to library callers. It combines two candidate paths with **Reciprocal Rank Fusion** (`RRF_K = 60`):
 
-- **BM25 (sparse):** lexical full-text search over memory content (MiniSearch, fuzzy + prefix). Catches exact terms, names, and rare tokens that embeddings blur.
-- **Dense Path A (key matching):** query embedding → match keys → follow links → memories. Score = `keySim × IDF × linkWeight`, summed across all matching keys.
-- **Dense Path B (content matching):** query embedding → directly compare against memory content embeddings. Finds memories even when they weren't tagged with the right keys.
+- **Kiwi BM25:** lexical search over memory keys and content, using the official `kiwi-nlp` WASM tokenizer in Node. Korean morphology is tokenized locally; no Python process is required.
+- **Key matching:** query embeddings match concept keys; exact names and aliases provide literal entry points. Key links lead to candidate memories.
 
-Sparse and dense rank lists are merged by RRF, then modulated by depth and confirmation freshness before configurable multi-hop expansion (`hops=1–5`, default `2`). The default MCP `recall` tool uses explicit key navigation (above) instead of this engine, so agents drive expansion deliberately rather than collapsing the graph into one search call.
+Memory bodies have no embeddings. Cross-encoder reranking remains enabled and scores query–content pairs directly. Graph expansion, depth, and confirmation freshness still affect ranking. The default MCP `recall` tool uses explicit key navigation, so agents can drive later hops deliberately.
 
 ### Hebbian Link Learning
 
@@ -368,46 +367,26 @@ Link weights feed back into `read_key()` ranking, so repeatedly selected paths b
 
 **`recall()` algorithm (hybrid, configurable 1–5 hops; default 2; used internally by `recallInject()`):**
 
-Three retrieval signals run in parallel, then get fused and expanded:
+1. Tokenize the query and memory keys/content with Kiwi, then retrieve BM25 candidates.
+2. Match concept keys with query embeddings and literal name/alias matches, then follow their memory links.
+3. Fuse lexical and key-path ranks with RRF (`RRF_K = 60`).
+4. Apply depth and confirmation freshness, and expand through shared keys and explicit `related_to` links for the configured hops.
+5. Rerank candidates with the cross-encoder and return ranked results. Matched-link reinforcement and explored-link decay retain their existing behavior.
 
-1. **BM25 (sparse):** lexical search over memory content (MiniSearch, fuzzy `0.2` + prefix). Keep top 50.
-2. **Dense Path A (keys):** embed query → match keys (concept: cosine ≥ threshold; name/proper_noun: substring match → score `1.0`) → take top 10 keys → follow links. Score = `keySim × IDF × linkWeight`, summed across matching keys.
-3. **Dense Path B (content):** compare query embedding directly against memory content embeddings (cosine ≥ threshold).
-4. **RRF fusion:** merge the BM25 and dense rank lists via `score += 1 / (RRF_K + rank + 1)` (`RRF_K = 60`).
-5. **Depth & freshness modulation:** `score × (0.9 + depth × 0.1) × (0.2 + 0.8 × freshness)`, using the selected 7/90/365-day half-life or no decay for `permanent`.
-6. **Associative expansion (`hops`, default 2):** breadth-first from the directly-matched set — each round follows shared keys (`× HOP_DECAY(0.3) × IDF × linkWeight`) and explicit `related_to` links (bidirectional, `× HOP_DECAY`) to the next frontier. `hops=N` walks up to N steps, so a memory's `hop` is its shortest chain distance. Score decays by `HOP_DECAY` per hop.
-7. **Hebbian update:** reinforce matched-key links of returned memories (`+0.1`), decay explored-but-unreturned links (`−0.005`).
-8. Return ranked results with `hop` field (`1` = direct, `2+` = associative distance).
+### Storage and duplicate handling
 
-### Similarity thresholds (calibrated per embedding model)
+Only keys retain embedding vectors. Existing memory-body vectors are ignored on load and omitted after the next successful save; key vectors, memory text, links, and history are retained. Back up the store before upgrading if you need to reopen it with an older release.
 
-Embedding backends have very different cosine distributions, so a single threshold set cannot serve all of them. The thresholds below are calibrated per model (`getThresholdProfile()` in `src/embedding.ts`):
+Duplicate detection compares normalized memory text exactly, within the existing namespace and active-memory rules. Paraphrases are separate records. Automatic confirmation requires normalized utterance and body text to match exactly. New memories do not gain links or contradiction flags from body-vector similarity; supply keys and explicit relationships, and use `correct` for changed facts. Existing explicit links and recorded contradictions remain readable.
 
-| Threshold | OpenAI | Local BGE (en) | Local e5 (multilingual) |
-| --- | --- | --- | --- |
-| Key recall (query↔key cosine) | 0.28 | 0.60 | 0.85 |
-| Content recall (query↔content cosine) | 0.28 | 0.50 | 0.80 |
-| Key auto-link | 0.50 | 0.60 | 0.93 |
-| Key merge | 0.85 | 0.85 | 0.97 |
-| Memory dedup | 0.90 | 0.90 | 0.985 |
+### Key similarity thresholds
 
-**Why e5 differs so much:** multilingual-e5 packs embeddings into a narrow high-cosine band (~0.86–0.99). Same-word query↔key pairs (asymmetric `query:`/`passage:` prefixes) still separate cleanly (~0.89 vs ≤0.82), but key↔key and content↔content do **not** — distinct facts like *"A uses Postgres"* and *"B uses Mongo"* sit at ~0.96, dangerously close to true paraphrases (~0.99). Hence e5's merge/dedup/auto-link thresholds are pushed high to avoid silently collapsing distinct memories.
+Embedding thresholds apply to keys, not memory bodies. `getThresholdProfile()` in `src/embedding.ts` supplies model-specific defaults; use `KEYMEM_KEY_RECALL`, `KEYMEM_KEY_MERGE`, `KEYMEM_KEY_AUTOLINK` (auto-key alias promotion), and `KEYMEM_SHORT_KEY_MERGE` to tune key routing and canonicalization. An uncalibrated model falls back to the BGE profile with a warning.
 
-**Drift escape hatch:** if you switch models or your data's character drifts, override any threshold without code changes:
+Legacy body-cosine settings (`KEYMEM_CONTENT_RECALL`, `KEYMEM_CONTENT_RECALL_SHORT`, `KEYMEM_MEMORY_DEDUP`, `KEYMEM_CONTRADICTION`, `KEYMEM_MIN_SCORE`, `KEYMEM_GATE_Z`, and `KEYMEM_KEY_GATE`) no longer control memory retrieval or writes. BM25 scores, key cosine scores, RRF ranks, and cross-encoder scores are different scales; do not reuse an old body-cosine threshold as a lexical relevance threshold.
 
-```
-KEYMEM_KEY_RECALL=0.82
-KEYMEM_MEMORY_DEDUP=0.99
-# also: _KEY_MERGE, _KEY_AUTOLINK, _CONTENT_RECALL  (values in [0,1])
-```
-
-**Score gate, distribution gate, and contradiction band** can also be tuned per deployment:
-
-| Env var | Default (profile) | Description |
+| Env var | Default | Description |
 | --- | --- | --- |
-| `KEYMEM_MIN_SCORE` | per-model (e.g. `0.55` for bge-m3) | Absolute cosine floor for `recall()`/`recallInject()`. Set to `0` to disable. |
-| `KEYMEM_GATE_Z` | `0` by default | Opt-in distribution gate for `recall()`/`recallInject()` (robust-z, median/MAD). Values around 2–5 are typical; `0` disables it. |
-| `KEYMEM_CONTRADICTION` | per-model (e.g. `0.80` for bge-m3) | Contradiction-band lower bound. Memory pairs whose cosine similarity falls in `[contradiction, memoryDedup)` are flagged as contradictions. `read_memory()` exposes conflicting IDs. |
 | `KEYMEM_AUTOKEY` | `true` | Auto-key self-healing: learn missing search terms from real usage. Set `false` to disable. |
 | `KEYMEM_AUTOKEY_PROMOTE_N` | `3` | Routing-confirmed selections of a `(key, query)` pair before the query is folded into the key space. |
 | `KEYMEM_AUTOKEY_CONFIRM_FLOOR` | `0.45` | Lowest query↔key cosine eligible for routing-confirmation learning. Repeated selections through the same key can teach a below-gate query alias; this confirms routing only, never content freshness. Lower (e.g. `0.40`) to catch more borderline paraphrases; set `≥` the recall threshold to disable. |
@@ -418,19 +397,7 @@ KEYMEM_MEMORY_DEDUP=0.99
 | `KEYMEM_DECAY_STANDARD_DAYS` | `90` | Half-life in days for the default `standard` profile. Must be finite and greater than zero. |
 | `KEYMEM_DECAY_STABLE_DAYS` | `365` | Half-life in days for `stable` memories. Must be finite and greater than zero. |
 
-**Why e5 gates are opt-in:** multilingual-e5's narrow cosine band (~0.86–0.99) makes a static floor unreliable, while held-out tests showed distribution and key-proximity gates can also overfit. Both are disabled by default to avoid hiding real memories. Use bge-m3 for reliable not-found behavior, or calibrate e5 gates on your own corpus.
-
-Distribution gate parameters:
-- **`gateZ`** — set via `KEYMEM_GATE_Z`, or pass `min_z` directly if you call `recall()` as a library.
-- **`0` disables** the gate (default for bge-m3, bge, openai, minilm — where `min_score` already works).
-- Both gates **compose (AND)**: a result must clear both `min_score` and `gateZ` to be returned.
-- A **literal name/proper-noun key match** (e.g. querying a stored `name`-typed key exactly) is always a definite anchor and bypasses the distribution gate.
-- **`GATE_MIN_POPULATION = 8`**: the gate is skipped when fewer than 8 memories exist (too few samples for a reliable distribution), so early-session recall is unaffected. The gate's background population is **namespace-filtered** and excludes superseded/expired memories, so recall scoped to a sparse namespace may fall below this threshold and skip the gate entirely.
-- **Known e5 limitation:** the optional gate keys off `maxContentSim` (content cosine only). A relevant fuzzy-key hit with a flat content distribution may be rejected; literal key matches bypass the gate.
-
-An uncalibrated `LOCAL_EMBEDDING_MODEL` falls back to the BGE profile **and logs a warning** so the miscalibration is never silent.
-
-> **Multilingual note:** cross-lingual *content* matching has a same-language bias (a Korean query scores Korean memories higher regardless of meaning). The reliable cross-lingual path is the **key graph** — tag memories with keys in multiple languages (e.g. `["딸기", "strawberry"]`) so recall hits the key exactly instead of relying on biased content similarity.
+For cross-language recall, retain multilingual keys and aliases (for example `딸기` and `strawberry`). Lexical body search alone does not translate queries.
 
 ---
 
@@ -456,7 +423,7 @@ sweeps expired memories itself (once at startup, then every `KEYMEM_CLEANUP_INTE
 stdio path sweeps once at startup), and the key/memory/link stats are already passively injected
 into `SERVER_INSTRUCTIONS` on every turn — a separate `memory_stats()` call was pure duplication.
 
-Scores carry `score_kind`. Key recall exposes cosine-like `key_relevance`; `read_key` exposes `content_relevance` plus a within-key rank score; injected/direct memories expose `relevance_score` separately from their small RRF `rank_score`. Compare thresholds only within the same score kind.
+Scores carry `score_kind`. Key recall exposes `key_relevance` from key cosine or bounded lexical relevance. `content_relevance` is bounded BM25 (`s / (1 + s)`), not cosine. `read_key` uses `within_key_rank`, with cross-encoder relevance when available and bounded lexical relevance otherwise. Direct recall uses `rrf_fused_rank`; RRF `rank_score` is a rank-fusion value, not a similarity probability.
 
 A system prompt template is also available via the `memory_system_prompt` MCP prompt — include it to instruct the agent to recall silently, use diverse keys, and never mention the memory system to users.
 
@@ -477,7 +444,7 @@ LOCAL_EMBEDDING_MODEL=bge-m3
 
 > First run downloads ~570MB once, then reuses the cache. If `LOCAL_EMBEDDING_MODEL_PATH` already holds the model it is used **as-is with no download** (a partial dir is self-healed — only missing files are fetched). Online-API backends (OpenAI) and fastembed built-ins are unaffected.
 
-> **bge-m3 runs on its own ONNX session, not through fastembed.** fastembed pads every input to 512 tokens, so a 4-token query cost as much as a full page — 199ms and a 9.6-core burst on every recall. Tokenizing to the actual length is **23x less CPU** (15ms) at identical retrieval quality: `npm run bench` (92%/97%/0.93), the ablation grid, and `real-eval` over a 3018-vector live store all score the same, case for case. Pooling is unchanged (CLS + L2), but unpadded vectors sit ~0.98 cosine from padded ones, so the embedding fingerprint is `local:bge-m3+nopad` and **an existing graph re-embeds itself once on first load after upgrading** (a `graph.json.bak.local_bge-m3` backup is written first). Other model families still use fastembed.
+> **bge-m3 runs on its own ONNX session, not through fastembed.** Inputs use their actual token length. Its vector-space fingerprint is `local:bge-m3+nopad`; a fingerprint change triggers key-vector migration. Earlier padding/latency and retrieval measurements in [BENCHMARKS.md](BENCHMARKS.md) describe the previous body-embedding engine.
 
 **Cross-encoder reranking (core):** the default `recall` MCP tool's Top-1 path re-scores the candidate pool under its strongest key with `bge-reranker-v2-m3`. `recall()`/`recallInject()` results are reranked too. The model (~570MB, quantized) auto-downloads on first use and caches under `~/.keymem/models/reranker`.
 
@@ -507,12 +474,12 @@ KEYMEM_RERANK_MIN_SCORE=0   # reject when top rerank logit < 0 (bge-reranker-v2-
 
 > **Prefix behavior:** BGE-M3 does **not** use `passage:`/`query:` prefixes — embeddings are passed through as-is. All other local models (e5, BGE-en, MiniLM) continue to use prefixes unchanged.
 
-> **Recommended for multilingual / cross-lingual use: `bge-m3`.** It separates unrelated queries more reliably and performs substantially better than e5 on the project's Korean↔English fixtures. For the optional direct-mode not-found gate, bge-m3's absolute `min_score` reaches ≈96% on the gate fixture; e5 requires corpus-specific tuning.
+> **Multilingual key embeddings:** `bge-m3` remains supported. Historical model comparisons do not establish the quality or not-found behavior of the current Kiwi BM25 architecture.
 
 If `OPENAI_API_KEY` is not set and `EMBEDDING_BACKEND` is unset, the server automatically uses the local `fastembed` backend.
 For English-only use or lower local resource usage, set `LOCAL_EMBEDDING_MODEL=fast-bge-base-en-v1.5` or `fast-bge-small-en-v1.5`.
 
-> **Switching backends is safe.** The graph records an embedding **fingerprint** (backend + model id) identifying the vector space its embeddings live in. On startup, if the current backend's fingerprint **or** dimension differs from what is stored, the graph **auto-migrates** — every key and memory is re-embedded with the new backend while content, links, depth, and access history are preserved (a `graph.json.bak.*` backup is written first). The fingerprint matters because two models can share a dimension yet produce incompatible vectors (e.g. `fast-multilingual-e5-large` and `bge-m3` are **both 1024-d**); a dimension check alone would miss that swap and silently corrupt every similarity. Disable with `KEYMEM_AUTO_MIGRATE=false`. Re-embedding via OpenAI incurs one-time API cost proportional to your memory count.
+> **Switching backends is safe.** The graph records an embedding **fingerprint** (backend + model id) identifying the vector space its embeddings live in. On startup, if the current backend's fingerprint **or** dimension differs from what is stored, the graph **auto-migrates** — every key is re-embedded with the new backend while content, links, depth, and access history are preserved (a `graph.json.bak.*` backup is written first). The fingerprint matters because two models can share a dimension yet produce incompatible vectors (e.g. `fast-multilingual-e5-large` and `bge-m3` are **both 1024-d**); a dimension check alone would miss that swap and silently corrupt every similarity. Disable with `KEYMEM_AUTO_MIGRATE=false`. Re-embedding via OpenAI incurs one-time API cost proportional to your key count.
 >
 > **Migrating a pre-fingerprint (legacy) graph across same-dimension models.** A graph written before fingerprinting has no recorded vector space, so a same-dimension model swap off it cannot be detected automatically. Set `KEYMEM_FORCE_REEMBED=true` for **one** startup to re-embed unconditionally and stamp the fingerprint; remove it afterward (left on, it re-embeds on every start). This is exactly the one-shot needed when moving an existing e5 graph to bge-m3.
 
@@ -545,14 +512,14 @@ The active session is found two ways:
 
 ## Benchmarks
 
-On **HotpotQA** bridge questions (real external multi-hop data, gold labels, no LLM judge — and
+Historical measurements of the previous body-embedding engine: on **HotpotQA** bridge questions (real external multi-hop data, gold labels, no LLM judge — and
 keys generated *blind* by independent subagents that never saw the question or answer), the
 key-graph retrieves **both** gold supporting paragraphs **63%** of the time vs **53%** for flat
 semantic retrieval and **35%** for lexical (+10pp / +28pp) — the connected-but-dissimilar case
 it's built for. (Honest: my own hand-derived keys inflated this to 78/60; on non-multi-hop
 "comparison" questions the graph slightly *hurts*; it's retrieval-recall, not answer accuracy.)
 The read path is also O(1) (`read_memory` p50 ~45ms → ~0.01ms @ 500 memories). Full methodology
-and caveats: **[BENCHMARKS.md](BENCHMARKS.md)**.
+and caveats: **[BENCHMARKS.md](BENCHMARKS.md)**. These scores do not validate the current Kiwi BM25 + key-embedding engine; no production quality scores have been established for it.
 
 ---
 
@@ -562,7 +529,7 @@ and caveats: **[BENCHMARKS.md](BENCHMARKS.md)**.
 - **Later-hop round trips** — `recall` completes the first Key → Memory hop, but following a connected key to another memory still requires `read_key → read_memory`.
 - **Hub breadth** — broad keys can connect many memories. `read_key()` paginates hubs; the agent must choose whether to continue paging or follow a more specific adjacent key.
 - **Agent quality matters** — key selection on `remember` affects retrieval quality. System prompt tuning is important.
-- **Cross-lingual content bias** — with multilingual e5, raw content similarity favors same-language memories regardless of meaning. Tag memories with multilingual keys so the key graph (not biased content cosine) carries cross-lingual recall.
+- **Lexical coverage** — Kiwi BM25 does not translate or detect paraphrases by itself. Multilingual keys, key embeddings, and reranking help route and rank candidates, but cannot guarantee missing candidates are recovered.
 - **Threshold calibration** — thresholds are tuned per embedding model. A new/uncalibrated model falls back to the BGE profile (with a warning); recalibrate via the `KEYMEM_*` env overrides.
 
 ---
@@ -583,7 +550,7 @@ EMBEDDING_BACKEND=local npx tsx test/retriever-quality.live.ts
 # For bge-m3: also set LOCAL_EMBEDDING_MODEL=bge-m3 LOCAL_EMBEDDING_MODEL_PATH=/abs/dir
 ```
 
-`scenarios.ts` and `robustness.ts` exercise the real local embedding backend (direct/associative/cross-lingual recall, versioning, depth growth, dedup, TTL, Hebbian learning, namespace isolation). They double as a recalibration harness when tuning thresholds for a new model.
+`scenarios.ts` and `robustness.ts` exercise the real local embedding backend (direct/associative/cross-lingual recall, versioning, depth growth, dedup, TTL, Hebbian learning, namespace isolation). Key-threshold recalibration and retrieval quality require fresh runs after an engine or model change; historical passing results do not validate this architecture.
 
 ---
 

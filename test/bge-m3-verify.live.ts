@@ -46,11 +46,11 @@ function cos(a: number[], b: number[]): number {
 const p = getThresholdProfile();
 console.log(`model=${LOCAL_EMBEDDING_MODEL}`);
 console.log(
-  `profile: minScore=${p.minScore} contentRecall=${p.contentRecall} keyRecall=${p.keyRecall} contradiction=${p.contradiction} memoryDedup=${p.memoryDedup} keyMerge=${p.keyMerge}\n`
+  `key profile: keyRecall=${p.keyRecall} keyMerge=${p.keyMerge}\n`
 );
 
 // ── 1. dimension + no-prefix embedding ──
-const v = await embedTextAsync("사용자는 커피를 좋아한다", "passage");
+const v = await embedTextAsync("커피", "passage");
 check("bge-m3 embeds to 1024-dim", v.length === 1024, `dim=${v.length}`);
 
 const g = new MemoryGraph();
@@ -77,39 +77,14 @@ check(
   `cos(A,B)=${cos(ka, kb).toFixed(4)} (would merge at keyMerge=${p.keyMerge} without guard)`
 );
 
-// ── 4. dedup: near-paraphrase superseded ──
-const ns = "dedup";
-const [d1] = await g.add("프로젝트A는 PostgreSQL을 데이터베이스로 쓴다", ["프로젝트A", "DB"], {
-  namespace: ns,
-});
-const [, wasDup] = await g.add("프로젝트A는 데이터베이스로 PostgreSQL을 사용한다", ["프로젝트A", "DB"], {
-  namespace: ns,
-});
-const e1 = g.memories[d1]?.embedding;
-const eDup = await embedTextAsync("프로젝트A는 데이터베이스로 PostgreSQL을 사용한다", "passage");
-check(
-  "dedup: near-paraphrase detected as duplicate",
-  wasDup === true,
-  `cos=${e1 ? cos(e1, eDup).toFixed(4) : "?"} vs memoryDedup=${p.memoryDedup}`
-);
-
-// ── 5. contradiction band: distinct conflicting fact ──
-const ns2 = "contra";
-const [c1] = await g.add("프로젝트B는 PostgreSQL을 쓴다", ["프로젝트B"], { namespace: ns2 });
-const [c2, dup2] = await g.add("프로젝트B는 MongoDB를 쓴다", ["프로젝트B"], { namespace: ns2 });
-const ec1 = g.memories[c1]?.embedding;
-const ec2 = g.memories[c2]?.embedding;
-const csim = ec1 && ec2 ? cos(ec1, ec2) : NaN;
-console.log(
-  `\n  [info] cos('쓴다 PostgreSQL','쓴다 MongoDB')=${csim.toFixed(4)} — contradiction band [${p.contradiction}, ${p.memoryDedup})`
-);
-check("contradiction: not silently deduped (both survive)", dup2 === false && c1 in g.memories);
-const linked = !!g.memories[c2]?.contradicts?.includes(c1) && !!g.memories[c1]?.contradicts?.includes(c2);
-check(
-  "contradiction: bidirectional contradicts link recorded",
-  linked,
-  linked ? "" : `(cos=${csim.toFixed(4)} fell outside band — calibration signal, not a logic bug)`
-);
+// ── 4. exact dedup and no inferred contradiction ──
+const [first] = await g.add("프로젝트A는 PostgreSQL을 쓴다", ["프로젝트A", "DB"], { namespace: "dedup" });
+const [, exactDup] = await g.add("프로젝트A는 PostgreSQL을 쓴다", ["프로젝트A", "DB"], { namespace: "dedup" });
+check("exact normalized repeat is deduplicated", exactDup);
+const [second, differentDup] = await g.add("프로젝트A는 MongoDB를 쓴다", ["프로젝트A", "DB"], { namespace: "dedup" });
+check("different facts remain distinct", !differentDup && second !== first);
+check("body vector absent in every memory", Object.values(g.memories).every(m => !("embedding" in m)));
+check("no body-driven contradiction inference", g.memories[second].contradicts.length === 0);
 
 console.log(`\n${"=".repeat(50)}`);
 console.log(`RESULT: ${pass} passed, ${fail} failed`);

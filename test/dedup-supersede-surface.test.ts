@@ -1,11 +1,3 @@
-// Silent-supersede surfacing. When a new memory's content cosine is >= the dedup
-// threshold, add() treats it as a duplicate and supersedes the existing one. The
-// DECISION (supersede vs keep) is intentionally unchanged here — distinguishing a
-// true paraphrase from a high-similarity CONFLICT ("회의는 월요일" vs "회의는 금요일")
-// needs the calibration corpus. What this fixes is the *silence*: add() must surface
-// (a) WHICH memory was superseded, so it is recoverable, and (b) whether the
-// superseded memory SHARED A KEY with the incoming one — the cheap, threshold-free
-// signal that this looks like a conflict rather than a benign restatement.
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,19 +6,7 @@ import test from "node:test";
 
 let n = 0;
 
-// Content embeddings live so that A and B are cos=0.97 (>= bge-m3 dedup 0.94) -> B
-// supersedes A. Keys are embedded too; their vectors are irrelevant to dedup (which
-// is content-only) and to key sharing (exact string match), so any 2-D vector works.
-function vec(t: string): number[] {
-  const m: Record<string, number[]> = {
-    "회의는 월요일이다": [1, 0],
-    "회의는 금요일이다": [0.97, 0.2431], // cos with [1,0] = 0.97 -> dedup fires
-    "점심은 김치찌개였다": [0.97, 0.2431], // same cosine, but a DIFFERENT key
-    "회의": [0, 1],
-    "점심": [0, 1],
-  };
-  return m[t] ?? [0, 1];
-}
+function vec(): number[] { return [0, 1]; }
 
 async function freshGraph(t: any, now?: () => number) {
   const dir = await mkdtemp(join(tmpdir(), "sm-supersede-"));
@@ -36,7 +16,7 @@ async function freshGraph(t: any, now?: () => number) {
   process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
 
   const emb = await import("../src/embedding.ts");
-  emb.__setTestEmbedder((tx: string) => vec(tx));
+  emb.__setTestEmbedder((tx: string) => vec());
   t.after(() => emb.__clearTestEmbedder());
 
   const mg = await import(`../src/memoryGraph.ts?supersede=${n++}`);
@@ -45,7 +25,7 @@ async function freshGraph(t: any, now?: () => number) {
   return g;
 }
 
-test("add() surfaces the superseded id and flags a key-sharing conflict", async (t) => {
+test("add() surfaces the superseded id for an exact restatement", async (t) => {
   const g = await freshGraph(t);
 
   const [m1, dup1, sup1, conflict1] = await g.add("회의는 월요일이다", ["회의"], {});
@@ -53,22 +33,20 @@ test("add() surfaces the superseded id and flags a key-sharing conflict", async 
   assert.equal(sup1, null, "nothing superseded on a fresh insert");
   assert.equal(conflict1, false, "no conflict on a fresh insert");
 
-  // Same key "회의", content cosine 0.97 >= dedup -> superseded. Distinct fact, not a
-  // paraphrase: the caller MUST be able to see what was replaced and that it conflicts.
-  const [, dup2, sup2, conflict2] = await g.add("회의는 금요일이다", ["회의"], {});
-  assert.equal(dup2, true, "second insert deduped against the first");
+  const [, dup2, sup2, conflict2] = await g.add("회의는 월요일이다", ["회의"], {});
+  assert.equal(dup2, true);
   assert.equal(sup2, m1, "add() must return the id of the superseded memory");
-  assert.equal(conflict2, true, "sharing a key with the superseded memory flags a conflict");
+  assert.equal(conflict2, false, "an exact restatement is not a semantic conflict");
 });
 
-test("add() reports a key-disjoint dedup as a non-conflict supersede", async (t) => {
+test("add() keeps distinct facts even when key vectors are identical", async (t) => {
   const g = await freshGraph(t);
 
   const [m1] = await g.add("회의는 월요일이다", ["회의"], {});
-  // Content cosine 0.97 -> still deduped, but no shared key -> benign, not a conflict.
   const [, dup2, sup2, conflict2] = await g.add("점심은 김치찌개였다", ["점심"], {});
-  assert.equal(dup2, true, "deduped on content similarity");
-  assert.equal(sup2, m1, "superseded id still surfaced");
+  assert.equal(dup2, false, "distinct text is not a duplicate");
+  assert.equal(sup2, null);
+  assert.ok(g.memories[m1]);
   assert.equal(conflict2, false, "no shared key -> not flagged as a conflict");
 });
 
@@ -96,7 +74,7 @@ test("duplicate add forwards supplied expiry and profile to its successor", asyn
     decayProfile: "stable",
   });
   now += 10;
-  const [id, deduped] = await g.add("회의는 금요일이다", ["회의"], {
+  const [id, deduped] = await g.add("회의는 월요일이다", ["회의"], {
     ttlSeconds: 200,
     decayProfile: "transient",
   });
@@ -113,8 +91,20 @@ test("duplicate add without policies uses normal add defaults", async (t) => {
     decayProfile: "stable",
   });
   now += 10;
-  const [id, deduped] = await g.add("회의는 금요일이다", ["회의"]);
+  const [id, deduped] = await g.add("회의는 월요일이다", ["회의"]);
   assert.equal(deduped, true);
   assert.equal(g.memories[id].ttl, null);
   assert.equal(g.memories[id].decay_profile, "standard");
+});
+
+test("dedup normalizes Unicode and whitespace while preserving case", async (t) => {
+  const g = await freshGraph(t);
+  const [original] = await g.add("café meeting", ["회의"]);
+  const [, duplicate, superseded, conflict] = await g.add("  cafe\u0301   meeting\n", ["회의"]);
+  assert.equal(duplicate, true);
+  assert.equal(superseded, original);
+  assert.equal(conflict, false);
+  const [, caseDuplicate, caseSuperseded] = await g.add("CAFÉ meeting", ["회의"]);
+  assert.equal(caseDuplicate, false);
+  assert.equal(caseSuperseded, null);
 });

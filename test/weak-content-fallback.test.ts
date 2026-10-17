@@ -1,8 +1,3 @@
-// The calibrated short-query content gate (bge-m3: 0.46 vs 0.55) admits weak content matches
-// so a keyword query whose only related memories sit at 0.46–0.55 is not a no_match. But RRF
-// fusion ranks every hop-1 candidate above every hop-2 association, so each weak admit pushes
-// one association out of the top-K (the assoc2 reach regression, bisected to af884a0). Weak
-// admits are therefore a FALLBACK: they enter only when nothing clears the full gate.
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,8 +6,7 @@ import test from "node:test";
 
 let n = 0;
 
-// Query "취향" (short) → [1,0,0]. STRONG memory cos 0.60 (≥0.55), WEAK memory cos 0.50
-// (in the short band [0.46, 0.55)), keys orthogonal so only the content path admits anything.
+// Keep key vectors orthogonal to query vectors to isolate lexical retrieval.
 function vec(t: string): number[] {
   const m: Record<string, number[]> = {
     "취향": [1, 0, 0],
@@ -41,26 +35,20 @@ async function freshGraph(t: any) {
 
 const ids = (rs: unknown) => (rs as Array<{ content: string }>).map((r) => r.content);
 
-test("a weak content match is admitted when nothing clears the full gate", async (t) => {
+test("lexical content remains recallable without a body vector", async (t) => {
   const graph = await freshGraph(t);
   await graph.add("약한기억 문장", ["키B"], {});
-  const res = ids(await graph.recall("취향", 5, null, false, 1, 0, undefined, undefined, undefined, 0, false));
-  assert.deepEqual(res, ["약한기억 문장"], "short-query gate must still rescue the weak-only case");
+  const res = ids(await graph.recall("약한기억", 5, null, false, 1, 0, undefined, undefined, undefined, 0, false));
+  assert.deepEqual(res, ["약한기억 문장"], "lexical content supplies an independent recall path");
 });
 
-test("a weak content match stays returned but ranks after a strong match and after a hop-2 association", async (t) => {
+test("graph expansion includes a memory without lexical overlap through a shared key", async (t) => {
   const graph = await freshGraph(t);
-  await graph.add("약한기억 문장", ["키B"], {});
-  const [strongId] = await graph.add("강한기억 문장", ["키A"], {});
-  // A memory reachable only through the strong memory's key (hop 2): orthogonal to the query.
-  await graph.add("연상기억 문장", ["키A"], {});
-  const direct = ids(await graph.recall("취향", 5, null, false, 1, 0, undefined, undefined, undefined, 0, false));
-  assert.deepEqual(direct, ["강한기억 문장", "약한기억 문장"], "weak admit still returned, after the strong match");
-  const expanded = ids(await graph.recall("취향", 5, null, true, 2, 0, undefined, undefined, undefined, 0, false));
-  assert.deepEqual(
-    expanded,
-    ["강한기억 문장", "연상기억 문장", "약한기억 문장"],
-    "a graph association outranks a weak-only content admit",
-  );
-  assert.ok(strongId);
+  const [anchorId] = await graph.add("coffee preference", ["키A"]);
+  const [associatedId] = await graph.add("morning routine", ["키A"]);
+  const direct = await graph.recall("coffee", 5, null, false, 1, 0, undefined, undefined, undefined, 0, false) as Array<{id:string}>;
+  assert.ok(direct.some(m => m.id === anchorId), "lexical anchor remains reachable");
+  const expanded = await graph.recall("coffee", 5, null, true, 2, 0, undefined, undefined, undefined, 0, false) as Array<{id:string}>;
+  assert.ok(expanded.some(m => m.id === anchorId));
+  assert.ok(expanded.some(m => m.id === associatedId));
 });

@@ -1,4 +1,6 @@
-# keymem — Benchmarks
+# keymem — Historical benchmarks
+
+> **Architecture boundary:** the measurements below were collected with the previous memory-body embedding engine and its MiniSearch/content-cosine paths. The current engine removes body vectors, uses Kiwi BM25 over keys and content, retains key embeddings and cross-encoder reranking, and uses normalized-text duplicate detection. These historical scores are preserved for provenance, not presented as validation of the new engine. No production quality scores are established for the current architecture. Local migration or experimental probes are not official production benchmarks.
 
 What this measures and, honestly, what it doesn't. The goal is to **prove how much keymem's
 key-graph actually buys you** — isolated causally, not asserted by metaphor — and to mark the

@@ -9,7 +9,8 @@ description: Use when the conversation reveals or needs durable knowledge about 
 
 - Before the first reply, and whenever the topic shifts, call `recall` silently.
 - `query` = short noun keywords (`"거주지"`, not `"어디 살아"`); `context` = the raw user
-  utterance. Keys match keywords, content matches sentences — the two cues take different paths.
+  utterance. Key embeddings route concepts; Kiwi BM25 matches keys and content lexically, and
+  the cross-encoder reranks candidates. Memory bodies have no embedding vectors.
 - Split multi-fact questions into several `recall` calls.
 - On `{status:"no_match"}`, retry with one of the returned `nearest_keys`, or `browse_keys(namespace)`.
 - A hit returns ranked keys plus one passive Top-1 memory. Before answering, identify the facts
@@ -46,6 +47,8 @@ description: Use when the conversation reveals or needs durable knowledge about 
   `recall` returned instead of minting near-duplicates.
 - Act on `hints` in the response (`near_keys`, `language_note`).
 - Use `correct` — never a second `remember` — when a stored fact changes. `forget` to drop one.
+- Duplicate detection matches normalized text exactly; paraphrases do not merge automatically.
+  Supply meaningful keys and explicit relationships; body similarity does not create links or contradictions.
 - `namespace` groups memories by project/context; pass the active one consistently.
 - A turn that surfaced a durable fact but saved nothing is a bug.
 

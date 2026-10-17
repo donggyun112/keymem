@@ -1,9 +1,8 @@
-// Binary vector sidecar: all embeddings live in vectors.bin (Float32Array concat)
+// Binary vector sidecar: key embeddings live in vectors.bin (Float32Array concat)
 // indexed by vectors.idx.json, keeping graph.json small (floats as JSON text made a
 // 1.3k-memory store ~93 MB; binary is ~13 MB). Entry key convention:
-//   "m:<mid>"  one whole-memory vector      (n = dim)
 //   "k:<kid>"  one key-concept vector       (n = dim)
-//   "s:<mid>"  sentence pack for a memory   (n = count * dim, concatenated)
+// Legacy m:/s: body vectors are ignored by MemoryGraph and removed on its next save.
 // Writes are atomic (tmp + rename), bin before idx, so a torn write leaves at worst
 // an idx pointing at a fully-written bin from the same save.
 import { readFile, writeFile, rename } from "node:fs/promises";
@@ -46,7 +45,7 @@ export async function writeVectors(dir: string, vecs: Map<string, number[][]>): 
   await rename(idxTmp, join(dir, IDX));
 }
 
-export async function readVectors(dir: string): Promise<Map<string, number[][]> | null> {
+export async function readVectors(dir: string, prefix?: string): Promise<Map<string, number[][]> | null> {
   let idx: VectorIndex;
   let buf: Buffer;
   try {
@@ -60,6 +59,7 @@ export async function readVectors(dir: string): Promise<Map<string, number[][]> 
   const flat = new Float32Array(buf.buffer, buf.byteOffset, totalFloats);
   const out = new Map<string, number[][]>();
   for (const [id, { off, n }] of Object.entries(idx.entries)) {
+    if (prefix && !id.startsWith(prefix)) continue;
     if (off < 0 || n <= 0 || off + n > totalFloats || n % idx.dim !== 0) continue;
     const list: number[][] = [];
     for (let i = 0; i < n; i += idx.dim) {

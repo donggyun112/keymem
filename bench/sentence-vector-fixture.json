@@ -1,5 +1,5 @@
 {
-  "_doc": "Rigorous held-out test for _embedSentences (SENTENCE_VECTORS_ENABLED): 10 multi-sentence (3-sentence) memories, each with a specific fact BURIED in a non-first sentence, plus 20 single-sentence distractors for real competitive noise (matching the template-collision lesson from bench/assoc-fixture.json). Each query targets the buried sub-fact specifically, not the memory's overall gist. Run with KEYMEM_SENTENCE_VECTORS=1 vs =0; compare Hit@5/MRR. Binary acceptance gate: ON must beat OFF by a margin that justifies the measured ~14.6x write-time cost, or the feature is deleted outright (no opt-in).",
+  "_doc": "Multi-sentence buried-fact retrieval fixture: 10 labeled questions, 30 memories. Retained for Kiwi BM25/key-embedding/reranker retrieval checks after memory-body and sentence vectors were removed. The historical sentence-vector ON/OFF runners no longer apply.",
   "memories": [
     { "id": "m1", "content": "미나는 이번 주에 회사 프로젝트 마감 때문에 매일 야근을 했다. 그러다 스트레스가 쌓여서 주말에 한라산 등산을 다녀왔다. 산 정상에서 우연히 대학 동창을 만나 반갑게 인사를 나눴다.", "keys": ["등산", "동창"] },
     { "id": "m2", "content": "미나는 최근 이사를 준비하면서 짐을 정리했다. 오래된 사진첩을 발견해서 옛 생각이 났다. 사진첩 맨 뒤에서 첫 월급으로 샀던 시계를 찾았다.", "keys": ["이사", "사진첩"] },

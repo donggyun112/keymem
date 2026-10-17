@@ -14,7 +14,7 @@ import test from "node:test";
 let importCounter = 0;
 
 // Pinned deliberately: this string is what every existing user's graph is compared against,
-// so changing it forces a one-time re-embed of every key and memory on their next load.
+// so changing it forces a one-time re-embed of every key on their next load.
 // That is sometimes correct (bge-m3 leaving fastembed's padded space was), but it must never
 // happen by accident — update this only alongside a real change of embedding space.
 const BGEM3_FINGERPRINT = "local:bge-m3+nopad";
@@ -68,8 +68,8 @@ test("re-embeds when the embedding model changes at the same dimension", async (
   await g.load();
 
   assert.deepEqual(
-    g.memories.m1.embedding, [0, 1],
-    "memory must be re-embedded with the new model, not left at the stored e5 vector"
+    Object.hasOwn(g.memories.m1, "embedding"), false,
+    "legacy body vectors must be discarded"
   );
   assert.deepEqual(g.keys.k1.embedding, [0, 1], "keys must be re-embedded too");
   assert.equal(g.memories.m1.depth, 0.7, "depth preserved through migration");
@@ -83,11 +83,11 @@ test("re-embeds when the embedding model changes at the same dimension", async (
     persisted.meta?.embeddingFingerprint, BGEM3_FINGERPRINT,
     "persisted fingerprint must reflect the new model"
   );
-  // v0.20+: vectors persist in the binary sidecar, graph.json stores embedding: [].
-  assert.deepEqual(persisted.memories.m1.embedding, [], "graph.json must not carry vectors");
+  // Only key vectors persist in the binary sidecar.
+  assert.equal(Object.hasOwn(persisted.memories.m1, "embedding"), false, "memory JSON must omit embedding");
   const { readVectors } = await import("../src/vectorStore.ts");
   const sidecar = await readVectors(dataDir);
-  assert.deepEqual(sidecar?.get("m:m1")?.[0], [0, 1], "migration persisted to disk (sidecar)");
+  assert.deepEqual(sidecar?.get("k:k1")?.[0], [0, 1], "key migration persisted to disk (sidecar)");
 });
 
 test("SUPER_MEMORY_FORCE_REEMBED re-embeds a legacy graph (no fingerprint, same dim)", async (t) => {
@@ -122,7 +122,8 @@ test("SUPER_MEMORY_FORCE_REEMBED re-embeds a legacy graph (no fingerprint, same 
   const g = new mg.MemoryGraph();
   await g.load();
 
-  assert.deepEqual(g.memories.m1.embedding, [0, 1], "forced re-embed must replace the legacy vector");
+  assert.deepEqual(g.keys.k1.embedding, [0, 1], "forced re-embed must replace the legacy key vector");
+  assert.equal(Object.hasOwn(g.memories.m1, "embedding"), false);
   const persisted = JSON.parse(await readFile(join(dataDir, "graph.json"), "utf-8"));
   assert.equal(persisted.meta?.embeddingFingerprint, BGEM3_FINGERPRINT, "fingerprint stamped after forced re-embed");
 });
@@ -157,7 +158,7 @@ test("does NOT re-embed when the model is unchanged (same fingerprint, same dim)
   await g.load();
 
   assert.deepEqual(
-    g.memories.m1.embedding, [0.6, 0.8],
+    g.keys.k1.embedding, [1, 0],
     "unchanged model must NOT trigger a re-embed"
   );
   const backups = (await readdir(dataDir)).filter((f) => f.includes(".bak."));

@@ -7,7 +7,7 @@ import { freshDecayGraph } from "./decay-test-utils.js";
 
 let n = 0;
 
-test("v1 memories migrate confirmation state and persist schema version 2", async (t) => {
+test("v1 memories migrate confirmation state and persist schema version 3", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "keymem-decay-migration-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   process.env.SUPER_MEMORY_DATA_DIR = dir;
@@ -53,7 +53,7 @@ test("v1 memories migrate confirmation state and persist schema version 2", asyn
   );
   await graph.flush();
   const saved = JSON.parse(await readFile(join(dir, "graph.json"), "utf-8"));
-  assert.equal(saved.meta.schemaVersion, 2);
+  assert.equal(saved.meta.schemaVersion, 3);
   assert.equal(saved.memories.m1.last_confirmed_at, 250);
 });
 

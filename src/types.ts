@@ -30,7 +30,6 @@ export interface Key {
 export interface Memory {
   id: string;
   content: string;
-  embedding: number[];
   created_at: number;
   source: Record<string, unknown> | null;
   supersedes: string | null;

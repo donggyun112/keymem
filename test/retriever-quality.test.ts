@@ -36,25 +36,11 @@ test("only e5 uses the passage/query prefix", async () => {
 test("bgem3 threshold profile exists with expected fields", async () => {
   const { THRESHOLD_PROFILES } = await import("../src/embedding.ts");
   const p = THRESHOLD_PROFILES.bgem3;
-  assert.equal(p.memoryDedup, 0.94);
-  assert.equal(p.minScore, 0.55);
-  assert.equal(p.contradiction, 0.8);
-  // every profile must define the new fields
-  for (const fam of ["openai", "e5", "bge", "minilm", "bgem3"]) {
-    assert.equal(typeof THRESHOLD_PROFILES[fam].minScore, "number", fam);
-    assert.equal(typeof THRESHOLD_PROFILES[fam].contradiction, "number", fam);
-  }
-  // distribution gate: bge-m3 is disabled (gateZ=0); every profile must define numeric gateZ
-  assert.equal(THRESHOLD_PROFILES.bgem3.gateZ, 0);
-  for (const fam of ["openai", "e5", "bge", "minilm", "bgem3"]) {
-    assert.equal(typeof THRESHOLD_PROFILES[fam].gateZ, "number", fam);
-  }
-  // key-proximity gate: every profile defines numeric keyGate; disabled by default
-  // on all built-in profiles (no similarity heuristic reliably gates e5; bge-m3 uses
-  // the absolute gate). Opt-in via SUPER_MEMORY_KEY_GATE.
-  for (const fam of ["openai", "e5", "bge", "minilm", "bgem3"]) {
-    assert.equal(typeof THRESHOLD_PROFILES[fam].keyGate, "number", fam);
-    assert.equal(THRESHOLD_PROFILES[fam].keyGate, 0, fam);
+  assert.equal(p.keyRecall, 0.62);
+  assert.equal(p.keyMerge, 0.86);
+  for (const profile of Object.values(THRESHOLD_PROFILES)) {
+    assert.deepEqual(Object.keys(profile).sort(), ["keyAutoLink", "keyMerge", "keyRecall", "shortKeyMerge"]);
+    assert.ok(Object.values(profile).every(value => typeof value === "number"));
   }
 });
 
@@ -101,8 +87,8 @@ test("recall returns [] when nothing clears the absolute gate", async (t) => {
   assert.ok(hit.length >= 1, "relevant query should return results");
 
   // Orthogonal noise query (cos=0) is below any positive minScore -> [].
-  const miss = (await g.recall("노이즈쿼리", 5, null, false, 2, 0, 0.5)) as any[];
-  assert.equal(miss.length, 0, "noise query should return nothing");
+  const legacyMiss = (await g.recall("노이즈쿼리", 5, null, false, 2, 0, 0.5)) as any[];
+  assert.equal(legacyMiss.length, 0, "noise query should return nothing");
 });
 
 test("isShortConcept flags short or few-token concepts", async () => {
@@ -149,7 +135,7 @@ test("inContradictionBand is [floor, dedup)", async () => {
   assert.equal(inContradictionBand(0.5, 0.88, 0.94), false);  // below band
 });
 
-test("conflicting memories sharing a key get mutual contradicts links", async (t) => {
+test("distinct facts sharing a key do not get inferred contradicts links", async (t) => {
   const { mkdtemp, rm } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
@@ -158,9 +144,7 @@ test("conflicting memories sharing a key get mutual contradicts links", async (t
   process.env.SUPER_MEMORY_DATA_DIR = dataDir;
 
   const emb = await import("../src/embedding.ts");
-  // Two facts about "프로젝트A": Postgres vs Mongo. Craft cos ~0.92 — inside the
-  // bgem3 band [0.88, 0.94), so NOT a duplicate but flagged as a contradiction.
-  // (cos([1,0],[0.92, 0.392]) = 0.92)
+  // Historical body-vector proximity must no longer infer contradictions.
   emb.__setTestEmbedder((text) =>
     text.includes("Postgres") ? [1, 0] : text.includes("Mongo") ? [0.92, 0.392] : [0, 1]
   );
@@ -175,13 +159,13 @@ test("conflicting memories sharing a key get mutual contradicts links", async (t
 
   assert.equal(wasDup, false, "should NOT be treated as a duplicate");
   assert.ok(second in g.memories && first in g.memories, "both memories survive");
-  assert.ok(g.memories[second].contradicts.includes(first), "new -> old contradicts link");
-  assert.ok(g.memories[first].contradicts.includes(second), "old -> new contradicts link");
+  assert.deepEqual(g.memories[second].contradicts, []);
+  assert.deepEqual(g.memories[first].contradicts, []);
 
   const results = (await g.recall("프로젝트A Postgres", 5)) as any[];
   const r = results.find((x) => x.id === first);
-  assert.ok(r && Array.isArray(r.contradicts) && r.contradicts.includes(second),
-    "recall surfaces contradicts");
+  assert.ok(r, "both distinct facts remain recallable");
+  assert.deepEqual(r.contradicts, []);
 });
 
 test("load defaults contradicts to []", async (t) => {
@@ -256,9 +240,8 @@ test("N-hop memory is preserved when an anchor exists (anchor-based gate)", asyn
   assert.ok((bResult?.hop ?? 1) >= 2, `B should be reached at hop>=2, got hop=${bResult?.hop}`);
 });
 
-test("anchor-less query returns [] even with BM25 hits", async (t) => {
-  // When no candidate has a direct dense similarity >= minScore (no anchor),
-  // the result must be [] regardless of BM25 matches.
+test("BM25 matches survive without a matching key vector", async (t) => {
+  // Lexical evidence remains useful when all key vectors are orthogonal.
   const { mkdtemp, rm } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
@@ -277,10 +260,10 @@ test("anchor-less query returns [] even with BM25 hits", async (t) => {
   await g.load();
   await g.add("alpha beta", ["alpha"]);
 
-  // BM25 will surface this memory via the literal "alpha" token, but the dense
-  // similarity is 0 (orthogonal embeddings) — no anchor → must return [].
+  // The literal alpha token supplies evidence independently of the key vector.
   const results = (await g.recall("query alpha", 5, null, false, 2, 0, 0.55)) as any[];
-  assert.equal(results.length, 0, "anchor-less query must return []");
+  assert.equal(results.length, 1, "lexical evidence must survive without a dense key anchor");
+  assert.equal(results[0].content, "alpha beta");
 });
 
 test("robustZScore: clear right-tail outlier scores high", async () => {
@@ -345,8 +328,9 @@ async function gateGraph(t: any, contents: Record<string, number>, queryName: st
   const emb = await import("../src/embedding.ts");
   emb.__setTestEmbedder((text) => {
     if (text === queryName) return [1, ...new Array(total).fill(0)]; // [1,0,...0]
-    const idx = contentKeys.indexOf(text);
-    if (idx >= 0) return vecForCos(contents[text], idx, total);
+    const keyMatch = /^k(\d+)$/.exec(text);
+    const idx = keyMatch ? Number(keyMatch[1]) : -1;
+    if (idx >= 0) return vecForCos(contents[contentKeys[idx]], idx, total);
     return [0, ...new Array(total).fill(0), 1]; // keys + anything else: orthogonal to query
   });
   t.after(() => emb.__clearTestEmbedder());
@@ -359,7 +343,7 @@ async function gateGraph(t: any, contents: Record<string, number>, queryName: st
   return g;
 }
 
-test("distribution gate: uniform high-sim band returns [] (no outlier)", async (t) => {
+test("legacy min_z does not reject a uniform band of matching key vectors", async (t) => {
   // 8 memories all clustered ~0.90-0.95; absolute gate would pass, but no outlier.
   const contents: Record<string, number> = {};
   const cs = [0.9, 0.91, 0.92, 0.93, 0.94, 0.95, 0.9, 0.92];
@@ -368,10 +352,10 @@ test("distribution gate: uniform high-sim band returns [] (no outlier)", async (
   for (let i = 0; i < cs.length; i++) await g.add(`m${i}`, [`k${i}`]);
   // min_z=3 activates the gate (bge-m3 profile default is 0)
   const r = (await g.recall("q", 5, null, false, 2, 0, 0, 3)) as any[];
-  assert.equal(r.length, 0, `expected [] for uniform band, got ${r.length}`);
+  assert.equal(r.length, 5, "matching keys remain valid without a body distribution gate");
 });
 
-test("distribution gate: one clear outlier returns hits", async (t) => {
+test("high-similarity key remains recallable with legacy min_z", async (t) => {
   const contents: Record<string, number> = {};
   const cs = [0.48, 0.5, 0.52, 0.49, 0.51, 0.5, 0.53, 0.95]; // last is the outlier
   cs.forEach((c, i) => (contents[`m${i}`] = c));
@@ -382,7 +366,7 @@ test("distribution gate: one clear outlier returns hits", async (t) => {
   assert.ok(r.some((x) => x.content === "m7"), "the 0.95 outlier should be returned");
 });
 
-test("distribution gate: min_z=0 reproduces 0.7.0 (gate off)", async (t) => {
+test("key semantic recall works with min_z=0", async (t) => {
   const contents: Record<string, number> = {};
   const cs = [0.9, 0.91, 0.92, 0.93, 0.94, 0.95, 0.9, 0.92];
   cs.forEach((c, i) => (contents[`m${i}`] = c));
@@ -410,7 +394,7 @@ test("distribution gate: literal name-key match bypasses the gate", async (t) =>
     if (text === "Dongkyun") return [1, ...new Array(total2).fill(0)]; // query + the name key embed here (key uses literal match anyway)
     const idx = contentKeys2.indexOf(text);
     if (idx >= 0) return vecForCos(contentCos[text], idx, total2);
-    return [0, ...new Array(total2).fill(0), 1];                                    // other (concept) keys: orthogonal, no key-path match
+    return [0, ...new Array(total2 - 1).fill(0), 1];                                    // other (concept) keys: orthogonal, no key-path match
   });
   t.after(() => emb.__clearTestEmbedder());
   const { MemoryGraph } = await import(`../src/memoryGraph.ts?distgatename=1`);
@@ -423,7 +407,7 @@ test("distribution gate: literal name-key match bypasses the gate", async (t) =>
   assert.ok(r.some((x) => x.content === "Dongkyun is the user"), "literal name match must survive the gate");
 });
 
-test("key-proximity gate: near concept key anchors a query, far key does not", async (t) => {
+test("legacy body gates do not discard a matching concept key", async (t) => {
   const { mkdtemp, rm } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
@@ -444,16 +428,15 @@ test("key-proximity gate: near concept key anchors a query, far key does not", a
   await g.load();
   await g.add("m", ["topic"]); // memory reachable only via the "topic" concept key
 
-  // minScore=0.95 (absolute gate can't anchor at keySim 0.9), minZ=0 (dist gate off).
-  // keyGate 0.88 <= 0.9 -> keyAnchor fires -> found.
+  // Legacy gate parameters cannot discard a valid key-vector match.
   const hit = (await g.recall("q", 5, null, false, 2, 0, 0.95, 0, 0.88)) as any[];
   assert.ok(hit.length >= 1, "near concept key (0.9 >= keyGate 0.88) should anchor");
 
-  // keyGate 0.95 > 0.9 -> keyAnchor off, no other anchor -> [].
-  const miss = (await g.recall("q", 5, null, false, 2, 0, 0.95, 0, 0.95)) as any[];
-  assert.equal(miss.length, 0, "far key (0.9 < keyGate 0.95) should not anchor");
+  // Raising the obsolete body gate likewise leaves key recall unchanged.
+  const legacyMiss = (await g.recall("q", 5, null, false, 2, 0, 0.95, 0, 0.95)) as any[];
+  assert.ok(legacyMiss.length >= 1, "legacy body gate arguments do not discard a matching key");
 
-  // keyGate 0 (default) disables it -> reproduces absolute-gate-only behavior.
+  // Disabling the obsolete gate also preserves the key match.
   const off = (await g.recall("q", 5, null, false, 2, 0, 0.95, 0, 0)) as any[];
-  assert.equal(off.length, 0, "keyGate 0 disables the key gate (absolute gate still blocks at minScore 0.95)");
+  assert.ok(off.length >= 1, "a valid key match does not require a body-vector anchor");
 });

@@ -1,8 +1,4 @@
-// correct() with no keys inherits the old keys. That is right for a same-topic update
-// (Seoul -> Busan keeps "residence") but pollutes recall for an off-topic correction
-// (strawberries -> peanut allergy keeps "strawberry"). Fix: drop inherited *concept*
-// keys the corrected content has drifted away from; keep relevant ones and exact-match
-// anchors. Topic-based test embedder: same dim = same topic (cosine 1), else cosine 0.
+// Explicit correction keys replace stale tags; omitted keys retain navigation anchors.
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -35,14 +31,11 @@ async function freshGraph(t: { after: (fn: () => unknown) => void }) {
   return g;
 }
 
-test("off-topic correction without keys drops the now-irrelevant topic tag", async (t) => {
+test("correction with explicit keys replaces the old topic tag", async (t) => {
   const g = await freshGraph(t);
-  // "allergy note" tracks the corrected content's topic and must survive; the stale
-  // "strawberry" tag must drop. (When dropping would leave ZERO keys, supersede keeps
-  // the old keys instead — a stale tag is recoverable, a keyless orphan is not; that
-  // anti-orphan guard is covered by correct-key-inheritance.test.ts.)
+  // The caller supplies the corrected topic instead of relying on body-vector inference.
   const [mid] = await g.add("the user loves strawberries", ["strawberry", "allergy note"], {});
-  const nid = await g.supersede(mid, "the user is allergic to peanuts", {});
+  const nid = await g.supersede(mid, "the user is allergic to peanuts", { keyConcepts: ["allergy note"] });
   const keys: string[] = g.getKeysForMemory(nid);
   assert.ok(
     !keys.includes("strawberry") && !keys.includes("딸기"),

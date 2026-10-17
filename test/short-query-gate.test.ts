@@ -6,8 +6,7 @@ import test from "node:test";
 
 let n = 0;
 
-// The fact content sits at cos 0.50 to the query direction: passes the 0.46 short-query
-// gate, fails the 0.55 sentence gate. The key is orthogonal so only the content path can hit.
+// Only the query and key vectors matter; body strings must never be embedded.
 function vec(text: string): number[] {
   const t = text.toLowerCase();
   if (t === "거주지") return [1, 0, 0]; // short keyword query
@@ -17,7 +16,7 @@ function vec(text: string): number[] {
   return [0, 1, 0];
 }
 
-test("short keyword queries use the calibrated lower content gate", async (t) => {
+test("body-vector similarity alone cannot surface a key or memory", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "keymem-shortgate-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   process.env.KEYMEM_DATA_DIR = dir;
@@ -33,21 +32,36 @@ test("short keyword queries use the calibrated lower content gate", async (t) =>
   await graph.load();
   await graph.add("사용자는 강남에 산다", ["집주소키"], { namespace: "default" });
 
-  // searchKeys: short query admits the 0.50-cosine content match via the 0.46 gate...
+  // Semantically similar body text has no lexical or key-vector match.
   const short = await graph.searchKeys("거주지", 8, "default");
-  assert.equal(short.length, 1);
-  assert.equal((short[0] as { match_type: string }).match_type, "content");
+  assert.equal(short.length, 0);
 
-  // ...while a sentence-shaped query keeps the calibrated 0.55 sentence gate.
+  // Sentence-shaped queries likewise have no matching key or body token.
   const long = await graph.searchKeys("이 사람이 어디에 사는지 궁금하다", 8, "default");
   assert.equal(long.length, 0);
 
-  // recall(): same short-query gate on the memory-level content path (default minScore
-  // is lowered alongside so the anchor gate does not re-drop what the gate admitted).
+  // Direct recall must not recover the removed body-vector path.
   const mems = await graph.recall("거주지", 5, "default", false, 2, 0, undefined, undefined, undefined, 0, false);
-  assert.equal(mems.length, 1);
+  assert.equal(mems.length, 0);
   const memsLong = await graph.recall(
     "이 사람이 어디에 사는지 궁금하다", 5, "default", false, 2, 0, undefined, undefined, undefined, 0, false
   );
   assert.equal(memsLong.length, 0);
+});
+
+test("lexical content matches survive an orthogonal key embedding", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "keymem-lexicalgate-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  process.env.KEYMEM_DATA_DIR = dir;
+  const embedding = await import("../src/embedding.ts");
+  embedding.__setTestEmbedder((text: string) => text === "coffee" ? [1, 0] : [0, 1]);
+  t.after(() => embedding.__clearTestEmbedder());
+  const { MemoryGraph } = await import(`../src/memoryGraph.ts?shortgate=${n++}`);
+  const graph = new MemoryGraph();
+  await graph.load();
+  await graph.add("coffee preference", ["집주소키"]);
+  const hits = await graph.searchKeys("coffee", 8, "default");
+  assert.equal(hits.length, 1);
+  const memories = await graph.recall("coffee", 5, "default", false, 1, 0, undefined, undefined, undefined, 0, false);
+  assert.equal(memories.length, 1);
 });

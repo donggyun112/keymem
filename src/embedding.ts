@@ -88,105 +88,23 @@ function resolveLocalModel(
   );
 }
 
-// ── Threshold profiles ──
-// Embedding backends have very different cosine distributions, so a single
-// threshold set cannot serve all of them. e5 in particular packs unrelated
-// short concept keys into the same 0.86–0.92 band as related ones, which
-// collapses the key graph at BGE-tuned thresholds. For e5 we therefore raise
-// merge/auto-link/key-recall high enough to avoid spurious matching and lean on
-// the content path (which separates cleanly), BM25, name-exact keys, and
-// explicit key links for retrieval.
+// ── Key threshold profiles ──
+// Cosine distributions differ by model; e5 needs higher key thresholds to avoid
+// merging unrelated concepts in its narrow high-cosine band.
 export interface ThresholdProfile {
   keyMerge: number;
-  memoryDedup: number;
   keyAutoLink: number;
   keyRecall: number;
-  contentRecall: number;
-  // Absolute cosine floor: a recalled memory must have raw similarity (best of
-  // content-sim / matched key-sim) >= minScore, else it is dropped. Lets recall
-  // return [] for truly-unrelated queries instead of topK noise.
-  minScore: number;
-  // Lower bound of the contradiction band [contradiction, memoryDedup). New
-  // memories whose best similarity to an existing one falls in this band AND
-  // share a key are flagged (not deduped) as potential contradictions.
-  contradiction: number;
-  // Robust-z (median/MAD) distribution gate threshold: the top content similarity
-  // must be at least this many MAD-sigmas above the median of the query's
-  // similarity distribution for the query to count as "found". 0 disables the gate.
-  // Built for e5, whose narrow packed cosine band defeats the absolute minScore gate.
-  gateZ: number;
-  // Key-proximity gate: a query counts as "found" if its best concept-key cosine
-  // is >= keyGate. On e5 this separates found/not-found far more cleanly than the
-  // content distribution (curated concept keys are reliable topic anchors): real
-  // queries land >=0.88 against some key, unrelated queries stay <=0.875. 0 disables.
-  keyGate: number;
-  // Write-time semantic merge for SHORT concept keys: an incoming short key folds into
-  // an existing concept key when their cosine >= this (a clear synonym), reconciling the
-  // state-blind key choices an LLM makes at remember() time. Model-specific (e5 packs
-  // cosines higher than bge-m3, so it needs a higher value). 0 = exact-match-only (off).
+  // Short concepts merge only at a conservative synonym threshold; 0 disables it.
   shortKeyMerge: number;
-  // Content gate for SHORT keyword queries (isShortConcept). Retrieval models are trained
-  // on sentence-shaped queries, so keyword↔content cosines run systematically lower than
-  // sentence↔content. bge-m3 measured 2026-07-29 (12 real-style KO pairs × 132 cross):
-  // related min 0.386 / p25 0.472 / med 0.523; unrelated p95 0.452 / max 0.508 — the 0.55
-  // contentRecall gate cut 8/12 RELATED pairs. 0.46 sits above unrelated p95 and below
-  // related p25 (admits 9/12, ~4% per-pair noise, ranked below real hits by fusion).
-  // Not-found cost, measured on the live store (~1.3k memories): 1/5 absent-topic probes
-  // returned a single low-scored junk key (~0.48) that 0.55 would have blanked; accepted —
-  // hiding a real memory is the costlier failure, and nearest_keys/no_match signaling
-  // gives the agent the retry loop either way. 0 = disabled (short queries use contentRecall).
-  contentRecallShort: number;
 }
 
 export const THRESHOLD_PROFILES: Record<string, ThresholdProfile> = {
-  openai: { keyMerge: 0.85, memoryDedup: 0.9, keyAutoLink: 0.5, keyRecall: 0.28, contentRecall: 0.28, minScore: 0.28, contradiction: 0.85, gateZ: 0, keyGate: 0, shortKeyMerge: 0, contentRecallShort: 0 },
-  bge: { keyMerge: 0.85, memoryDedup: 0.9, keyAutoLink: 0.6, keyRecall: 0.6, contentRecall: 0.5, minScore: 0.5, contradiction: 0.85, gateZ: 0, keyGate: 0, shortKeyMerge: 0, contentRecallShort: 0 },
-  // e5: query↔key is asymmetric (query/passage prefixes) and separates well —
-  // exact-term matches land ~0.886+, distinct words ≤0.82, so keyRecall 0.85
-  // catches real key hits. But key↔key and content↔key are both passage-embedded
-  // and do NOT separate, so keyMerge/keyAutoLink stay high to prevent collapse.
-  // memoryDedup 0.985: e5 packs distinct-but-similar facts ("A uses Postgres" vs
-  // "B uses Mongo" ≈0.96) dangerously close to true paraphrases (≈0.99). Dedup
-  // wrongly below 0.985 would silently supersede distinct memories → data loss.
-  // gateZ 2.5: calibrated on fast-multilingual-e5-large (8-memory realistic set).
-  // Measured FOUND z: [2.80, 3.33, 4.33, 4.81] (min 2.80).
-  // Measured NOT-FOUND z: [0.87, 0.98, 1.51, 2.28] (max 2.28).
-  // Gap [2.28, 2.80] — chose 2.5 (biased toward lower edge to avoid blocking real matches).
-  // Margin is narrow (~0.52σ gap, n=8 fixture); KEYMEM_GATE_Z is the per-deployment
-  // escape hatch for re-tuning if the gap shifts on a different corpus or model variant.
-  // Known e5 limitation: the gate keys off maxContentSim (content cosine only), so a
-  // genuinely-relevant hit that anchors solely via a fuzzy (non-literal) key match but
-  // produces a flat content distribution may be gated out — the gate intentionally overrides
-  // weak fuzzy-key anchors on e5; only literal key matches (definiteAnchor, memRawSim>=0.999)
-  // are protected from the distribution gate.
-  // not-found gate DISABLED on e5 by default (gateZ 0, keyGate 0). Empirically, no
-  // similarity heuristic reliably separates found/not-found on e5: held-out validation
-  // showed both the content-distribution gate AND the key-proximity gate overfit
-  // (12-query tuning set 100%, but a fresh held-out set only 63%). e5 packs everything
-  // into ~0.83–0.92, and person-attribute queries ("동균 나이", "전화번호") are
-  // inseparable from real facts that share the subject — a not-found query can score a
-  // higher content-z (전화번호 z=4.70) or topContentCos (동균 나이 0.891) than a real
-  // match. Since hiding a real memory (false negative) is a worse failure than returning
-  // noise, e5 defaults to no gate (0.7.0 behavior: never hides). The gate machinery is
-  // env-opt-in (KEYMEM_GATE_Z / _KEY_GATE) for users who accept the precision/recall
-  // tradeoff. bge-m3's absolute minScore gate was verified end-to-end on a small
-  // (~14-memory) fixture, but does NOT hold at corpus scale: on a 49-memory single-subject
-  // fixture (2026-09-18), not-found queries' top content-cosine (0.42–0.76) routinely
-  // cleared minScore=0.55 on topic alone, and a robust-z check confirmed the SAME failure
-  // mode documented above for e5 — not-found z (1.26–2.71) overlaps real-hit z (1.16–7.85)
-  // too much for any gateZ to separate them. Turning gateZ/keyGate on does not fix this;
-  // the actual gap is minScore not scaling with corpus/topic density. Do not re-add a
-  // "bge-m3 is clean" claim without re-verifying at a realistic corpus size.
-  e5: { keyMerge: 0.97, memoryDedup: 0.985, keyAutoLink: 0.93, keyRecall: 0.85, contentRecall: 0.8, minScore: 0.8, contradiction: 0.95, gateZ: 0, keyGate: 0, shortKeyMerge: 0, contentRecallShort: 0 },
-  minilm: { keyMerge: 0.85, memoryDedup: 0.9, keyAutoLink: 0.6, keyRecall: 0.5, contentRecall: 0.45, minScore: 0.45, contradiction: 0.85, gateZ: 0, keyGate: 0, shortKeyMerge: 0, contentRecallShort: 0 },
-  // bge-m3: multilingual, 1024-dim, well-separated (closer to bge than e5).
-  // dedup lowered to 0.94 so real duplicates are caught without fragmenting.
-  // contradiction 0.80 calibrated against real bge-m3: same-subject conflicting
-  // facts ("uses Postgres" vs "uses Mongo") land ~0.81–0.86, while merely-related
-  // facts top out ~0.80, so 0.80 separates them. Note a known limit — conflicts
-  // differing by a single token ("월요일" vs "금요일") can land ~0.95, above
-  // memoryDedup, and are silently superseded rather than flagged. Env-overridable.
-  bgem3: { keyMerge: 0.86, memoryDedup: 0.94, keyAutoLink: 0.62, keyRecall: 0.62, contentRecall: 0.55, minScore: 0.55, contradiction: 0.80, gateZ: 0, keyGate: 0, shortKeyMerge: 0.9, contentRecallShort: 0.46 },
+  openai: { keyMerge: 0.85, keyAutoLink: 0.5, keyRecall: 0.28, shortKeyMerge: 0 },
+  bge: { keyMerge: 0.85, keyAutoLink: 0.6, keyRecall: 0.6, shortKeyMerge: 0 },
+  e5: { keyMerge: 0.97, keyAutoLink: 0.93, keyRecall: 0.85, shortKeyMerge: 0 },
+  minilm: { keyMerge: 0.85, keyAutoLink: 0.6, keyRecall: 0.5, shortKeyMerge: 0 },
+  bgem3: { keyMerge: 0.86, keyAutoLink: 0.62, keyRecall: 0.62, shortKeyMerge: 0.9 },
 };
 
 export function familyForModel(
@@ -302,19 +220,6 @@ function envThreshold(suffix: string): number | undefined {
   return n;
 }
 
-// Like envThreshold but for non-negative unbounded values (e.g. a z-score gate),
-// which legitimately exceed 1. Rejects negative / non-finite input.
-function envNonNegative(suffix: string): number | undefined {
-  const raw = cfgRaw(suffix);
-  if (raw === undefined || raw.trim() === "") return undefined;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0) {
-    console.error(`[keymem] WARNING: ignoring ${cfgName(suffix)}="${raw}" (must be a number >= 0).`);
-    return undefined;
-  }
-  return n;
-}
-
 // Per-threshold env overrides are an escape hatch for when the model or the
 // character of stored data drifts away from what the built-in profiles assume.
 export function getThresholdProfile(): ThresholdProfile {
@@ -324,16 +229,9 @@ export function getThresholdProfile(): ThresholdProfile {
       : THRESHOLD_PROFILES[localModelFamily()];
   return {
     keyMerge: envThreshold("KEY_MERGE") ?? base.keyMerge,
-    memoryDedup: envThreshold("MEMORY_DEDUP") ?? base.memoryDedup,
     keyAutoLink: envThreshold("KEY_AUTOLINK") ?? base.keyAutoLink,
     keyRecall: envThreshold("KEY_RECALL") ?? base.keyRecall,
-    contentRecall: envThreshold("CONTENT_RECALL") ?? base.contentRecall,
-    minScore: envThreshold("MIN_SCORE") ?? base.minScore,
-    contradiction: envThreshold("CONTRADICTION") ?? base.contradiction,
-    gateZ: envNonNegative("GATE_Z") ?? base.gateZ,
-    keyGate: envThreshold("KEY_GATE") ?? base.keyGate,
     shortKeyMerge: envThreshold("SHORT_KEY_MERGE") ?? base.shortKeyMerge,
-    contentRecallShort: envThreshold("CONTENT_RECALL_SHORT") ?? base.contentRecallShort,
   };
 }
 

@@ -14,7 +14,7 @@ function vec(t: string): number[] {
     QQ: [1, 0, 0, 0, 0],
     A: [0.9, 0.4359, 0, 0, 0],   // cos(query)=0.90 (in pool, not a definite anchor)
     B: [0.85, 0, 0.5268, 0, 0],  // cos(query)=0.85
-    ka: [0, 0, 0, 1, 0], kb: [0, 0, 0, 0, 1],
+    ka: [0.9, 0.4359, 0, 0, 0], kb: [0.85, 0, 0.5268, 0, 0],
   };
   return m[t] ?? [0, 0, 0, 1, 0];
 }
@@ -37,8 +37,8 @@ test("rerank not-found gate returns [] when top relevance is below the floor", a
   const mg = await import(`../src/memoryGraph.ts?rrnf=${n++}`);
   const g = new mg.MemoryGraph();
   await g.load();
-  await g.add("A", ["ka"], {});
-  await g.add("B", ["kb"], {});
+  await g.add("QQ A", ["ka"], {});
+  await g.add("QQ B", ["kb"], {});
 
   // All candidates score below the floor → not-found.
   rer.__setTestReranker((_q, texts) => texts.map(() => -1));
@@ -72,7 +72,7 @@ test("rerank not-found gate does NOT fire on cross-lingual (script mismatch)", a
     "직업한국어질의": [1, 0, 0, 0, 0],
     "english memory one": [0.9, 0.4359, 0, 0, 0],
     "english memory two": [0.85, 0, 0.5268, 0, 0],
-    ka: [0, 0, 0, 1, 0], kb: [0, 0, 0, 0, 1],
+    ka: [0.9, 0.4359, 0, 0, 0], kb: [0.85, 0, 0.5268, 0, 0],
   };
   const emb = await import("../src/embedding.ts");
   emb.__setTestEmbedder((tx: string) => xvec[tx] ?? [0, 0, 0, 1, 0]);

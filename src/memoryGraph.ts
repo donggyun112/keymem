@@ -7,7 +7,8 @@ import { selectInject } from "./inject.js";
 import { timed } from "./timing.js";
 import { analyzeTaskEvidence, projectTaskEvidence } from "./evidenceSelection.js";
 import MiniSearch from "minisearch";
-import { embedTextAsync, EMBEDDING_BACKEND, embeddingFingerprint, getThresholdProfile, isShortConcept, inContradictionBand } from "./embedding.js";
+import { ensureLexicalTokenizer, tokenizeLexical } from "./lexical.js";
+import { embedTextAsync, EMBEDDING_BACKEND, embeddingFingerprint, getThresholdProfile, isShortConcept } from "./embedding.js";
 import { rerankEnabled, rerankScores } from "./reranker.js";
 import { writeVectors, readVectors } from "./vectorStore.js";
 import type { Key, Memory, GraphData } from "./types.js";
@@ -33,21 +34,9 @@ const GRAPH_FILE = join(DATA_DIR, "graph.json");
 // Thresholds are calibrated per embedding backend/model (see embedding.ts).
 const _THRESHOLDS = getThresholdProfile();
 const KEY_MERGE_THRESHOLD = _THRESHOLDS.keyMerge;
-const MEMORY_DEDUP_THRESHOLD = _THRESHOLDS.memoryDedup;
-const KEY_AUTO_LINK_THRESHOLD = _THRESHOLDS.keyAutoLink;
 const KEY_RECALL_THRESHOLD = _THRESHOLDS.keyRecall;
-const CONTENT_RECALL_THRESHOLD = _THRESHOLDS.contentRecall;
-// Calibrated lower content gate for SHORT keyword queries (see embedding.ts profile
-// comment for the measured bands). 0/unset in a profile → falls back to contentRecall.
-const CONTENT_RECALL_SHORT = _THRESHOLDS.contentRecallShort || _THRESHOLDS.contentRecall;
-// Fused-score factor for memories admitted ONLY by the short-query content gate (see recall()).
-const WEAK_ADMIT_FACTOR = 0.1;
-const MIN_SCORE_THRESHOLD = _THRESHOLDS.minScore;
-const GATE_Z_THRESHOLD = _THRESHOLDS.gateZ;
-const GATE_MIN_POPULATION = 8;
-const KEY_GATE_THRESHOLD = _THRESHOLDS.keyGate;
+const AUTOKEY_NEW_KEY_THRESHOLD = _THRESHOLDS.keyAutoLink;
 const SHORT_KEY_MERGE_THRESHOLD = _THRESHOLDS.shortKeyMerge;
-const CONTRADICTION_THRESHOLD = _THRESHOLDS.contradiction;
 const DEPTH_INCREMENT = 0.05;
 const DEPTH_MAX = 1.0;
 const DEPTH_DEEP_THRESHOLD = 0.7;
@@ -355,6 +344,10 @@ export function normalizeNamespace(ns: unknown): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
+export function normalizeMemoryContent(content: string): string {
+  return content.normalize("NFC").trim().replace(/\s+/g, " ");
+}
+
 export function sanitizeKeys(keys: unknown): string[] {
   let arr: unknown[];
   if (typeof keys === "string") {
@@ -433,6 +426,7 @@ export class MemoryGraph {
   private _saveSeq = 0;
   private _dirty = false;
   private _bm25: MiniSearch;
+  private _indexedDocs = new Map<string, string>();
   private readonly _now: () => number;
   private _recallBuffer = new RecallBuffer({
     capacity: AUTOKEY_BUFFER_CAPACITY,
@@ -442,15 +436,11 @@ export class MemoryGraph {
   constructor(options: MemoryGraphOptions = {}) {
     this._now = options.now ?? (() => Date.now() / 1000);
     this._bm25 = new MiniSearch({
-      fields: ["content"],
+      fields: ["content", "keys"],
       storeFields: [],
       idField: "id",
-      tokenize: (text: string) =>
-        text
-          .toLowerCase()
-          .split(/[\s\p{P}]+/u)
-          .filter((t) => t.length >= 1),
-      processTerm: (term: string) => (term.length < 1 ? false : term.toLowerCase()),
+      tokenize: tokenizeLexical,
+      processTerm: (term: string) => term.toLowerCase(),
     });
   }
 
@@ -587,7 +577,7 @@ export class MemoryGraph {
       throw new Error(
         `Embedding dimension mismatch: existing data uses ${this._storedDim}-dim, ` +
           `current backend (${EMBEDDING_BACKEND}) produces ${dim}-dim.\n` +
-          `Restart the server to auto-migrate (re-embeds all data with the current ` +
+          `Restart the server to auto-migrate (re-embeds all keys with the current ` +
           `backend, preserving content), or set KEYMEM_AUTO_MIGRATE=false to opt out.`
       );
     }
@@ -596,7 +586,7 @@ export class MemoryGraph {
   // Recover from an embedding-backend/dimension change instead of bricking.
   // Switching backends (e.g. OpenAI 1536-dim → local 768/1024-dim) used to make
   // every recall/remember throw forever. Here we detect the mismatch on load and
-  // re-embed all keys and memories with the current backend — content, links,
+  // re-embed all keys with the current backend — content, links,
   // depth, and access history are preserved. Disable with KEYMEM_AUTO_MIGRATE=false.
   private async _ensureEmbeddingDim(): Promise<void> {
     if (this._storedDim === null) return;
@@ -636,13 +626,12 @@ export class MemoryGraph {
 
   private async _migrateEmbeddings(newDim: number, newFingerprint: string): Promise<void> {
     const nKeys = Object.keys(this.keys).length;
-    const nMems = Object.keys(this.memories).length;
     const change =
       newDim !== this._storedDim
         ? `dimension changed ${this._storedDim} -> ${newDim}`
         : `model changed "${this._storedFingerprint}" -> "${newFingerprint}" (same ${newDim}-dim)`;
     console.error(
-      `[graph] embedding ${change}. Re-embedding ${nKeys} keys + ${nMems} memories with the ` +
+      `[graph] embedding ${change}. Re-embedding ${nKeys} keys with the ` +
         `current backend (${EMBEDDING_BACKEND}); content and links are preserved. One-time migration.`
     );
     const tag = newDim !== this._storedDim ? `${this._storedDim}d` : (this._storedFingerprint ?? `${this._storedDim}d-legacy`).replace(/[^A-Za-z0-9._-]/g, "_");
@@ -650,9 +639,6 @@ export class MemoryGraph {
       await copyFile(GRAPH_FILE, `${GRAPH_FILE}.bak.${tag}`);
     } catch (err) {
       console.error(`[graph] pre-migration backup failed (continuing): ${errorMessage(err)}`);
-    }
-    for (const mem of Object.values(this.memories)) {
-      mem.embedding = await embedTextAsync(mem.content, "passage");
     }
     for (const key of Object.values(this.keys)) {
       key.embedding = await embedTextAsync(key.concept, "passage");
@@ -792,13 +778,9 @@ export class MemoryGraph {
           if (this._hasLink(atomicId, mid)) continue;
           const mem = this.memories[mid];
           if (!mem) continue;
-          // Gate on the atomic key's OWN similarity to the memory, not the phrase link's
-          // weight. A shared token is not a shared topic: unfiltered, half the bridges
-          // landed on generic hubs ("사용자", "프로젝트") that would dilute every later
-          // recall on them. CONTENT_RECALL_SHORT is the bar this store measured for exactly
-          // this comparison — short key vs sentence content, above unrelated p95 (0.452).
-          const sim = cosineSim(atomic.embedding, mem.embedding);
-          if (sim < CONTENT_RECALL_SHORT) continue;
+          // Bridge only when the existing atomic and phrase KEYS agree semantically.
+          const sim = cosineSim(atomic.embedding, key.embedding);
+          if (sim < KEY_RECALL_THRESHOLD) continue;
           this._link(atomicId, mid, sim);
           bridged++;
         }
@@ -844,76 +826,42 @@ export class MemoryGraph {
     while (this._recentQueryEmb.size > 8) this._recentQueryEmb.delete(this._recentQueryEmb.keys().next().value!);
   }
 
-  // Dedup and contradiction detection are scoped to ONE namespace: the same sentence saved
-  // under two projects is two facts, not a duplicate, and a project note must never be
-  // silently superseded by a look-alike from another project. `namespace` null = unscoped
-  // (only used when the caller has no namespace to offer).
-  private _findDuplicate(embedding: number[], namespace: string | null = null): string | null {
-    const activeMems = Object.entries(this.memories).filter(
-      ([mid, mem]) =>
-        !(mid in this._supersededBy) && !this._isExpired(mem) && (namespace === null || mem.namespace === namespace)
-    );
-    if (activeMems.length === 0) return null;
-    const matrix = activeMems.map(([, mem]) => mem.embedding);
-    const sims = batchCosineSim(embedding, matrix);
-    let bestIdx = 0,
-      bestSim = -Infinity;
-    for (let i = 0; i < sims.length; i++) {
-      if (sims[i] > bestSim) {
-        bestSim = sims[i];
-        bestIdx = i;
-      }
+  // Exact text only: semantic similarity must never silently replace a different fact.
+  private _findDuplicate(content: string, namespace: string | null = null): string | null {
+    const normalized = normalizeMemoryContent(content);
+    for (const [id, memory] of Object.entries(this.memories)) {
+      if (id in this._supersededBy || this._isExpired(memory)) continue;
+      if (namespace !== null && memory.namespace !== namespace) continue;
+      if (normalizeMemoryContent(memory.content) === normalized) return id;
     }
-    return bestSim >= MEMORY_DEDUP_THRESHOLD ? activeMems[bestIdx][0] : null;
-  }
-
-  // Find an existing active memory that CONTRADICTS the new one: best similarity
-  // sits in the contradiction band [CONTRADICTION_THRESHOLD, MEMORY_DEDUP_THRESHOLD)
-  // AND the two share at least one key (same subject). Heuristic — surfaces a
-  // signal, does not block or supersede. Returns the conflicting memory id or null.
-  private _findContradiction(
-    embedding: number[],
-    keyIds: Iterable<string>,
-    namespace: string | null = null
-  ): string | null {
-    const newKeys = new Set(keyIds);
-    if (newKeys.size === 0) return null;
-    let bestId: string | null = null;
-    let bestSim = -Infinity;
-    for (const [mid, mem] of Object.entries(this.memories)) {
-      if (mid in this._supersededBy || this._isExpired(mem)) continue;
-      if (namespace !== null && mem.namespace !== namespace) continue;
-      const sim = cosineSim(embedding, mem.embedding);
-      if (!inContradictionBand(sim, CONTRADICTION_THRESHOLD, MEMORY_DEDUP_THRESHOLD)) continue;
-      const shares = [...(this._memToKeys[mid]?.keys() ?? [])].some((kid) => newKeys.has(kid));
-      if (shares && sim > bestSim) {
-        bestSim = sim;
-        bestId = mid;
-      }
-    }
-    return bestId;
-  }
-
-  private _autoLinkKeys(memId: string, embedding: number[]): void {
-    const keyIds = Object.keys(this.keys);
-    if (keyIds.length === 0) return;
-    const matrix = keyIds.map((kid) => this.keys[kid].embedding);
-    const sims = batchCosineSim(embedding, matrix);
-    for (let i = 0; i < keyIds.length; i++) {
-      if (sims[i] >= KEY_AUTO_LINK_THRESHOLD && !this._hasLink(keyIds[i], memId)) {
-        this._link(keyIds[i], memId, sims[i]);
-        this._setAutoLink(keyIds[i], memId, true);
-      }
-    }
+    return null;
   }
 
   private _rebuildBm25Index(): void {
-    this._bm25.removeAll();
     const docs = Object.entries(this.memories)
       .filter(([mid]) => !(mid in this._supersededBy))
       .filter(([, mem]) => !this._isExpired(mem))
-      .map(([mid, mem]) => ({ id: mid, content: mem.content }));
-    if (docs.length > 0) this._bm25.addAll(docs);
+      .map(([mid, mem]) => ({
+        id: mid,
+        content: mem.content,
+        keys: [...(this._memToKeys[mid]?.keys() ?? [])]
+          .flatMap((kid) => this.keys[kid] ? [this.keys[kid].concept, ...(this.keys[kid].aliases ?? [])] : [])
+          .join(" "),
+      }));
+    const activeIds = new Set(docs.map((doc) => doc.id));
+    for (const id of this._indexedDocs.keys()) {
+      if (!activeIds.has(id)) {
+        if (this._bm25.has(id)) this._bm25.discard(id);
+        this._indexedDocs.delete(id);
+      }
+    }
+    for (const doc of docs) {
+      const signature = JSON.stringify([doc.content, doc.keys]);
+      if (this._indexedDocs.get(doc.id) === signature) continue;
+      if (this._bm25.has(doc.id)) this._bm25.discard(doc.id);
+      this._bm25.add(doc);
+      this._indexedDocs.set(doc.id, signature);
+    }
   }
 
   getKeysForMemory(memId: string): string[] {
@@ -940,6 +888,7 @@ export class MemoryGraph {
   // ── I/O ──
 
   async load(): Promise<void> {
+    await ensureLexicalTokenizer();
     let raw: GraphData;
     try {
       const text = await readFile(GRAPH_FILE, "utf-8");
@@ -954,7 +903,8 @@ export class MemoryGraph {
     // Hydrate vectors from the binary sidecar (v0.20+). Legacy stores carry them
     // inline in graph.json; loading those still works and the presence of any inline
     // vector marks the graph dirty so the next flush migrates to the sidecar.
-    const sidecar = await readVectors(DATA_DIR);
+    const sidecar = await readVectors(DATA_DIR, "k:");
+    if ((raw.meta?.schemaVersion ?? 0) < 3) this.markDirty();
     let sawInlineVectors = false;
 
     for (const [kid, k] of Object.entries(raw.keys ?? {})) {
@@ -1024,10 +974,9 @@ export class MemoryGraph {
       mem.contradicts = Array.isArray(mem.contradicts)
         ? mem.contradicts.filter((id): id is string => typeof id === "string" && id in (raw.memories ?? {}))
         : [];
-      if (mem.embedding && mem.embedding.length > 0) sawInlineVectors = true;
-      else mem.embedding = sidecar?.get(`m:${mid}`)?.[0] ?? [];
-      if (!mem.embedding || mem.embedding.length === 0) {
-        mem.embedding = await embedTextAsync(mem.content);
+      if ("embedding" in loadedMem) {
+        delete loadedMem.embedding;
+        repaired = true;
       }
       const legacyConfirmedAt = Math.max(
         Number.isFinite(mem.created_at) ? mem.created_at : 0,
@@ -1069,10 +1018,8 @@ export class MemoryGraph {
     }
     if (sawInlineVectors) this.markDirty(); // legacy store → migrate on next flush
 
-    if (Object.keys(this.memories).length > 0) {
-      const firstMem = Object.values(this.memories)[0];
-      this._storedDim = firstMem.embedding.length;
-    }
+    const firstKey = Object.values(this.keys)[0];
+    this._storedDim = firstKey?.embedding.length ?? null;
 
     for (const lnk of raw.links ?? []) {
       if (lnk.key_id in this.keys && lnk.memory_id in this.memories) {
@@ -1108,6 +1055,8 @@ export class MemoryGraph {
   }
 
   async save(): Promise<void> {
+    await ensureLexicalTokenizer();
+    this._rebuildBm25Index();
     const links: Array<{ key_id: string; memory_id: string; weight: number; auto?: true }> = [];
     for (const [kid, mids] of Object.entries(this._keyToMems)) {
       for (const [mid, weight] of mids) {
@@ -1123,9 +1072,9 @@ export class MemoryGraph {
       strippedKeys[kid] = { ...k, embedding: [] };
     }
     const strippedMems: Record<string, Memory> = {};
-    for (const [mid, m] of Object.entries(this.memories)) {
-      if (m.embedding.length > 0) vecs.set(`m:${mid}`, [m.embedding]);
-      strippedMems[mid] = { ...m, embedding: [] };
+    for (const [mid, memory] of Object.entries(this.memories)) {
+      const { embedding: _legacyBodyVector, ...body } = memory as Memory & { embedding?: unknown };
+      strippedMems[mid] = body;
     }
     // Stamp the fingerprint of the space the stored vectors actually live in, so a later
     // same-dimension backend swap is detected on load. That is the loaded fingerprint (a
@@ -1139,7 +1088,7 @@ export class MemoryGraph {
       keys: strippedKeys,
       memories: strippedMems,
       links,
-      meta: { embeddingFingerprint: fingerprint, schemaVersion: 2 },
+      meta: { embeddingFingerprint: fingerprint, schemaVersion: 3 },
     };
     // Snapshot is built synchronously above (callers mutate under _lock without
     // awaiting mid-mutation, so this read is consistent). Serialize the actual I/O
@@ -1200,6 +1149,7 @@ export class MemoryGraph {
         embedding: await embedTextAsync(concept),
         key_type: keyType,
       };
+      this._checkDim(this.keys[kid].embedding);
       return kid;
     }
 
@@ -1207,6 +1157,7 @@ export class MemoryGraph {
     // near-identical-but-distinct short keys ("Agent A" vs "Agent B") stay separate.
     if (isShortConcept(concept)) {
       const emb = await embedTextAsync(concept);
+      this._checkDim(emb);
       // Conservative semantic merge: fold an incoming short key into an existing concept
       // key only at high cosine (clear synonym). Reconciles state-blind LLM key choices
       // without conflating distinct concepts. Disabled by default (threshold 0).
@@ -1232,6 +1183,7 @@ export class MemoryGraph {
     }
 
     const emb = await embedTextAsync(concept);
+    this._checkDim(emb);
     const conceptKeys = Object.entries(this.keys).filter(
       ([, k]) => k.key_type === "concept"
     );
@@ -1282,7 +1234,7 @@ export class MemoryGraph {
         "remember requires at least one usable key (1+ CJK character, or 2+ characters otherwise) — a keyless memory can never be recalled."
       );
     }
-    const embedding = await embedTextAsync(content); // outside lock
+    await ensureLexicalTokenizer();
 
     // Duplicate detection and insertion run under a SINGLE lock acquisition so they are
     // atomic: two concurrent identical adds serialize, and the second observes the first's
@@ -1291,9 +1243,8 @@ export class MemoryGraph {
     let dupId: string | null = null;
     let resultMid = "";
     await this._lock.runExclusive(async () => {
-      this._checkDim(embedding);
       const namespace = normalizeNamespace(options.namespace) ?? "default";
-      dupId = this._findDuplicate(embedding, namespace);
+      dupId = this._findDuplicate(content, namespace);
       if (dupId !== null) return; // defer to supersede() once the lock is released
 
       const mid = uid();
@@ -1306,7 +1257,6 @@ export class MemoryGraph {
       this.memories[mid] = {
         id: mid,
         content,
-        embedding,
         created_at: now,
         source: options.source ?? null,
         supersedes: null,
@@ -1344,37 +1294,10 @@ export class MemoryGraph {
         this._bridgePhraseKeys();
       }
 
-      const linkedKeyIds = [...(this._memToKeys[mid]?.keys() ?? [])];
-      this._autoLinkKeys(mid, embedding);
-      const conflictId = this._findContradiction(embedding, linkedKeyIds, namespace);
-      if (conflictId && conflictId !== mid) {
-        if (!this.memories[mid].contradicts.includes(conflictId)) {
-          this.memories[mid].contradicts.push(conflictId);
-        }
-        if (!this.memories[conflictId].contradicts.includes(mid)) {
-          this.memories[conflictId].contradicts.push(mid);
-        }
-      }
-      this._bm25.add({ id: mid, content });
       await this.save();
     });
 
     if (dupId !== null) {
-      // Threshold-free conflict signal: does the soon-to-be-superseded memory share a
-      // key with the incoming one? A shared key + high similarity is the same shape the
-      // contradiction detector keys off, so surface it rather than silently overwriting.
-      // The supersede DECISION is unchanged — telling a paraphrase from a high-similarity
-      // conflict needs the calibration corpus; this only makes the overwrite observable.
-      const sanitized = sanitizeKeys(keyConcepts);
-      const dupConcepts = new Set<string>();
-      for (const kid of this._memToKeys[dupId]?.keys() ?? []) {
-        const k = this.keys[kid];
-        if (!k) continue;
-        dupConcepts.add(k.concept.toLowerCase());
-        for (const alias of k.aliases ?? []) dupConcepts.add(alias.toLowerCase());
-      }
-      const conflict = sanitized.some((c) => dupConcepts.has(c.toLowerCase()));
-
       const newId = await this.supersede(dupId, content, {
         keyConcepts,
         keyTypes: options.keyTypes ?? undefined,
@@ -1384,7 +1307,7 @@ export class MemoryGraph {
         ttlSeconds: options.ttlSeconds ?? null,
         decayProfile: parseDecayProfile(options.decayProfile),
       });
-      return [newId, true, dupId, conflict];
+      return [newId, true, dupId, false];
     }
 
     return [resultMid, false, null, false];
@@ -1407,7 +1330,7 @@ export class MemoryGraph {
   ): Promise<string> {
     const decayProfile =
       options.decayProfile === undefined ? undefined : parseDecayProfile(options.decayProfile);
-    const newEmbedding = await embedTextAsync(newContent); // outside lock
+    await ensureLexicalTokenizer();
 
     let resultMid = "";
     await this._lock.runExclusive(async () => {
@@ -1420,7 +1343,7 @@ export class MemoryGraph {
         // The head was superseded and pruned by a concurrent supersede (grandparent cleanup
         // deletes it). Re-resolve against the current live state so concurrent supersedes of
         // the same content collapse into one chain instead of erroring or forking successors.
-        const reResolved = this._findDuplicate(newEmbedding, normalizeNamespace(options.namespace) ?? null);
+        const reResolved = this._findDuplicate(newContent, normalizeNamespace(options.namespace) ?? null);
         if (reResolved === null) {
           throw new Error(`Memory ${oldId} not found`);
         }
@@ -1453,7 +1376,6 @@ export class MemoryGraph {
       this.memories[mid] = {
         id: mid,
         content: newContent,
-        embedding: newEmbedding,
         created_at: now,
         source: options.source ?? null,
         supersedes: oldId,
@@ -1477,7 +1399,6 @@ export class MemoryGraph {
         last_confirmation_id: null,
       };
 
-      this._bm25.add({ id: mid, content: newContent });
 
       // Weaken old memory depth
       old.depth =
@@ -1515,59 +1436,14 @@ export class MemoryGraph {
           this._bridgePhraseKeys();
         }
       } else {
-        // Inherit the old keys, but drop CONCEPT keys the corrected content has drifted
-        // away from. A same-topic update (Seoul -> Busan) stays close to "residence" and
-        // keeps it; an off-topic correction (strawberries -> peanut allergy) must not
-        // remain tagged "strawberry" and pollute that key's recall. Exact-match anchors
-        // (name/proper_noun) are always kept — they only match literal queries, so they
-        // cannot pollute semantic recall. (snapshot to avoid mutation during iteration)
-        //
-        // Drift bar: key↔CONTENT cosine, so it must use the content-calibrated gate
-        // (CONTENT_RECALL_SHORT, bgem3 0.46), NOT keyRecall (0.62). Short keys sit at
-        // 0.477–0.643 against SAME-topic sentence content (measured 2026-07-29), so the
-        // 0.62 bar dropped every inherited key on a typical correction and the new
-        // version became an unreachable keyless orphan (recall miss + explain:true
-        // misreporting empty_namespace — live-confirmed regression).
-        const inherited: Array<[string, number]> = [];
-        for (const [kid, w] of [...(this._memToKeys[oldId] ?? new Map())]) {
-          const key = this.keys[kid];
-          if (
-            key &&
-            key.key_type === "concept" &&
-            cosineSim(newEmbedding, key.embedding) < CONTENT_RECALL_SHORT
-          ) {
-            continue; // stale topic key — drop it so the off-topic memory is not mis-tagged
-          }
-          inherited.push([kid, w]);
-        }
-        if (inherited.length === 0) {
-          // Invariant: a correction must NEVER produce a keyless orphan — an occasionally
-          // stale tag is recoverable, an unreachable memory is not. Keep everything.
-          for (const [kid, w] of [...(this._memToKeys[oldId] ?? new Map())]) {
-            inherited.push([kid, w]);
-          }
-        }
+        // Without new keys, preserve the old navigation path; callers can explicitly retag.
+        const inherited = [...(this._memToKeys[oldId] ?? new Map<string, number>())];
         for (const [kid, w] of inherited) {
           this._link(kid, mid, Math.max(LINK_WEIGHT_MIN, w - LINK_CORRECT_PENALTY));
           this._setAutoLink(kid, mid, this._isAutoLink(kid, oldId));
         }
       }
 
-      this._autoLinkKeys(mid, newEmbedding);
-      // Deliberately captured AFTER _autoLinkKeys (unlike add(), which captures
-      // explicit keys BEFORE auto-linking). Superseded content inherits all keys
-      // including auto-linked ones; the band + shared-key requirement still gates
-      // false positives. Do NOT reorder to match add().
-      const supKeyIds = [...(this._memToKeys[mid]?.keys() ?? [])];
-      const supConflict = this._findContradiction(newEmbedding, supKeyIds, this.memories[mid].namespace);
-      if (supConflict && supConflict !== mid && supConflict !== oldId) {
-        if (!this.memories[mid].contradicts.includes(supConflict)) {
-          this.memories[mid].contradicts.push(supConflict);
-        }
-        if (!this.memories[supConflict].contradicts.includes(mid)) {
-          this.memories[supConflict].contradicts.push(mid);
-        }
-      }
       await this.save();
     });
 
@@ -1587,34 +1463,14 @@ export class MemoryGraph {
 
     const qEmb = await embedTextAsync(cleanQuery, "query");
     this._checkDim(qEmb);
-    // Dual-path cue: the caller's raw utterance/sentence, when provided, drives the
-    // CONTENT signal (sentence↔sentence cosine runs ~0.1–0.2 higher than keyword↔sentence
-    // on bge-m3 — measured 2026-07-29), while the short keyword query keeps driving the
-    // key/lexical signals it is optimal for. Omitted → byte-identical to before.
-    const ctx = contextText?.trim();
-    // Reuse qEmb when the context IS the query (the hook push path sends the utterance
-    // as both) — each bge-m3 embed costs ~200 ms on CPU, and this halves the calls.
-    const cEmb = ctx && ctx !== cleanQuery ? await embedTextAsync(ctx, "query") : qEmb;
-    if (ctx) this._checkDim(cEmb);
+    await ensureLexicalTokenizer();
     this._rememberQueryEmb(cleanQuery, qEmb);
-    if (ctx) this._rememberQueryEmb(ctx, cEmb);
     topK = Math.max(1, Math.min(20, Math.floor(topK)));
-
-    // Content signal: max cosine of a key's member memories to the query. Lets a key whose
-    // CONTENT matches surface even when its coined concept does not lexically/semantically hit
-    // the query — the cure for key-coining dependence. Computed OUTSIDE the lock (read-only
-    // cosine over a synchronous snapshot) to keep the lock hold short, matching the rerank/flush
-    // off-lock design. A memory added after this snapshot simply scores 0 for this query.
-    const memSim = this._bestContentSims(cEmb);
+    const memSim = this._lexicalScores(contextText?.trim() || cleanQuery);
 
     return this._lock.runExclusive(async () => {
       const queryLower = cleanQuery.toLowerCase();
       const isShortQuery = isShortConcept(cleanQuery);
-      // The content signal is driven by the context utterance when one is given, and
-      // sentence↔sentence cosines run higher than keyword↔sentence — so a context always
-      // takes the sentence gate; the calibrated short gate is for bare keyword queries only.
-      // (Korean utterances are often ≤15 chars, so isShortConcept must not decide this.)
-      const contentGate = ctx ? CONTENT_RECALL_THRESHOLD : this._contentGateFor(cleanQuery);
       const nearMiss = new Map<string, number>(); // gate-dropped keys in the confirmation band
       const keyIds = Object.keys(this.keys);
       const sims = batchCosineSim(qEmb, keyIds.map((kid) => this.keys[kid].embedding));
@@ -1658,7 +1514,7 @@ export class MemoryGraph {
         if (
           (key.key_type === "name" || key.key_type === "proper_noun")
             ? !literal
-            : !literal && keySim < KEY_RECALL_THRESHOLD && rawContentSim < contentGate
+            : !literal && keySim < KEY_RECALL_THRESHOLD && rawContentSim <= 0
         ) {
           // Gate-dropped, but a concept key whose embedding sits just below the recall gate
           // (in the confirmation band) is a learning signal: if the agent later confirms the
@@ -1736,26 +1592,15 @@ export class MemoryGraph {
     });
   }
 
-  // Content similarity per memory against the whole-content vector. (Used to score a
-  // sentence-level pack too, measured 2026-09-19 on both the official bench/fixture.json
-  // and a dedicated held-out "buried fact" fixture: zero measurable Hit@5/MRR gain over the
-  // whole-content vector alone, at a real ~2-14x write-time cost. Removed rather than kept
-  // opt-in -- see bench/sentence-vector-fixture-eval.mts.)
-  private _bestContentSims(qVec: number[], candidateIds?: Iterable<string>): Map<string, number> {
-    const memIds = candidateIds
-      ? [...new Set(candidateIds)].filter((mid) => Boolean(this.memories[mid]))
-      : Object.keys(this.memories);
-    const sims = batchCosineSim(qVec, memIds.map((mid) => this.memories[mid].embedding));
-    const out = new Map<string, number>();
-    for (let i = 0; i < memIds.length; i++) out.set(memIds[i], sims[i]);
-    return out;
-  }
-
-  // Short keyword queries (a couple of nouns) embed systematically lower against
-  // sentence-shaped content than sentence queries do; use the calibrated short gate
-  // for them. See the contentRecallShort profile comment in embedding.ts.
-  private _contentGateFor(query: string): number {
-    return isShortConcept(query) ? CONTENT_RECALL_SHORT : CONTENT_RECALL_THRESHOLD;
+  // BM25 relevance is bounded for callers that combine it with key cosine scores.
+  // It is lexical evidence, not a semantic similarity or a confidence probability.
+  private _lexicalScores(query: string, candidateIds?: Iterable<string>): Map<string, number> {
+    const allowed = candidateIds ? new Set(candidateIds) : null;
+    return new Map(
+      this._bm25.search(query, { fuzzy: false, prefix: false })
+        .filter((hit) => !allowed || allowed.has(hit.id))
+        .map((hit) => [hit.id, hit.score / (1 + hit.score)])
+    );
   }
 
   // Hint path for an empty recall: the best keys that FAILED the gate, so the agent
@@ -1780,9 +1625,8 @@ export class MemoryGraph {
     if (!cleanQuery || Object.keys(this.keys).length === 0) return [];
     const qEmb = await embedTextAsync(cleanQuery, "query");
     this._checkDim(qEmb);
-    // Content signal computed OUTSIDE the lock over a synchronous snapshot,
-    // mirroring searchKeys' off-lock design.
-    const memSim = this._bestContentSims(qEmb);
+    await ensureLexicalTokenizer();
+    const memSim = this._lexicalScores(cleanQuery);
     return this._lock.runExclusive(async () => {
       const keyIds = Object.keys(this.keys);
       const sims = batchCosineSim(qEmb, keyIds.map((kid) => this.keys[kid].embedding));
@@ -1904,19 +1748,35 @@ export class MemoryGraph {
     // the target rises to the top instead of being buried among the hub's other members.
     // Omitted query reproduces the prior link-weight ordering exactly (rel = 1).
     const cleanQuery = options.query?.trim();
-    const qEmb = cleanQuery ? await embedTextAsync(cleanQuery, "query") : null;
-    if (qEmb) this._checkDim(qEmb);
+    await ensureLexicalTokenizer();
+    const lexical = cleanQuery ? this._lexicalScores(cleanQuery) : null;
 
     const ranked = this._activeMemoryIdsForKey(keyId, namespace)
       .map((mid) => {
         const mem = this.memories[mid];
         const linkWeight = this._getLinkWeight(keyId, mid);
-        const rel = qEmb ? cosineSim(qEmb, mem.embedding) : 1;
+        const rel = lexical ? lexical.get(mid) ?? 0 : 1;
         const score = rel * linkWeight * (0.9 + mem.depth * 0.1) * this._freshnessFactor(mem);
         return { mid, mem, linkWeight, relevance: rel, score };
       })
       .sort((a, b) => b.score - a.score || b.mem.created_at - a.mem.created_at);
 
+    if (cleanQuery && rerankEnabled() && ranked.length > 0) {
+      const candidates = ranked.slice(0, RERANK_POOL);
+      const scores = await rerankScores(cleanQuery, candidates.map(({ mem }) => mem.content));
+      if (scores) {
+        const reranked = candidates.map((entry, i) => {
+          const relevance = 1 / (1 + Math.exp(-scores[i]));
+          return { ...entry, relevance, score: relevance * entry.linkWeight *
+            (0.9 + entry.mem.depth * 0.1) * this._freshnessFactor(entry.mem) };
+        }).sort((a, b) => b.score - a.score);
+        ranked.splice(0, candidates.length, ...reranked);
+      }
+    }
+    const activeNow = new Set(this._activeMemoryIdsForKey(keyId, namespace));
+    for (let i = ranked.length - 1; i >= 0; i--) {
+      if (!activeNow.has(ranked[i].mid)) ranked.splice(i, 1);
+    }
     const page = ranked.slice(offset, offset + limit).map(({ mid, mem, linkWeight, relevance, score }) => {
       const batchSiblingIds = this._batchSiblingIds(mid, namespace);
       return {
@@ -1928,9 +1788,9 @@ export class MemoryGraph {
         namespace: mem.namespace,
         validity: this._validity(mem),
         link_weight: Math.round(linkWeight * 1000) / 1000,
-        content_relevance: qEmb ? Math.round(relevance * 1000) / 1000 : null,
+        content_relevance: cleanQuery ? Math.round(relevance * 1000) / 1000 : null,
         ...(batchSiblingIds.length ? { batch_sibling_ids: batchSiblingIds } : {}),
-        score_kind: qEmb ? "within_key_rank" as const : "link_rank" as const,
+        score_kind: cleanQuery ? "within_key_rank" as const : "link_rank" as const,
         score: Math.round(score * 1000) / 1000,
       };
     });
@@ -1965,31 +1825,6 @@ export class MemoryGraph {
     };
     let handle = page.memories[0];
     if (!handle) return { status: "no_memory", candidate: null };
-    if (shouldRerank && page.memories.length > 1) {
-      const candidates = await this._lock.runExclusive(async () => page.memories.flatMap((candidate) => {
-        const mem = this.memories[candidate.memory_id];
-        if (
-          !mem ||
-          this._isExpired(mem) ||
-          this._supersededBy[candidate.memory_id] ||
-          (namespace && mem.namespace !== namespace)
-        ) return [];
-        return [{ handle: candidate, content: mem.content }];
-      }));
-      const scores = await rerankScores(query, candidates.map((candidate) => candidate.content));
-      if (scores) {
-        // Cross-encoder logits are unbounded, so squash to (0,1) before weighting by the
-        // key→memory link — otherwise dismiss() (which lowers link_weight) could never
-        // change which memory the passive Top-1 picks.
-        handle = candidates
-          .map((candidate, index) => ({
-            ...candidate,
-            rerankScore: (1 / (1 + Math.exp(-scores[index]))) * candidate.handle.link_weight,
-          }))
-          .sort((a, b) => b.rerankScore - a.rerankScore)[0]?.handle;
-      }
-      if (!handle) return { status: "no_memory", candidate: null };
-    }
     const contentLimit = Number.isFinite(maxChars)
       ? Math.max(256, Math.min(20_000, Math.floor(maxChars)))
       : INJECT_MAX_CHARS;
@@ -2108,7 +1943,7 @@ export class MemoryGraph {
       cosine: entry.weakKeyScores.get(keyId) ?? 0,
       learnedAliasCount: key.learnedAliases?.length ?? 0,
       aliasThreshold: KEY_MERGE_THRESHOLD,
-      newKeyThreshold: KEY_AUTO_LINK_THRESHOLD,
+      newKeyThreshold: AUTOKEY_NEW_KEY_THRESHOLD,
       promoteN: AUTOKEY_PROMOTE_N,
       maxAliases: AUTOKEY_MAX_ALIASES,
       confirmFloor: AUTOKEY_CONFIRM_FLOOR,
@@ -2345,8 +2180,8 @@ export class MemoryGraph {
       content_relevance_score?: number;
     };
     const pool = (await timed("inject:recall", () => this.recall(
-      query, Math.max(topK * 3, 15), namespace, true, 2, 0, MIN_SCORE_THRESHOLD,
-      GATE_Z_THRESHOLD, KEY_GATE_THRESHOLD, 0, false, // reinforce=false: injection is passive
+      query, Math.max(topK * 3, 15), namespace, true, 2, 0, 0,
+      0, 0, 0, false, // reinforce=false: injection is passive
       contextText,
       false, // project after inject-specific filtering, using the caller's topK
       true, // retain content utility only inside this private candidate pool
@@ -2363,20 +2198,9 @@ export class MemoryGraph {
       }
     }
     const taskAnalysis = taskSelection ? analyzeTaskEvidence(query, [...poolKeys.values()]) : null;
-    let taskContentSims: Map<string, number> | null = null;
-    if (taskAnalysis?.taskQuery) {
-      const taskEmbedding = await embedTextAsync(taskAnalysis.taskQuery, "query");
-      this._checkDim(taskEmbedding);
-      taskContentSims = this._bestContentSims(taskEmbedding, pool.map((memory) => memory.id));
-    }
-    // Inject is associative/semantic expansion, so only memories with DENSE or GRAPH support belong
-    // in it: a content/key cosine match, or a (via)/(linked) hop from a genuine anchor. Once any
-    // anchor clears the gate, recall keeps the WHOLE fused set — which includes memories pulled in
-    // by BM25 alone (a stray shared token, e.g. an English query grazing "user"/"control" in
-    // unrelated wiki docs). Those ride in beside the real hits and fill slots with junk; their fused
-    // scores sit in the same noise band as real cross-lingual hits, so a relative floor can't tell
-    // them apart — the matched_via provenance can. Drop candidates whose ONLY signal is "(bm25)".
-    // Plain recall (deliberate navigation) still returns BM25 hits; this exclusion is inject-scoped.
+    const taskContentSims = taskAnalysis?.taskQuery
+      ? this._lexicalScores(taskAnalysis.taskQuery, pool.map((memory) => memory.id))
+      : null;
     const toTaskCandidate = (m: InjectMemory) => ({
       id: m.id,
       keys: [...(this._memToKeys[m.id]?.keys() ?? [])]
@@ -2397,7 +2221,6 @@ export class MemoryGraph {
     );
     const orderedPool = activationProjection.selected.map((candidate) => candidate.value);
     const supported = orderedPool
-      .filter((m) => (m.matched_via ?? []).some((v) => v !== "(bm25)"))
       // Comparison evidence is normally split across one memory per entity, so requiring
       // every named query token in every memory would discard both halves before selection.
       .filter((m) => protectedEvidence.has(m.id) || hasStructuredTokenCoverage(query, m))
@@ -2437,16 +2260,15 @@ export class MemoryGraph {
     expand = false,
     maxHops = 2,
     minRelScore = 0,
-    minScore = MIN_SCORE_THRESHOLD,
-    minZ = GATE_Z_THRESHOLD,
-    minKeyGate = KEY_GATE_THRESHOLD,
+    _minScore = 0,
+    _minZ = 0,
+    _minKeyGate = 0,
     minDepth = 0,
     // When false, recall is a pure read: no access bump or Hebbian reinforce/decay.
     // recallInject uses this so passively-surfaced (and the wider internal candidate) memories
     // aren't reinforced — only a real read_memory should strengthen the graph.
     reinforce = true,
-    // Dual-path cue: raw utterance/sentence driving the CONTENT similarity path (Dense
-    // Path B) while `query` keeps driving keys/BM25/literal matching. See searchKeys.
+    // Optional utterance for lexical body matching; query still drives key matching.
     contextText: string | null = null,
     taskSelection = TASK_EVIDENCE_SELECTION,
     includeSelectionUtility = false,
@@ -2464,28 +2286,11 @@ export class MemoryGraph {
     maxHops = Math.max(1, Math.min(5, Math.floor(maxHops)));
     // Relative score floor in [0, 0.9): fraction of the top score below which results are dropped.
     minRelScore = Math.max(0, Math.min(0.9, minRelScore));
-    // Absolute cosine floor in [0,1]. 0 disables the gate.
-    minScore = Math.max(0, Math.min(1, minScore));
-    // Short keyword queries get the calibrated lower content gate; when the caller left
-    // minScore at the profile default, lower the absolute anchor gate alongside so it
-    // does not silently re-drop what the content gate admitted. Explicit overrides win.
-    // A context utterance drives the content path with sentence-shaped cosines, so it
-    // always takes the sentence gate (same rule as searchKeys).
-    const contentGate = contextText?.trim() ? CONTENT_RECALL_THRESHOLD : this._contentGateFor(query);
-    if (contentGate < CONTENT_RECALL_THRESHOLD && minScore === MIN_SCORE_THRESHOLD) {
-      minScore = Math.min(minScore, contentGate);
-    }
-    minZ = Math.max(0, minZ);
-    // Key-proximity gate floor in [0,1]. 0 disables it.
-    minKeyGate = Math.max(0, Math.min(1, minKeyGate));
-    const qEmb = await embedTextAsync(query, "query"); // outside lock
+    // Legacy cosine-gate arguments remain positional for compatibility, but cannot
+    // discard lexical candidates now that memories no longer have body vectors.
+    const qEmb = await embedTextAsync(query, "query");
     this._checkDim(qEmb);
-    const recallCtx = contextText?.trim();
-    const cEmb =
-      recallCtx && recallCtx !== query.trim()
-        ? await embedTextAsync(recallCtx, "query") // outside lock
-        : qEmb;
-    if (recallCtx) this._checkDim(cEmb);
+    await ensureLexicalTokenizer();
 
     const results: object[] = [];
     const queryLower = query.toLowerCase().trim();
@@ -2518,16 +2323,19 @@ export class MemoryGraph {
     // inside this section, so the lock is held only for fast in-memory work, never
     // across model inference or disk I/O.
     await this._lock.runExclusive(async () => {
-      const allContentSims: number[] = [];
       const bumpRaw = (mid: string, sim: number) => {
         if (sim > (memRawSim[mid] ?? -Infinity)) memRawSim[mid] = sim;
       };
 
       // ── BM25 sparse search ──
       const bm25Ranked: Array<{ id: string; score: number }> = [];
-      const bm25Results = this._bm25.search(query, { fuzzy: 0.2, prefix: true });
-      for (const r of bm25Results.slice(0, BM25_RESULT_DEPTH)) {
-        if (!skip(r.id)) bm25Ranked.push({ id: r.id, score: r.score });
+      const bm25Results = this._bm25.search(contextText?.trim() || query, { fuzzy: false, prefix: false });
+      for (const r of bm25Results.filter((hit) => !skip(hit.id)).slice(0, BM25_RESULT_DEPTH)) {
+        if (!skip(r.id)) {
+          bm25Ranked.push({ id: r.id, score: r.score });
+          memContentSim[r.id] = r.score / (1 + r.score);
+          bumpRaw(r.id, memContentSim[r.id]);
+        }
       }
 
       // ── Dense Path A: Key batch matching ──
@@ -2542,20 +2350,11 @@ export class MemoryGraph {
             )
           : [];
 
-      // Best concept-key cosine for the query — the key-proximity gate signal.
-      // Captured over the raw sims (independent of KEY_RECALL), since keyGate
-      // (e.g. e5 0.88) sits above keyRecall (0.85).
-      let maxConceptKeySim = 0;
-      for (let i = 0; i < keyIds.length; i++) {
-        if (this.keys[keyIds[i]].key_type === "concept" && keySims[i] > maxConceptKeySim) {
-          maxConceptKeySim = keySims[i];
-        }
-      }
-
       keyScores = [];
       for (let i = 0; i < keyIds.length; i++) {
         const kid = keyIds[i];
         const key = this.keys[kid];
+        if (this._activeMemoryIdsForKey(kid, nsFilter).length === 0) continue;
         if (key.key_type === "name" || key.key_type === "proper_noun") {
           if (literalKeyMatch(queryLower, key.concept)) {
             keyScores.push([1.0, kid]);
@@ -2577,43 +2376,6 @@ export class MemoryGraph {
           if (!memMatchedKeys[memId]) memMatchedKeys[memId] = [];
           memMatchedKeys[memId].push(this.keys[kid].concept);
           memHop[memId] = 1;
-        }
-      }
-
-      // ── Dense Path B: Content batch direct matching ──
-      // max-sim: a multi-fact memory is reachable via its best sentence, not only
-      // its (diluted) whole-content centroid.
-      const weakContentOnly = new Set<string>(); // admitted only by the short-query gate
-      const memIds = Object.keys(this.memories);
-      if (memIds.length > 0) {
-        const contentSims = this._bestContentSims(cEmb);
-        const admitContent = (mid: string, cSim: number) => {
-          bumpRaw(mid, cSim);
-          const contentScore = cSim * 0.8;
-          if (mid in denseScores) {
-            denseScores[mid] += contentScore * 0.2;
-          } else {
-            denseScores[mid] = contentScore;
-          }
-          if (!memMatchedKeys[mid]) memMatchedKeys[mid] = [];
-          memMatchedKeys[mid].push("(content)");
-          if (!(mid in memHop)) memHop[mid] = 1;
-        };
-        // Weak admits — content cosine between the calibrated short-query gate and the full
-        // gate — stay admitted (the short gate exists because real keyword queries have their
-        // only related memory at 0.46–0.55), but they are tagged: RRF fusion would otherwise
-        // rank every one of them above every hop-2 association, and each weak admit pushes one
-        // association out of the top-K (the assoc2 reach regression bisected to af884a0).
-        for (let i = 0; i < memIds.length; i++) {
-          const mid = memIds[i];
-          if (skip(mid)) continue;
-          const cSim = contentSims.get(mid) ?? 0;
-          memContentSim[mid] = cSim;
-          allContentSims.push(cSim);
-          if (cSim >= contentGate) {
-            if (cSim < CONTENT_RECALL_THRESHOLD && !(mid in denseScores)) weakContentOnly.add(mid);
-            admitContent(mid, cSim);
-          }
         }
       }
 
@@ -2660,12 +2422,6 @@ export class MemoryGraph {
           memScores[memId] = (memScores[memId] ?? 0) + bonus;
         }
       }
-
-      // Snapshot weak-only status BEFORE traversal: expansion tags neighbours "(via)", and two
-      // weak admits that share a key would otherwise launder each other into "graph-backed".
-      const weakOnly = new Set<string>(
-        [...weakContentOnly].filter((mid) => (memMatchedKeys[mid] ?? []).every((v) => v === "(content)"))
-      );
 
       // ── Apply depth/freshness modulation to fused scores ──
       for (const mid of Object.keys(memScores)) {
@@ -2746,51 +2502,15 @@ export class MemoryGraph {
           if ((memHop[mid] ?? 1) >= 2) memScores[mid] *= 0.7;
         }
       }
-      // Weak-only admits rank after graph associations: a memory that merely sits in the
-      // 0.46–0.55 content band, with no key hit and no lexical hit, is a guess; a hop-2
-      // association is graph-backed. The factor drops an RRF-scale score (~0.013) below the
-      // HOP_DECAY-scale association scores (~0.002–0.003) while keeping the memory returned.
-      for (const mid of weakOnly) memScores[mid] *= WEAK_ADMIT_FACTOR;
-
       const sorted = Object.entries(memScores).sort(([, a], [, b]) => b - a);
-      // Absolute score gate (anchor-based): the query counts as "found" only if at
-      // least one candidate has a direct dense similarity >= minScore. With no such
-      // anchor, every hit is BM25/associative noise, so return nothing. When an anchor
-      // exists, keep the full fused/traversed set (anchors + their associative and
-      // lexical neighbors); the relative floor below still trims within-result noise.
-      // This preserves N-hop/expand results, which by design have low direct similarity.
-      // Anchor: the query is "found" iff a definite literal-key hit exists, OR a
-      // candidate clears the absolute gate AND the top content similarity is a
-      // robust-z outlier of the similarity distribution. The distribution gate
-      // catches the e5 failure mode where every cosine is uniformly high so the
-      // absolute gate false-positives. minZ (gateZ) = 0 disables it, leaving the
-      // 0.7.0 absolute-only behavior unchanged for bge-m3 and other profiles.
-      const candidateIds = Object.keys(memScores);
-      definiteAnchor = candidateIds.some((mid) => (memRawSim[mid] ?? 0) >= 0.999);
-      const absoluteAnchor = candidateIds.some(
-        (mid) => passesAbsoluteGate(memRawSim[mid] ?? 0, minScore)
-      );
-      let maxContentSim = 0;
-      for (const s of allContentSims) if (s > maxContentSim) maxContentSim = s;
-      const distOK = passesDistributionGate(maxContentSim, allContentSims, minZ, GATE_MIN_POPULATION);
-      // Key-proximity anchor: the query is close enough to a curated concept key to be
-      // about a known topic. On e5 this is the PRIMARY found/not-found signal — it
-      // separates cleanly (found keySim >=0.883, not-found <=0.875) where the content
-      // distribution overlaps badly. keyGate=0 disables it (non-e5 profiles).
-      const keyAnchor = minKeyGate > 0 && maxConceptKeySim >= minKeyGate;
-      // Invariant (keyGate=0 AND gateZ=0 byte-identity): with both disabled, keyAnchor is
-      // false and distOK is always true, so hasAnchor collapses to absoluteAnchor — identical
-      // to the pre-gate 0.7.0 behavior. definiteAnchor (memRawSim >= 0.999, a literal
-      // name/proper-noun match) and keyAnchor short-circuit the distOK check, so real hits on
-      // e5 survive a flat content distribution that would otherwise gate them out.
-      const hasAnchor = definiteAnchor || keyAnchor || (absoluteAnchor && distOK);
+      definiteAnchor = Object.values(memRawSim).some((score) => score >= 0.999);
       // Relative score floor: drop results scoring below minRelScore × the top
       // hit. Deep traversal through hub keys pulls in many associations that
       // HOP_DECAY+IDF already score near the noise floor (~2% of top); a floor
       // (e.g. 0.05) trims that flood while keeping genuine associations (~15%+).
       // Default 0 = keep everything (no behavior change).
       const floor = sorted.length ? sorted[0][1] * minRelScore : 0;
-      gated = (hasAnchor ? sorted : [])
+      gated = sorted
         .filter(([, score]) => score >= floor)
         .filter(([mid]) => minDepth <= 0 || (this.memories[mid]?.depth ?? 0) >= minDepth);
     });
@@ -2878,12 +2598,9 @@ export class MemoryGraph {
         }
       }
       const taskAnalysis = analyzeTaskEvidence(query, [...rankedKeys.values()]);
-      let taskContentSims: Map<string, number> | null = null;
-      if (taskAnalysis?.taskQuery) {
-        const taskEmbedding = await embedTextAsync(taskAnalysis.taskQuery, "query");
-        this._checkDim(taskEmbedding);
-        taskContentSims = this._bestContentSims(taskEmbedding, ranked.map(([mid]) => mid));
-      }
+      const taskContentSims = taskAnalysis?.taskQuery
+        ? this._lexicalScores(taskAnalysis.taskQuery, ranked.map(([mid]) => mid))
+        : null;
       ranked = projectTaskEvidence(
         query,
         ranked.map((entry) => {

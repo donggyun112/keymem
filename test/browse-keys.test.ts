@@ -82,12 +82,12 @@ test("retrieval payloads label incompatible score scales", async (t) => {
 
   const read = await graph.readKey(key.key_id, { query: "alpha one", namespace: "alpha" }) as any;
   assert.equal(read.memories[0].score_kind, "within_key_rank");
-  assert.equal(read.memories[0].content_relevance, 1);
+  assert.ok(read.memories[0].content_relevance > 0 && read.memories[0].content_relevance < 1, "BM25 relevance is bounded, not cosine");
 
   const [direct] = await graph.recall(
     "alpha one", 1, "alpha", false, 1, 0, 0, 0, 0, 0, false
   ) as any[];
   assert.equal(direct.score_kind, "rrf_fused_rank");
   assert.equal(direct.rank_score, direct.score);
-  assert.equal(direct.relevance_score, 1);
+  assert.ok(direct.relevance_score > 0 && direct.relevance_score <= 1);
 });

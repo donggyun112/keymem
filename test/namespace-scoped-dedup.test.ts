@@ -44,15 +44,15 @@ test("an identical sentence in another namespace is a new memory, not a supersed
   assert.ok(graph.memories[aId], "project A's memory is still live");
   assert.ok(graph.memories[bId]);
 
-  // Same namespace still dedups: the near-paraphrase supersedes A.
-  const [cId, , cSup] = await graph.add("회의는 금요일이다", ["회의"], { namespace: "proj-a" });
+  // Same namespace still deduplicates an exact restatement.
+  const [cId, , cSup] = await graph.add("회의는 월요일이다", ["회의"], { namespace: "proj-a" });
   assert.equal(cSup, aId);
   assert.equal(await graph.readMemory(aId).then(() => "live", (e: Error) => e.message.includes("superseded") ? "superseded" : "other"), "superseded");
   assert.ok(graph.memories[cId]);
   assert.ok(graph.memories[bId], "project B untouched by project A's supersede");
 });
 
-test("contradiction detection does not cross namespaces", async (t) => {
+test("different facts do not infer contradictions from vector proximity", async (t) => {
   const graph = await freshGraph(t);
   const [aId] = await graph.add("회의는 월요일이다", ["회의"], { namespace: "proj-a" });
   const [bId] = await graph.add("회의는 수요일이다", ["회의"], { namespace: "proj-b" });
@@ -60,8 +60,8 @@ test("contradiction detection does not cross namespaces", async (t) => {
   assert.deepEqual(graph.memories[bId].contradicts, []);
 
   const [cId] = await graph.add("회의는 수요일이다", ["회의"], { namespace: "proj-a" });
-  assert.deepEqual(graph.memories[cId].contradicts, [aId], "same-namespace conflict is still flagged");
-  assert.deepEqual(graph.memories[aId].contradicts, [cId]);
+  assert.deepEqual(graph.memories[cId].contradicts, [], "same-namespace similarity does not infer contradiction");
+  assert.deepEqual(graph.memories[aId].contradicts, []);
 });
 
 test("read_key with a concept name instead of a key_id explains what a key_id is", async (t) => {

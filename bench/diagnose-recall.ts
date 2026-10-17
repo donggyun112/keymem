@@ -1,10 +1,11 @@
-// Why did `recall` return [] for a paraphrase? Shows the actual cosines vs the model's thresholds,
+// Why did `recall` return [] for a paraphrase? Shows key cosines and lexical body matches,
 // and how (and at what hop) the expand+ungated path finds the target. Read-only on your store:
 // it COPIES graph.json into a temp dir and works there, so your real memories are untouched.
 //
 //   KM_SRC=~/.keymem EMBEDDING_BACKEND=local LOCAL_EMBEDDING_MODEL=bge-m3 \
 //     tsx bench/diagnose-recall.ts "your paraphrase query" "another query"
 import { mkdtemp, rm, copyFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +13,9 @@ process.env.KEYMEM_AUTO_MIGRATE = "false"; // don't re-embed the copied graph
 const SRC = process.env.KM_SRC || join(homedir(), ".keymem");
 const tmp = await mkdtemp(join(tmpdir(), "km-diag-"));
 await copyFile(join(SRC, "graph.json"), join(tmp, "graph.json"));
+for (const file of ["vectors.bin", "vectors.idx.json"]) {
+  if (existsSync(join(SRC, file))) await copyFile(join(SRC, file), join(tmp, file));
+}
 process.env.KEYMEM_DATA_DIR = tmp;
 
 const { MemoryGraph } = await import("../src/memoryGraph.ts");
@@ -28,10 +32,10 @@ const g: any = new MemoryGraph();
 await g.load();
 const p = getThresholdProfile();
 const queries = process.argv.slice(2);
-const KR = p.keyRecall, CR = p.contentRecall;
+const KR = p.keyRecall;
 const ANON = process.env.KM_ANON === "1"; // suppress memory/key text; show only ids/cosines
 
-console.log(`model=${LOCAL_EMBEDDING_MODEL}  KEY_RECALL=${KR}  CONTENT_RECALL=${CR}`);
+console.log(`key model=${LOCAL_EMBEDDING_MODEL}  KEY_RECALL=${KR}; body retrieval=Kiwi BM25`);
 console.log(`store: ${Object.keys(g.keys).length} keys, ${Object.keys(g.memories).length} memories\n`);
 
 for (const q of queries) {
@@ -40,15 +44,15 @@ for (const q of queries) {
   const keyHits = Object.values(g.keys)
     .map((k: any) => ({ c: ANON ? "" : k.concept, s: cos(qe, k.embedding), t: k.key_type }))
     .sort((a, b) => b.s - a.s).slice(0, 6);
-  const memHits = Object.entries(g.memories)
-    .map(([id, m]: [string, any]) => ({ id, c: m.content || "", s: cos(qe, m.embedding) }))
+  const lexical = g._lexicalScores(q) as Map<string, number>;
+  const memHits = [...lexical].map(([id, s]) => ({ id, c: g.memories[id]?.content ?? "", s }))
     .sort((a, b) => b.s - a.s).slice(0, 6);
 
   console.log(`════ query: "${q}"`);
   console.log(`  top keys (query↔key cosine vs KEY_RECALL ${KR}):`);
   for (const k of keyHits) console.log(`    ${k.s.toFixed(3)} ${k.s >= KR ? "✓" : "✗"} [${k.t}]${ANON ? "" : " " + k.c}`);
-  console.log(`  top memories (query↔content cosine vs CONTENT_RECALL ${CR}):`);
-  for (const m of memHits) console.log(`    ${m.s.toFixed(3)} ${m.s >= CR ? "✓" : "✗"} ${lbl(m.c, m.id)}`);
+  console.log("  top memories (normalized BM25 lexical score):");
+  for (const m of memHits) console.log(`    ${m.s.toFixed(3)} ${lbl(m.c, m.id)}`);
 
   const sk = (await g.searchKeys(q, 8, null)) as unknown[];
   console.log(`  → recall (searchKeys) returns: ${sk.length === 0 ? "[]  (gated out)" : sk.length + " key(s)"}`);

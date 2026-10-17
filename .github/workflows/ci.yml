@@ -38,6 +38,11 @@ jobs:
       - name: Typecheck
         run: pnpm exec tsc --noEmit
 
+      - uses: actions/cache@v4
+        with:
+          path: ~/.keymem/models/kiwi
+          key: kiwi-0.24.0-${{ runner.os }}
+
       # Switch to the Node actually under test. node_modules carries over: onnxruntime-node
       # ships a napi-v3 binary, which is ABI-stable across Node majors.
       - uses: actions/setup-node@v4

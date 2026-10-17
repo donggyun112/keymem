@@ -6,14 +6,12 @@ import test from "node:test";
 
 let n = 0;
 
-// Explicit vectors so the gate, not the embedder, decides: the 403 memory sits at
-// cosine 0.6 from "git push" (bridgeable, below the 0.62 write-time auto-link bar),
-// the budget memory is orthogonal to "review" (a shared token, not a shared topic).
+// Phrase-to-atomic KEY similarity admits git push (0.8) and rejects budget review (0.6).
 const VECTORS: Record<string, number[]> = {
   "git push": [1, 0, 0, 0],
   review: [0, 0, 1, 0],
   "git push 403 fix": [0.8, 0.6, 0, 0],
-  "quarterly budget review": [0, 0.6, 0.8, 0],
+  "quarterly budget review": [0, 0.8, 0.6, 0],
   "release pushed": [1, 0, 0, 0],
   "403 on the release push": [0.6, 0.8, 0, 0],
   "budget numbers for q3": [0, 1, 0, 0],

@@ -93,7 +93,7 @@ test("directHydrateTop1 selects the top memory under the supplied key without re
   );
 });
 
-test("auto-linked keys are hidden from connected_keys, flagged in read_memory, and survive save/load", async (t) => {
+test("body similarity does not auto-link unrelated keys before or after save/load", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "keymem-direct-autolink-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   process.env.KEYMEM_DATA_DIR = dir;
@@ -107,8 +107,7 @@ test("auto-linked keys are hidden from connected_keys, flagged in read_memory, a
   const mod = await import(`../src/memoryGraph.ts?direct-autolink=${moduleId++}`);
   const graph = new mod.MemoryGraph();
   await graph.load();
-  // "tea" key exists first ([0.8, 0.6, 0]); the coffee memory ([1, 0, 0]) sits at cos 0.8 to it,
-  // above the bge-m3 auto-link bar (0.62), so it gets auto-linked without the agent naming it.
+  // A nearby key vector must not create a body-to-key link.
   await graph.add("tea time notes", ["tea"], {});
   const [coffeeId] = await graph.add("the user prefers coffee", ["drinks"], {});
   const teaKey = (await graph.searchKeys("tea", 8, null))[0] as { key_id: string };
@@ -125,10 +124,10 @@ test("auto-linked keys are hidden from connected_keys, flagged in read_memory, a
   const full = await graph.readMemory(coffeeId) as { keys: Array<{ key_id: string; concept: string; auto: boolean }> };
   assert.deepEqual(
     full.keys.map((k) => [k.concept, k.auto]).sort(),
-    [["drinks", false], ["tea", true]],
-    "read_memory still lists the auto link, flagged",
+    [["drinks", false]],
+    "read_memory lists only the explicitly supplied key",
   );
-  assert.ok(full.keys.some((k) => k.key_id === teaKey.key_id));
+  assert.ok(!full.keys.some((k) => k.key_id === teaKey.key_id));
 
   // The flag is persisted: a fresh graph over the same files sees the same split.
   const reloaded = new mod.MemoryGraph();
@@ -166,7 +165,7 @@ test("directHydrateTop1 lets the cross-encoder choose from the top-key candidate
     memories: Array<{ memory_id: string }>;
   };
   assert.equal(reranker.rerankEnabled(), true);
-  assert.notEqual(page.memories[0].memory_id, rightId);
+  assert.equal(page.memories[0].memory_id, rightId, "readKey also uses the reranker for query relevance");
 
   const decision = await graph.directHydrateTop1(topKey, "QUERY", null);
 
@@ -322,7 +321,7 @@ async function setUpRecallMcp(t: import("node:test").TestContext, tag: string) {
   return { graph, client };
 }
 
-test("recall auto-confirms when context strongly restates the returned memory", async (t) => {
+test("recall auto-confirms an exact normalized restatement of the returned memory", async (t) => {
   const { graph, client } = await setUpRecallMcp(t, "strong");
   const [coffeeId] = await graph.add("the user prefers coffee", ["drinks"], {});
   const before = {
@@ -332,7 +331,7 @@ test("recall auto-confirms when context strongly restates the returned memory", 
 
   const result = JSON.parse(textResult(await client.callTool({
     name: "recall",
-    arguments: { query: "drinks", context: "the user still prefers coffee" },
+    arguments: { query: "drinks", context: "  the user   prefers coffee  " },
   })));
 
   assert.equal(result.memories[0].id, coffeeId);
@@ -356,13 +355,12 @@ test("recall does not auto-confirm without a context argument", async (t) => {
   assert.equal(graph.memories[coffeeId].confirmation_count, before);
 });
 
-test("recall does not auto-confirm when context relevance is below the threshold", async (t) => {
+test("recall does not auto-confirm a different context", async (t) => {
   const { graph, client } = await setUpRecallMcp(t, "weak");
   const [coffeeId] = await graph.add("the user prefers coffee", ["drinks"], {});
   const before = graph.memories[coffeeId].confirmation_count;
 
-  // "tea" -> [0.8, 0.6, 0] vs the memory's "coffee" -> [1, 0, 0]: cosine 0.8, below the
-  // 0.85 default threshold -- topically related, but not a reassertion of THIS fact.
+  // Related vocabulary does not explicitly reassert this fact.
   const result = JSON.parse(textResult(await client.callTool({
     name: "recall",
     arguments: { query: "drinks", context: "the user wants some tea" },

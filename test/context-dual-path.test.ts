@@ -6,9 +6,7 @@ import test from "node:test";
 
 let n = 0;
 
-// The keyword query is orthogonal to everything; the sentence context aligns with the
-// fact content (cos 0.95). Mirrors the measured bge-m3 behavior: sentence-shaped cues
-// score higher against sentence-shaped content than noun keywords do.
+// Query drives key vectors; context drives lexical body matching.
 function vec(text: string): number[] {
   const t = text.toLowerCase();
   if (t.includes("취향질문")) return [1, 0, 0]; // keyword query (misses everything)
@@ -37,15 +35,14 @@ test("context parameter feeds the content path only", async (t) => {
   const graph = new MemoryGraph();
   await graph.load();
   await graph.add("아이스 아메리카노를 즐긴다", ["음료취향키"], { namespace: "default" });
-  // Sits between the short-keyword content gate (0.46) and the sentence gate (0.55): a
-  // sentence context must be judged by the sentence gate, or this leaks through as a hit.
+  // A different drink token must not match the supplied context.
   await graph.add("라떼는 싫어한다", ["약한키"], { namespace: "default" });
 
   const withoutCtx = await graph.searchKeys("취향질문", 8, "default");
   assert.equal(withoutCtx.length, 0);
 
-  const withCtx = await graph.searchKeys("취향질문", 8, "default", "사용자가 어떤 음료를 좋아하는지 알려줘");
-  assert.equal(withCtx.length, 1, "cos 0.50 content must not pass the sentence gate");
+  const withCtx = await graph.searchKeys("취향질문", 8, "default", "사용자가 아메리카노를 좋아하는지 알려줘");
+  assert.equal(withCtx.length, 1, "context must match the relevant body tokens");
   assert.equal((withCtx[0] as { match_type: string; concept: string }).concept, "음료취향키");
   assert.equal((withCtx[0] as { match_type: string }).match_type, "content");
 
@@ -54,7 +51,7 @@ test("context parameter feeds the content path only", async (t) => {
   assert.equal(memsWithout.length, 0);
   const memsWith = await graph.recall(
     "취향질문", 5, "default", false, 2, 0, undefined, undefined, undefined, 0, false,
-    "사용자가 어떤 음료를 좋아하는지 알려줘"
+    "사용자가 아메리카노를 좋아하는지 알려줘"
   );
   assert.equal(memsWith.length, 1);
   assert.match((memsWith[0] as { content: string }).content, /아메리카노/);

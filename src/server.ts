@@ -9,6 +9,7 @@ import {
   MemoryGraph,
   classifyRecallStatus,
   sanitizeKeys,
+  normalizeMemoryContent,
 } from "./memoryGraph.js";
 import {
   detectActiveSession,
@@ -51,13 +52,9 @@ function parseNumber(v: unknown): number | null {
   return null;
 }
 
-// Auto-confirm on recall (see the "recall" case handler): reuses directHydrateTop1's own
-// content_relevance instead of requiring the agent to separately call confirm_memory when the
-// user just reasserted a fact. No calibration data yet -- 0.85 sits well above the bare content
-// admit floor (contentRecall, 0.5-0.55) and below near-duplicate territory (memoryDedup, ~0.9-0.99
-// depending on model); tune with KEYMEM_AUTO_CONFIRM_MIN_RELEVANCE per deployment.
+// Lexical/reranker relevance cannot prove a reassertion. Only an exact normalized
+// utterance confirms automatically; paraphrases require explicit confirm_memory.
 const AUTO_CONFIRM_ENABLED = cfgRaw("AUTO_CONFIRM") !== "false";
-const AUTO_CONFIRM_MIN_RELEVANCE = Number(cfgRaw("AUTO_CONFIRM_MIN_RELEVANCE") ?? 0.85);
 
 
 // Provenance: stamp every saved/corrected memory with the server session that wrote it,
@@ -278,7 +275,7 @@ export function createMcpServer(): Server {
       {
         name: "recall",
         description:
-          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. Returns {status, query, namespace, keys, memories}: ranked key clusters plus one passive Top-1 memory selected under the top key. The memory includes validity, matched_key, and connected_keys, each with a relevance score (cosine of that key to your query/context, sorted high→low). Before answering, check whether the Top-1 memory supplies every fact the question needs. If a fact is missing, follow an unvisited connected key that fits that fact with read_key(key_id, missing_fact_query, namespace), then read_memory on a relevant handle; recheck and continue only while a required fact and promising path remain. If no connected key fits, recall the missing fact directly. Do not add hops to a complete single-fact answer. Passive recall never reinforces links or changes access, depth, aliases, or confirmation — except: when `context` is a strong restatement of the returned memory, it is auto-confirmed (`memories[0].auto_confirmed: true`) without a separate confirm_memory call. An empty result includes empty keys/memories and nearest_keys.",
+          "Search long-term memory for what is already known about the user, project, or topic — call this before your first reply and whenever the topic shifts. Always pass the active namespace when known. Returns {status, query, namespace, keys, memories}: ranked key clusters plus one passive Top-1 memory selected under the top key. The memory includes validity, matched_key, and connected_keys, each with a relevance score (cosine of that key to your query/context, sorted high→low). Before answering, check whether the Top-1 memory supplies every fact the question needs. If a fact is missing, follow an unvisited connected key that fits that fact with read_key(key_id, missing_fact_query, namespace), then read_memory on a relevant handle; recheck and continue only while a required fact and promising path remain. If no connected key fits, recall the missing fact directly. Do not add hops to a complete single-fact answer. Passive recall never reinforces links or changes access, depth, aliases, or confirmation — except: when `context` exactly matches the normalized full text of the returned memory, it is auto-confirmed (`memories[0].auto_confirmed: true`) without a separate confirm_memory call. An empty result includes empty keys/memories and nearest_keys.",
         inputSchema: {
           type: "object",
           properties: {
@@ -318,7 +315,7 @@ export function createMcpServer(): Server {
       {
         name: "read_key",
         description:
-          "List the memories stored under one key (concept), ranked. Returns the canonical key, its aliases, and hub metadata plus ranked memory IDs, metadata, and validity — never memory content. Pass a focused query for the missing fact and the active namespace when known: handles are then ranked by content relevance, which is essential for hubs. Each memory's score is content_relevance × link_weight × depth_factor × freshness_factor when query is passed (link_weight × depth_factor × freshness_factor otherwise); content_relevance is a cosine, comparable to recall's key relevance — both only meaningful within this one key's ranking. Call read_memory(memory_id, via_key_id=key_id, namespace) on the selected handle to inspect the fact and reinforce the path; reading does not confirm that its content is current. Use limit/offset to page without flooding context.",
+          "List the memories stored under one key (concept), ranked. Returns the canonical key, its aliases, and hub metadata plus ranked memory IDs, metadata, and validity — never memory content. Pass a focused query for the missing fact and the active namespace when known: handles are then ranked by content relevance, which is essential for hubs. Each memory's score is content_relevance × link_weight × depth_factor × freshness_factor when query is passed (link_weight × depth_factor × freshness_factor otherwise); content_relevance is normalized lexical relevance or reranker relevance, never body-vector cosine; scores are only meaningful within this one key's ranking. Call read_memory(memory_id, via_key_id=key_id, namespace) on the selected handle to inspect the fact and reinforce the path; reading does not confirm that its content is current. Use limit/offset to page without flooding context.",
         inputSchema: {
           type: "object",
           properties: {
@@ -348,7 +345,7 @@ export function createMcpServer(): Server {
       {
         name: "confirm_memory",
         description:
-          "Confirm that a memory is still current using explicit present evidence. Never call this merely because read_memory returned the content. Use only after a current user assertion, an authoritative current source, or direct observation. Refreshes validity but does not change content or key links. A strong restatement passed as recall's `context` is already auto-confirmed there (check memories[0].auto_confirmed) — this tool is for evidence recall can't see: read_memory results, authoritative sources, or direct observation.",
+          "Confirm that a memory is still current using explicit present evidence. Never call this merely because read_memory returned the content. Use only after a current user assertion, an authoritative current source, or direct observation. Refreshes validity but does not change content or key links. An exact normalized restatement passed as recall's `context` is already auto-confirmed there (check memories[0].auto_confirmed) — this tool is for evidence recall can't see: read_memory results, authoritative sources, or direct observation.",
         inputSchema: {
           type: "object",
           properties: {
@@ -506,18 +503,13 @@ export function createMcpServer(): Server {
                 matched_key: { key_id: decision.candidate.key.key_id },
               }]
             : [];
-          // Auto-confirm: content_relevance already measures cosine(context, memory content)
-          // whenever a real utterance (not the fallback keyword query) was passed as `context`.
-          // A very high value IS the "explicit present evidence" confirm_memory otherwise makes
-          // the agent notice and report back via a second call — reuse the signal instead of
-          // requiring that round trip. Gated strictly on `context` being present so a bare
-          // keyword query (topically close but not a reassertion) never triggers it.
+          // Compare the full stored fact, never a possibly truncated preview or a search score.
           if (
             AUTO_CONFIRM_ENABLED &&
             context?.trim() &&
             memories.length > 0 &&
-            typeof memories[0].content_relevance === "number" &&
-            memories[0].content_relevance >= AUTO_CONFIRM_MIN_RELEVANCE
+            normalizeMemoryContent(context) ===
+              normalizeMemoryContent(graph.memories[memories[0].id]?.content ?? "")
           ) {
             const hostLink = await resolveHostLink(headers);
             await graph.confirmMemory(memories[0].id, {

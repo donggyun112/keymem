@@ -85,13 +85,7 @@ test("recall() promotes a narrow-key hop-2 candidate past a flood of same-topic 
   process.env.EMBEDDING_BACKEND = "local";
   process.env.LOCAL_EMBEDDING_MODEL = "bge-m3";
 
-  // Deterministic vectors: QQ/ANCHOR are identical (cos=1.0, definite fused #1). TARGET is
-  // orthogonal to the query (cos=0, never found by content alone). NOISEn all sit at
-  // cos≈0.60-0.72 with the query — enough to clear bge-m3's contentRecall/minScore admit
-  // gate on topic overlap alone, exactly the corpus-density flooding this feature targets.
-  // Each NOISEn gets its OWN orthogonal axis (not a repeating cycle) so no two are ever
-  // >=memoryDedup(0.94) similar to each other — a repeating cycle would make write-time
-  // dedup silently supersede most of them, defeating the point of this test.
+  // Lexical QQ matches seed the anchor and noise; TARGET is reached only through its narrow key.
   const DIM = 52;
   function zeros(): number[] { return new Array(DIM).fill(0); }
   function vec(t: string): number[] {
@@ -118,10 +112,10 @@ test("recall() promotes a narrow-key hop-2 candidate past a flood of same-topic 
   const mg = await import(`../src/memoryGraph.ts?stricthop=${Date.now()}`);
   const g = new mg.MemoryGraph();
   await g.load();
-  await g.add("ANCHOR", ["anchorNarrowKey"], {});
+  await g.add("QQ ANCHOR", ["anchorNarrowKey"], {});
   await g.add("TARGET", ["anchorNarrowKey"], {}); // shares a 2-member key with ANCHOR only
   for (let i = 0; i < 50; i++) {
-    await g.add(`NOISE${i}`, [`noiseKey${i}`], {}); // each on its own key — pure content noise
+    await g.add(`QQ NOISE${i}`, [`noiseKey${i}`], {}); // each on its own key — lexical distractors
   }
 
   const before = (await g.recall("QQ", 10, null, true, 2, 0, 0, 0, 0)) as Array<{ content: string }>;
@@ -175,10 +169,10 @@ test("recall() moves a strict-hop candidate into top5 without duplicating it whe
   const mg = await import(`../src/memoryGraph.ts?stricthop-dedup=${Date.now()}`);
   const g = new mg.MemoryGraph();
   await g.load();
-  await g.add("ANCHOR", ["anchorNarrowKey"], {});
+  await g.add("QQ ANCHOR", ["anchorNarrowKey"], {});
   await g.add("TARGET", ["anchorNarrowKey"], {});
   for (let i = 0; i < 8; i++) {
-    await g.add(`NOISE${i}`, [`noiseKey${i}`], {});
+    await g.add(`QQ NOISE${i}`, [`noiseKey${i}`], {});
   }
 
   const result = (await g.recall("QQ", 10, null, true, 2, 0, 0, 0, 0)) as Array<{ content: string }>;
@@ -218,13 +212,13 @@ test("recall() never evicts a confident direct hit to make room for a strict-hop
   const mg = await import(`../src/memoryGraph.ts?stricthop-safe=${Date.now()}`);
   const g = new mg.MemoryGraph();
   await g.load();
-  await g.add("ANCHOR", ["anchorNarrowKey"], {});
+  await g.add("QQ ANCHOR", ["anchorNarrowKey"], {});
   await g.add("TARGET", ["anchorNarrowKey"], {});
-  await g.add("CONFIDENT", ["confidentKey"], {}); // top5 filler, but a genuinely strong hit
+  await g.add("QQ CONFIDENT", ["confidentKey"], {}); // top5 filler, but a genuinely strong hit
 
   const result = (await g.recall("QQ", 3, null, true, 2, 0, 0, 0, 0)) as Array<{ content: string }>;
   assert.equal(
-    result.some((m) => m.content === "CONFIDENT"),
+    result.some((m) => m.content === "QQ CONFIDENT"),
     true,
     `CONFIDENT must not be evicted, got: ${result.map((m) => m.content).join(",")}`
   );

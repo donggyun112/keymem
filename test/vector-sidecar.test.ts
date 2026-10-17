@@ -39,8 +39,8 @@ test("save writes vectors to a binary sidecar and strips them from graph.json", 
   assert.ok(existsSync(join(dir, "vectors.bin")), "vectors.bin missing");
   assert.ok(existsSync(join(dir, "vectors.idx.json")), "vectors.idx.json missing");
   const raw = JSON.parse(await readFile(join(dir, "graph.json"), "utf-8"));
-  for (const m of Object.values(raw.memories) as Array<{ embedding: number[] }>) {
-    assert.equal(m.embedding.length, 0, "memory embedding should be stripped from JSON");
+  for (const m of Object.values(raw.memories)) {
+    assert.equal(Object.hasOwn(m as object, "embedding"), false, "memory JSON must omit embedding");
   }
   for (const k of Object.values(raw.keys) as Array<{ embedding: number[] }>) {
     assert.equal(k.embedding.length, 0, "key embedding should be stripped from JSON");
@@ -49,7 +49,8 @@ test("save writes vectors to a binary sidecar and strips them from graph.json", 
   // reload hydrates from the sidecar and recall still works
   const g2 = await freshGraph(dir);
   const alpha = Object.values(g2.memories).find((m: any) => m.content.includes("알파")) as any;
-  assert.deepEqual(Array.from(alpha.embedding), [1, 0, 0]);
+  assert.equal(Object.hasOwn(alpha, "embedding"), false);
+  assert.deepEqual(Array.from(Object.values(g2.keys).find((k) => k.concept === "알파키")!.embedding), [1, 0, 0]);
   const hits = (await g2.searchKeys("알파키", 8, "default")) as any[];
   assert.ok(hits.length >= 1);
   assert.equal(hits[0].concept, "알파키");
@@ -79,9 +80,10 @@ test("legacy graph.json with inline embeddings loads and migrates on next save",
   await writeFile(join(dir, "graph.json"), JSON.stringify(legacy), "utf-8");
 
   const g = await freshGraph(dir);
-  assert.deepEqual(Array.from((g.memories as any).m1.embedding), [1, 0, 0]);
+  assert.equal(Object.hasOwn(g.memories.m1, "embedding"), false);
+  assert.deepEqual(Array.from(g.keys.k1.embedding), [1, 0, 0]);
   await g.flush(); // legacy load marks dirty → save migrates
   assert.ok(existsSync(join(dir, "vectors.bin")), "migration should create sidecar");
   const raw = JSON.parse(await readFile(join(dir, "graph.json"), "utf-8"));
-  assert.equal(raw.memories.m1.embedding.length, 0);
+  assert.equal(Object.hasOwn(raw.memories.m1, "embedding"), false);
 });

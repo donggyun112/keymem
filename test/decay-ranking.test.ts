@@ -7,7 +7,7 @@ const DAY = 24 * 3600;
 async function rankedFixture(t: TestContext) {
   let now = 1_800_000_000;
   const vectors: Record<string, number[]> = {
-    "same relevance": [1, 0, 0, 0],
+    "fact": [1, 0, 0, 0],
     "stale fact": [0.8, 0.6, 0, 0],
     "fresh fact": [0.8, -0.6, 0, 0],
     shared: [0, 0, 1, 0],
@@ -22,7 +22,7 @@ async function rankedFixture(t: TestContext) {
 async function keyEntryFixture(t: TestContext) {
   let now = 1_800_000_000;
   const vectors: Record<string, number[]> = {
-    "query cue": [1, 0, 0, 0],
+    "entry": [1, 0, 0, 0],
     "stale entry": [0.8, 0.6, 0, 0],
     "fresh entry": [0.8, -0.6, 0, 0],
     "stale-key": [0, 0, 1, 0],
@@ -57,14 +57,14 @@ async function hopFixture(t: TestContext) {
 test("readKey ranks fresh before stale when other evidence is equal", async (t) => {
   const { graph, ids } = await rankedFixture(t);
   const key = Object.values(graph.keys).find((candidate) => candidate.concept === "shared")!;
-  const page = await graph.readKey(key.id, { query: "same relevance" }) as any;
+  const page = await graph.readKey(key.id, { query: "fact" }) as any;
   assert.deepEqual(page.memories.map((memory: any) => memory.memory_id), [ids.freshId, ids.staleId]);
   assert.deepEqual(page.memories.map((memory: any) => memory.validity.status), ["fresh", "stale"]);
 });
 
 test("searchKeys discounts stale member content but keeps literal key reachability", async (t) => {
   const { graph, ids } = await keyEntryFixture(t);
-  const result = await graph.searchKeys("query cue", 10) as any[];
+  const result = await graph.searchKeys("entry", 10) as any[];
   assert.equal(result[0].key_id, ids.freshKeyId);
   const literal = await graph.searchKeys("stale-key", 10) as any[];
   assert.ok(literal.some((key) => key.key_id === ids.staleKeyId));
@@ -73,12 +73,12 @@ test("searchKeys discounts stale member content but keeps literal key reachabili
 test("searchKeys keeps stale content-only keys admitted while discounting their rank", async (t) => {
   const { graph, ids } = await keyEntryFixture(t);
   graph.memories[ids.staleId].last_confirmed_at = graph.memories[ids.staleId].created_at;
-  const before = await graph.searchKeys("query cue", 10) as any[];
+  const before = await graph.searchKeys("entry", 10) as any[];
   const freshScore = before.find((key) => key.key_id === ids.staleKeyId)?.score;
   assert.ok(freshScore);
 
   graph.memories[ids.staleId].last_confirmed_at -= 4 * 90 * DAY;
-  const after = await graph.searchKeys("query cue", 10) as any[];
+  const after = await graph.searchKeys("entry", 10) as any[];
   const stale = after.find((key) => key.key_id === ids.staleKeyId);
   assert.ok(stale);
   assert.ok(freshScore > stale.score);
@@ -86,7 +86,7 @@ test("searchKeys keeps stale content-only keys admitted while discounting their 
 
 test("direct recall ranks fresh before stale when semantic evidence is equal", async (t) => {
   const { graph, ids } = await rankedFixture(t);
-  const result = await graph.recall("same relevance", 10, null, false, 1, 0, 0, 0, 0, 0, false) as any[];
+  const result = await graph.recall("fact", 10, null, false, 1, 0, 0, 0, 0, 0, false) as any[];
   assert.ok(result.findIndex((memory) => memory.id === ids.freshId) < result.findIndex((memory) => memory.id === ids.staleId));
 });
 
@@ -101,7 +101,7 @@ test("list, read, recall, and injection expose validity", async (t) => {
   const { graph, ids } = await rankedFixture(t);
   assert.ok((graph.listAll() as any[]).every((memory) => "validity" in memory));
   assert.ok("validity" in ((await graph.readMemory(ids.freshId)) as any).memory);
-  assert.ok(((await graph.recall("same relevance", 5, null, false, 1, 0, 0, 0, 0, 0, false)) as any[]).every((memory) => "validity" in memory));
+  assert.ok(((await graph.recall("fact", 5, null, false, 1, 0, 0, 0, 0, 0, false)) as any[]).every((memory) => "validity" in memory));
   await graph.add(`injected payload ${"detail ".repeat(50)}`, ["injected"]);
   const injected = (await graph.recallInject("injected payload", 1, null, { maxChars: 256 })) as any;
   assert.ok(injected.memories.length > 0);

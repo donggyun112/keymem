@@ -29,8 +29,8 @@ test("min_depth returns only memories at or above the depth floor", async (t) =>
   const mg = await import(`../src/memoryGraph.ts?depth=${n++}`);
   const g = new mg.MemoryGraph();
   await g.load();
-  const [deep] = await g.add("DEEP", ["kd"], {});
-  const [shallow] = await g.add("SHALLOW", ["ks"], {});
+  const [deep] = await g.add("QQ DEEP", ["kd"], {});
+  const [shallow] = await g.add("QQ SHALLOW", ["ks"], {});
   g.memories[deep].depth = 0.9;     // well-established
   g.memories[shallow].depth = 0.2;  // recent/unverified
 

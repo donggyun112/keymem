@@ -55,20 +55,20 @@
     "start": "node dist/index.js",
     "daemon": "node dist/daemon.js",
     "shim": "node dist/shim.js",
-    "test": "KEYMEM_RERANK=false tsx --test test/*.test.ts",
+    "test": "KEYMEM_RERANK=false tsx --test --test-concurrency=2 test/*.test.ts",
     "bench": "tsx bench/run.ts",
     "bench:evidence-projection": "tsx bench/evidence-projection.ts",
     "bench:task-selection": "tsx bench/task-selection-eval.ts",
     "bench:prompt-cache": "tsx bench/prompt-cache-ab.ts",
     "bench:prompt-cache-llm": "tsx bench/prompt-cache-llm.ts",
-    "bench:keynav": "tsx bench/keynav.ts",
-    "bench:calibrate": "tsx bench/calibrate.ts"
+    "bench:keynav": "tsx bench/keynav.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "async-mutex": "^0.5.0",
     "dotenv": "^16.0.0",
     "fastembed": "^2.1.0",
+    "kiwi-nlp": "0.24.0",
     "minisearch": "^7.2.0",
     "openai": "^4.0.0",
     "zod": "^3.22.0"
