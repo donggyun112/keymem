@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.33.0] - 2026-10-18
+
+### Changed
+
+- Memory bodies are retrieved with Kiwi BM25 over content and keys, then reranked
+  with the existing cross-encoder. Key embeddings, key canonicalization, graph
+  navigation and explicit links remain; body embeddings are no longer generated,
+  loaded, searched or persisted.
+- Existing stores retain memory text, metadata, history and links. Schema 3 drops
+  legacy body vectors on the next successful save and keeps key vectors only.
+  Back up the store before upgrading if an older release must reopen it.
+- Duplicate detection now requires normalized text equality within the same
+  namespace. Paraphrases remain separate; body similarity no longer creates
+  automatic links or contradiction flags. Automatic confirmation requires an
+  exact normalized restatement of the full stored fact.
+- Kiwi runs in Node through WebAssembly, with no Python runtime. Its pinned
+  model downloads once (about 113 MB) and is cached under the Keymem model directory.
+  Legacy body-cosine retrieval and write thresholds no longer apply.
+
+### Fixed
+
+- Query-aware key reads use one reranker pass, stable pagination and revalidate
+  handles after concurrent deletion. Scoped lexical and key candidates are
+  filtered before applying candidate limits.
+
 ## [0.32.3] - 2026-10-02
 
 ### Changed
