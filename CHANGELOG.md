@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.33.2] - 2026-10-22
+
+### Fixed
+
+- Long prompts no longer stall the daemon. Rerank scores at most 300 query characters
+  and truncates each query-memory pair to 512 tokens, so a 6.8k-character prompt takes
+  about 1.6 s instead of about 78 s and no longer fails with an ONNX out-of-bounds error.
+- Rerank gives up after 8 s and returns the fused order. Only one rerank runs at a time;
+  a second caller gets the fused order instead of queueing.
+- `recall()` reranks 12 fused candidates by default instead of 30. On HotpotQA (30
+  questions), the real-store evaluation and the search fixture this matched the wider
+  pool, and the real-store evaluation took about half as long. `readKey` keeps 30.
+- The shim waits for a daemon that holds its port but misses the health check, instead
+  of starting another daemon that exits with EADDRINUSE.
+
 ## [0.33.1] - 2026-10-18
 
 ### Fixed
