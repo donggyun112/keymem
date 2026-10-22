@@ -54,6 +54,10 @@ const KEY_HUB_MIN_LINKS = Number.isFinite(_hubMinLinks)
 // joint (query, memory) relevance, then keeps the requested top_k. KEYMEM_RERANK=false disables it.
 // A wider pool than top_k lets the reranker rescue a right answer the fused score buried.
 const RERANK_POOL = Number(cfgRaw("RERANK_POOL") ?? 30);
+// recall() default pool. 12 matched 30 on HotpotQA (support-recall 96%, both@5 93%), the real
+// store (12/12) and the fixture, at ~half the real-store latency. 8 lost HotpotQA and real hits.
+// readKey keeps RERANK_POOL: its pagination test pins that pool.
+const RECALL_RERANK_POOL = 12;
 const INJECT_RERANK_POOL = 12; // pool sweep on 16 prompts: 12 → ~0.9 s, top-1 == pool-30 in 14/16
 const TASK_EVIDENCE_SELECTION = cfgRaw("TASK_EVIDENCE_SELECTION") !== "false";
 
@@ -2525,7 +2529,7 @@ export class MemoryGraph {
     // (all reads happen synchronously before the await) and mutates nothing shared.
     let ranked: [string, number][] = gated.slice(0, actualTopK);
     if (rerankPool !== 0 && rerankEnabled() && gated.length > 0) {
-      let pool = gated.slice(0, rerankPool ?? Math.max(actualTopK, RERANK_POOL));
+      let pool = gated.slice(0, rerankPool ?? Math.max(actualTopK, RECALL_RERANK_POOL));
       // Guarantee the strict-hop candidate reaches the cross-encoder even when its fused
       // score would have put it outside RERANK_POOL — the corpus-density bug this feature
       // fixes (bench/edge-experiments-results.json measured a real hop-2 hit ranked ~15-18th

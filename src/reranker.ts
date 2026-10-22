@@ -56,6 +56,7 @@ async function ensureLoaded(): Promise<boolean> {
     _ort = feReq("onnxruntime-node");
     const tk = feReq("@anush008/tokenizers");
     _tok = tk.Tokenizer.fromFile(`${MODEL_DIR}/tokenizer.json`);
+    _tok.setTruncation(MAX_PAIR_TOKENS);
     _session = await _ort.InferenceSession.create(`${MODEL_DIR}/model.onnx`, {
       intraOpNumThreads: RERANK_THREADS,
     });
@@ -78,12 +79,38 @@ export function rerankScores(query: string, texts: string[]): Promise<number[] |
   return timed(`rerank(${texts.length} docs)`, () => rerankScoresImpl(query, texts));
 }
 
+// Query text beyond this is dropped before scoring. Cost is per (query, memory) pair, so an
+// unbounded prompt multiplies every candidate's work (a 6.8k-char prompt took ~78 s).
+const MAX_QUERY_CHARS = Number(cfgRaw("RERANK_MAX_QUERY_CHARS") ?? 300);
+const MAX_PAIR_TOKENS = 512;
+// Past this budget the remaining candidates are abandoned and the caller keeps fused order.
+// Measured ~130 ms per pair on this machine, so 30 candidates fit well inside it.
+const RERANK_BUDGET_MS = Number(cfgRaw("RERANK_BUDGET_MS") ?? 8000);
+// One rerank at a time. A second caller gets null (fused order) instead of queueing behind
+// the first, so overlapping sessions cannot pile up CPU-bound work.
+let _busy = false;
+
 async function rerankScoresImpl(query: string, texts: string[]): Promise<number[] | null> {
   if (_testReranker) return await _testReranker(query, texts);
+  if (texts.length === 0) return [];
+  if (_busy) return null;
   if (!(await ensureLoaded())) return null;
+  _busy = true;
+  try {
+    return await scorePairs(query.slice(0, MAX_QUERY_CHARS), texts);
+  } finally {
+    _busy = false;
+  }
+}
+
+// One pair per session.run. Batching with right-padding was tried and rejected: scores drifted
+// (top 0.10 -> -0.03) and a batch ran at the length of its longest pair, slower than singles.
+async function scorePairs(query: string, texts: string[]): Promise<number[] | null> {
   const hasType = _session.inputNames.includes("token_type_ids");
+  const deadline = Date.now() + RERANK_BUDGET_MS;
   const scores: number[] = [];
   for (const text of texts) {
+    if (Date.now() > deadline) return null;
     const enc = await _tok.encode(query, (text ?? "").slice(0, MAX_CHARS));
     const ids = enc.getIds() as number[];
     const mask = enc.getAttentionMask() as number[];

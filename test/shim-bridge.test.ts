@@ -27,6 +27,17 @@ test("ensureDaemon returns false quickly when nothing to connect and no spawn", 
   assert.equal(ok, false);
 });
 
+test("ensureDaemon treats a held port with a stalled /health as a busy daemon, not a missing one", async (t) => {
+  const { createServer } = await import("node:net");
+  // Accepts connections but never answers HTTP, like a daemon stuck in model inference.
+  const server = createServer(() => {});
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const port = (server.address() as { port: number }).port;
+  const ok = await ensureDaemon(`http://127.0.0.1:${port}/mcp`, { timeoutMs: 300, spawnDaemon: false });
+  assert.equal(ok, true, "a busy daemon must be proxied to, not replaced or bypassed in-process");
+});
+
 test("daemonEnv strips CLAUDE_CODE_SESSION_ID and CODEX_THREAD_ID", () => {
   const env = {
     CLAUDE_CODE_SESSION_ID: UUID,

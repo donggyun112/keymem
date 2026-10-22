@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn, type ChildProcess } from "node:child_process";
 import { realpathSync } from "node:fs";
+import { connect } from "node:net";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -63,6 +64,21 @@ async function health(url: string): Promise<{ version?: string } | null> {
 
 const healthOk = async (url: string) => (await health(url)) !== null;
 
+// A daemon busy in a long request misses the 500 ms health deadline but still holds its port.
+function portOpen(url: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const u = new URL(url);
+    const socket = connect({ host: u.hostname, port: Number(u.port) });
+    const done = (open: boolean) => {
+      socket.destroy();
+      resolve(open);
+    };
+    socket.setTimeout(500, () => done(false));
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+  });
+}
+
 // A daemon from an older release keeps serving stale code for as long as any session is
 // attached. Ask it to exit (it refuses unless we are strictly newer) and wait for the port
 // to free, so the caller's autostart path brings up a daemon built from this release.
@@ -111,6 +127,19 @@ export async function ensureDaemon(
   if (current) {
     await replaceStaleDaemon(url, current.version, timeoutMs);
     if (await healthOk(url)) return true;
+  }
+
+  // Port held but health silent = busy daemon, not a missing one. Spawning would only add a
+  // loader that dies with EADDRINUSE, and the in-process fallback would be a second writer of
+  // the same store, so wait for it and proxy even if it is still busy at the deadline.
+  if (await portOpen(url)) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (await healthOk(url)) return true;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    console.error(`[shim] daemon on ${new URL(url).host} holds its port but is busy; proxying anyway`);
+    return true;
   }
 
   // A daemon only opens its port after graph.load(), which can outlast timeoutMs (a full
